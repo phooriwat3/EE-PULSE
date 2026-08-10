@@ -1,0 +1,18 @@
+{
+  "purpose": "Semantic WP-02 validation cases; this is not an API request or CSV schema.",
+  "cases": [
+    { "id": "ipv4-valid-private", "inputClass": "IPv4", "sample": "192.0.2.10", "expected": "accept-syntax" },
+    { "id": "ipv4-invalid-octet", "inputClass": "IPv4", "sample": "192.0.2.999", "expected": "reject" },
+    { "id": "ipv6-outside-mvp", "inputClass": "IPv6", "sample": "2001:db8::10", "expected": "reject-mvp" },
+    { "id": "hostname-valid", "inputClass": "Hostname", "sample": "plc-01.example.test", "expected": "accept-syntax-no-resolution" },
+    { "id": "hostname-leading-hyphen", "inputClass": "Hostname", "sample": "-plc.example.test", "expected": "reject" },
+    { "id": "hostname-uri", "inputClass": "Hostname", "sample": "https://example.test/path", "expected": "reject" },
+    { "id": "hostname-command-text", "inputClass": "Hostname", "sample": "127.0.0.1; whoami", "expected": "reject" },
+    { "id": "formula-equals", "inputClass": "Imported text", "sample": "=1+1", "expected": "neutralize-before-export" },
+    { "id": "formula-plus", "inputClass": "Imported text", "sample": "+cmd|' /C calc'!A0", "expected": "neutralize-before-export" },
+    { "id": "control-character", "inputClass": "Imported text", "sample": "name\u0000suffix", "expected": "reject-or-sanitize-by-approved-policy" },
+    { "id": "duplicate-same-site", "inputClass": "Duplicate", "sample": "same normalized address in one Site", "expected": "reject-by-approved-site-policy" },
+    { "id": "duplicate-other-site", "inputClass": "Duplicate", "sample": "same normalized address in different Sites", "expected": "await-UA-01-policy" },
+    { "id": "stale-row-version", "inputClass": "Concurrency", "sample": "older token after successful update", "expected": "conflict-without-overwrite" }
+  ]
+}

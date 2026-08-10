@@ -43,6 +43,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: 8080
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${EE_PULSE_POSTGRES_DB:-ee_pulse};Username=${EE_PULSE_POSTGRES_USER:-ee_pulse};Password=${EE_PULSE_POSTGRES_PASSWORD:-local-development-only}
     ports:
       - "${EE_PULSE_API_PORT:-8080}:8080"
     depends_on:

@@ -23,17 +23,18 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 | R-16 | Timezone/DST handling corrupts maintenance or reports. | M | M | UTC core; explicit timezone mapping; DST fixtures. | Backend/Web, WP-06/07/09 | L/M |
 | R-17 | Host toolchain cannot reproduce net10.0 builds. | H | M | SDK 10.0.302 pin and verified official container; CI setup-dotnet 10.0.x. | Integration, WP-01 | M/L |
 | R-18 | Docker access depends on engine state and local permission boundary. | M | M | Document prerequisite; use approved local Docker execution; Compose config/build/wait health gate. | User/Integration, WP-01/10 | L/M |
-| R-19 | No Git remote/branch policy means local evidence is not protected or independently reproduced. | M | M | UA-02; protected remote workflow and clean-clone CI evidence. Preserve current clean-worktree checks. | Repository owner, WP-00/11 | M/M |
-| R-20 | `docs/spac` naming mismatch causes automation/users to miss governing specs. | M | L | Treat six `docs/spac` files as authoritative; document mismatch; rename only through coordinated repository decision. | Integration, WP-00 | L/L |
-| R-21 | WP-01 readiness is mistaken for data-store readiness. | H | M | State scope explicitly; add PostgreSQL connectivity/migration readiness in WP-02 and VictoriaMetrics semantics in WP-05. | Backend, WP-02/05 | L/M |
+| R-19 | Remote workflow evidence is incomplete despite a configured `origin`. | M | M | Confirm branch/PR/CI/artifact/reviewer policy through UA-02 and obtain clean-clone CI evidence. | Repository owner, WP-11 | M/M |
+| R-20 | Documentation or tooling retains the former `docs/spac` path. | L | L | `docs/spec` is authoritative; Lead corrected current README/control references and verification should reject future drift. | Integration, continuous | L/L |
+| R-21 | Readiness omits a required dependency. | M | H | WP-02 now checks PostgreSQL connectivity and pending migrations; add VictoriaMetrics semantics in WP-05. | Backend, WP-05 | L/M |
 | R-22 | A clean package audit is mistaken for a complete supply-chain/container scan. | M | H | Keep NuGet/npm audits in CI; add SBOM, image scan, and dedicated secret scan in WP-11; resolve critical/high findings. | QA/Security, WP-11 | L/H |
-| R-23 | Parallel agents assume absent WP-02/WP-03 contracts are stable and create incompatible implementations. | M | H | Freeze only existing v1 baseline; Lead approves shared additions; Backend owns migrations; integrate one WP at a time. | Lead/All, WP-02 onward | L/M |
+| R-23 | Parallel agents drift from frozen shared contracts. | M | H | WP-02 OpenAPI is checked in and Lead-frozen; generate clients from it, require compatibility tests, and keep migrations Backend-owned. | Lead/All, continuous | L/M |
+| R-24 | Node-local CSV preview tokens disappear on restart or cannot be shared across API replicas. | M | M | Bounded 15-minute cache is explicit for MVP single-node; return clear invalid-token behavior and revisit durable/distributed storage before scale-out. | Backend, WP-10/11 | M/L |
 
 ## Temporary assumptions
 
 | ID | Assumption | Revisit by |
 | --- | --- | --- |
-| A-01 | The six files under `docs/spac` are the intended authoritative `docs/spec` set. | External repository integration |
+| A-01 | The six files under `docs/spec` are authoritative. | Revisit only through a governed specification change. |
 | A-02 | PRD defaults apply until UA-01: 30 s interval, 2 s timeout, 3 attempts, failure threshold 3, recovery threshold 2. | WP-02 acceptance |
 | A-03 | Scale means 500 enabled ICMP probes, not 500 devices each with multiple active probes. | WP-04/load design |
 | A-04 | Store/process UTC; Site timezone affects presentation, maintenance interpretation, and reporting only. | WP-06/07 |
@@ -46,7 +47,7 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 
 ## Checkpoint notes
 
-- All WP-01 build/test/health gates pass. PostgreSQL, VictoriaMetrics, and API containers are healthy.
+- WP-01 and the WP-02 integration gates pass. PostgreSQL, VictoriaMetrics, and API containers are healthy; readiness verifies PostgreSQL schema/connectivity.
 - NuGet and npm audits report no known vulnerable packages. `gitleaks` and `trivy` are not installed, so full dedicated secret and image scanning remains outstanding.
-- The current Git worktree is on local `main` with one commit and no configured remote; this replaces the stale prior assumption that `.git` metadata was absent.
-- Shared contracts are safe for parallel work only within the bounded ownership and compatibility rules in `docs/repository-ownership.md`.
+- The current Git worktree is on local `main`, one commit ahead of configured `origin/main`; first-wave changes remain uncommitted.
+- The Lead-reviewed WP-02 inventory/OpenAPI v1 contract is stable for an explicitly authorized Agent C; later compatible changes remain governed by `docs/repository-ownership.md`.

@@ -6,8 +6,8 @@ Never place real credentials, keys, tokens, SMTP passwords, or certificates in t
 
 | Sequence | ID | Owner | Required action/values | Verification | Blocks | Safe local placeholder |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | UA-01 | Product owner / EE | Confirm Sites/VLANs, target count/types, duplicate-device-within-Site policy, role owners, thresholds, recovery/flapping, and availability rules. | Approved scope and acceptance note. | WP-02 acceptance; implementation may start. | PRD defaults: 30 s interval, 2 s timeout, 3 attempts, 3 failures, 2 recoveries. |
-| 2 | UA-02 | Repository owner | Provide Git remote, branch/PR policy, CI runner/artifact destination, and reviewers. | Clean clone, protected workflow, successful CI run. | Shared collaboration evidence and release; local work continues. | Clean local `main` at `de076a2`; non-deploying GitHub Actions workflow. |
+| 1 | UA-01 | Product owner / EE | Duplicate policy confirmed: normalized IP is unique among enabled Devices within a Site; disabled and cross-Site reuse are allowed; hostname is non-unique. Still confirm Sites/VLANs, target count/types, role owners, thresholds, recovery/flapping, and availability rules. | Approved scope and acceptance note; automated duplicate-rule tests. | Remaining operational decisions affect later acceptance, not the WP-02 duplicate rule. | Confirmed duplicate rule is implemented; PRD probe defaults remain 30 s interval, 2 s timeout, 3 attempts, 3 failures, 2 recoveries. |
+| 2 | UA-02 | Repository owner | Confirm branch/PR policy, CI runner/artifact destination, and reviewers for the configured `origin`. | Clean clone, protected workflow, successful CI run. | Shared collaboration evidence and release; local work continues. | Local `main` at `ce3743a`, one commit ahead of `origin/main`; non-deploying GitHub Actions workflow. |
 | 3 | UA-02A | Workstation owner | Optionally install .NET SDK 10.0.x; keep Docker available if using the verified container fallback. | `dotnet --info` lists 10.0.x or pinned container gate passes. | Host-only workflows; WP-01 is satisfied through Docker. | `mcr.microsoft.com/dotnet/sdk:10.0.302`. |
 | 4 | UA-03 | Network / IT security | Approve explicit Agent `AllowedNetworks`, routing, ICMP/firewall policy, and controlled test targets. | Approved CIDRs and a controlled reachability test. | WP-03/04 environment acceptance. | Fake transport and loopback/private documentation examples only. |
 | 5 | UA-04 | Windows / IT operations | Provide an always-on Windows host, installation administrator, service-account policy, outbound HTTPS, and NTP. | Install, reboot, recovery, enrollment, and queue-preservation evidence. | WP-10/11 Windows acceptance. | Interactive Worker execution only. |
@@ -20,10 +20,10 @@ Never place real credentials, keys, tokens, SMTP passwords, or certificates in t
 
 ## Actions approaching the next checkpoint
 
-- UA-01 should be resolved before WP-02 acceptance, especially the duplicate-device policy. It does not block starting WP-02.
-- UA-02 is needed before parallel-agent branches/PR evidence can be coordinated externally. Agents can work in the shared local workspace only with the frozen ownership boundaries.
+- The duplicate-device portion of UA-01 is confirmed and verified. Remaining Site/VLAN, scale, role-owner, and operational-threshold details approach later acceptance but do not block this WP-02 rule.
+- UA-02 is partially satisfied because `origin` is configured. Branch/PR policy, CI runner/artifact destination, and reviewers still need confirmation before external collaboration or release evidence.
 - UA-03 is required before any real ICMP environment test. No network scanning or unapproved probing is authorized.
 
-No user action blocks starting safe local WP-02 work.
+No user action blocks reviewing the WP-02 gate or starting an explicitly authorized Agent C against the frozen artifact.
 
 Approval remains required immediately before external repository writes, deployment, firewall/DNS/AD changes, real notification delivery, destructive operations, privileged machine changes, or real-credential handling.

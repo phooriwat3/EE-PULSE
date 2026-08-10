@@ -1,6 +1,6 @@
 # EE Pulse
 
-EE Pulse is an internal IP-device monitoring platform. This repository is being built in dependency-ordered Work Packages from the specifications in `docs/spac`.
+EE Pulse is an internal IP-device monitoring platform. This repository is being built in dependency-ordered Work Packages from the specifications in `docs/spec`.
 
 ## Prerequisites
 
