@@ -1,0 +1,34 @@
+# Build output
+**/bin/
+**/obj/
+**/TestResults/
+coverage/
+playwright-report/
+test-results/
+
+# Frontend
+**/node_modules/
+src/web/dist/
+.npm-cache/
+
+# IDE and OS
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Local configuration and mutable data
+.env
+.env.*
+!.env.example
+*.local
+data/
+*.db
+*.db-shm
+*.db-wal
+*.pfx
+*.pem
+*.key

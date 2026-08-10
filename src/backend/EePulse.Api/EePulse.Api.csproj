@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.OpenApi" />
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="Serilog.Formatting.Compact" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\EePulse.Application\EePulse.Application.csproj" />
+    <ProjectReference Include="..\EePulse.Contracts\EePulse.Contracts.csproj" />
+    <ProjectReference Include="..\EePulse.Infrastructure\EePulse.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

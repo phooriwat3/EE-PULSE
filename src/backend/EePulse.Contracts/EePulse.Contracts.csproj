@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>EePulse.Contracts</PackageId>
+    <VersionPrefix>1.0.0</VersionPrefix>
+  </PropertyGroup>
+</Project>

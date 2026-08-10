@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\EePulse.Contracts\EePulse.Contracts.csproj" />
+    <ProjectReference Include="..\EePulse.Domain\EePulse.Domain.csproj" />
+  </ItemGroup>
+</Project>
