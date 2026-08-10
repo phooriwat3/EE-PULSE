@@ -2,29 +2,31 @@
 
 Last updated: 2026-08-10 (Asia/Bangkok)  
 Owner: Lead/Integration Agent  
-Current checkpoint: first parallel wave complete; WP-02 integration gate ready
+Current checkpoint: WP-02 approved; awaiting authorization for the next work package
 
 ## Outcome
 
-WP-00 and WP-01 remain verified. The first parallel wave is complete:
+WP-00 and WP-01 remain verified. The user approved WP-02 after the backend baseline and authorized frontend slice passed Lead integration:
 
 - Agent A delivered WP-02 Backend/PostgreSQL inventory.
 - Agent B delivered contract-neutral Probe Agent foundations.
 - Agent D delivered QA/security gates, fixtures, review, and integrated verification.
 - Lead reviewed the changes, returned in-scope defects to their owners, rebuilt the final stack, and generated/reviewed `docs/api/openapi-v1.json`.
+- Agent C delivered the Site, Device, Probe-configuration, and CSV inventory UI plus Vitest and Playwright coverage. Lead returned production-authentication, OpenAPI-filter, and conflict-recovery defects; the corrected implementation passes the full integration gate.
 
-Agent C has not been created. WP-03 integration has not started.
+WP-03 integration has not started and still requires explicit user approval.
 
 ## Current repository
 
 | Area | State |
 | --- | --- |
 | Specifications | Six authoritative files under `docs/spec`; no `AGENTS.md` or additional repository instruction file is present. |
-| Git | Local `main` at `ce3743a`, one commit ahead of configured `origin/main`; first-wave changes are uncommitted. |
+| Git | Local `main` at `c0e53ff`, two commits ahead of configured `origin/main`; Agent C and checkpoint-document changes are uncommitted. |
 | Backend | PostgreSQL-backed Site, Device, AgentGroup, Probe, MaintenanceWindow, AuditEvent, CSV import, authorization policies, migration, seed gate, and dependency-aware readiness. |
 | Contracts/OpenAPI | Compatible v1 inventory DTOs; checked-in OpenAPI 3.1.1 artifact with 14 paths, 19 protected operations, Bearer/OIDC-ready metadata, and explicit Development-header note. |
 | Probe Agent | Deterministic jitter, monotonic scheduling, per-Probe non-overlap, bounded concurrency, injectable transport seam, and graceful host behavior; no network probe implementation. |
-| QA | 42 .NET tests, 2 frontend tests, PostgreSQL Testcontainers coverage, quality/security script, and WP-02 evidence matrix. |
+| Web | Responsive inventory console for Sites, server-filtered/paged Devices, create/edit/soft-disable, Probe fields, CSV preview/commit, row errors, stale/partial/retry states, and actionable concurrency conflicts. Development synthetic identity is absent from the production bundle, which fails closed pending OIDC. |
+| QA | 43 .NET tests, 7 frontend component tests, 2 Playwright inventory tests, PostgreSQL integration coverage, quality/security script, and WP-02 evidence matrix. |
 | Compose | PostgreSQL 18.4, VictoriaMetrics 1.148.0, and API healthy; only API publishes a host port. |
 
 ## Work-package status
@@ -33,14 +35,14 @@ Agent C has not been created. WP-03 integration has not started.
 | --- | --- | --- |
 | WP-00 | Verified | Audit/control documents and repository governance established. |
 | WP-01 | Verified | Foundation/project graph/contracts/health/CI/Compose/ADRs pass. |
-| WP-02 | Integration gate ready | Metadata, migration, inventory APIs, validation, authorization, audit, CSV, OpenAPI, PostgreSQL tests, and the confirmed enabled-only Device uniqueness rule pass. |
+| WP-02 | Approved | Backend/PostgreSQL plus inventory frontend pass together: metadata, migration, APIs, validation, authorization, audit, CSV, OpenAPI, enabled-only Device uniqueness, accessible UI, component tests, and critical-flow browser tests. |
 | WP-03 | Not started | Enrollment/configuration integration is explicitly deferred. |
 | WP-04 | Partial foundation only | Contract-neutral scheduling/concurrency/transport seams exist; ICMP/config-dependent work is not started. |
 | WP-05 through WP-11 | Not started | Continue in dependency order after the next approved checkpoint. |
 
 ## Stable contract decision
 
-Lead confirms the WP-02 inventory and OpenAPI v1 surface is stable enough for Agent C to consume when the user authorizes Agent C startup. The checked-in artifact is `docs/api/openapi-v1.json`.
+Lead confirms that Agent C consumed the frozen WP-02 inventory/OpenAPI v1 surface without changing it. The checked-in artifact is `docs/api/openapi-v1.json`.
 
 Stable elements include:
 
@@ -56,26 +58,30 @@ Breaking changes require a new API/schema version. Compatible additions remain L
 | Gate | Result |
 | --- | --- |
 | .NET restore/format/Release build | Passed; 0 warnings and 0 errors in the isolated final run. |
-| .NET tests | 42 passed: Unit 25, Agent 10, Integration 7; 0 failed/skipped. |
+| .NET tests | 43 passed: Unit 26, Agent 10, Integration 7; 0 failed/skipped. |
 | NuGet vulnerability audit | No vulnerable packages reported across all 12 projects. |
-| Frontend | ESLint passed; Vitest 2/2; production build transformed 946 modules; npm audit 0 vulnerabilities. |
+| Frontend | ESLint passed; Vitest 7/7; production build transformed 954 modules (320.41 kB, 102.40 kB gzip); Playwright inventory 2/2; npm audit 0 vulnerabilities. |
+| Production frontend auth | Bundle inspection found no synthetic auth headers, role chooser, or Development-access markers; production renders a fail-closed OIDC-not-configured state. |
 | Agent B independent review | Agent build 0 warnings/errors; Agent tests 10/10; code reviewed by Lead and QA. |
 | Quality/security script | Passed foundation, working-tree/history secret patterns, exact versions, lockfile, Compose exposure/network/privilege, and image-tag checks. |
 | Compose/runtime | Config valid; PostgreSQL, VictoriaMetrics, API healthy; live/ready schema v1; anonymous inventory HTTP 401. |
 | OpenAPI | 3.1.1; 14 paths; 19 protected operations; Bearer scheme; protected operations declare 401/403; health remains unauthenticated. |
 | Repository hygiene | `git diff --check` passed; no commit, push, deployment, real credentials, real probes, or notifications. |
 
-Invalid intermediate runs caused by concurrent build locks or missing nested-Docker access are excluded from evidence. The corrected isolated run is the 42/42 result above.
+The first sandboxed Vitest attempt could not spawn Vite's helper (`EPERM`); the authorized rerun is the passing 7/7 evidence above. Invalid earlier concurrent/nested-Docker runs remain excluded; the current isolated .NET run is 43/43.
 
-## Remaining gaps and risks
+## Accepted follow-on risks
 
 - The duplicate-device portion of UA-01 is confirmed and fully enforced. Remaining UA-01 Site/VLAN/role/operational-threshold details do not block this rule or the technical gate.
-- Production OIDC, Agent enrollment/configuration, and complete role-matrix breadth remain later work.
+- Production OIDC remains pending under UA-06; Agent enrollment/configuration and complete role-matrix breadth remain later work.
+- The checked-in OpenAPI models the Device-list `criticality` query as an integer enum without published names; the frontend uses contract values 0-3 while presenting Low/Normal/High/Critical labels. Clarifying enum metadata is a future compatible-contract task.
 - CSV preview state is intentionally node-local, bounded, and retained for 15 minutes; restart discards it.
 - Full per-aggregate authorization/concurrency breadth, concurrent CSV/duplicate races, and soft-disable/history E2E coverage remain explicit QA gaps.
-- `gitleaks` and `trivy` are unavailable; container images use version tags rather than immutable digests.
+- `gitleaks` and `trivy` remain accepted WP-11 verification gaps; container images use version tags rather than immutable digests.
+- Frontend contract types are manually maintained against the frozen OpenAPI; compatibility tests and Lead review mitigate drift until generated-client work is selected.
+- The host lacks .NET SDK 10; the pinned `mcr.microsoft.com/dotnet/sdk:10.0.302` container remains the verified build environment.
 - VictoriaMetrics dependency behavior is a WP-05 concern; current readiness verifies PostgreSQL schema/connectivity.
 
 ## Next checkpoint
 
-Do not start WP-03 integration. Agent C may be started only on explicit user direction, consuming the frozen WP-02 OpenAPI artifact. Keep shared-contract, migration, and ownership rules in `docs/repository-ownership.md`.
+WP-02 is approved and ready for a user-created checkpoint commit. Do not start WP-03 until the user gives separate authorization. Keep shared-contract, migration, and ownership rules in `docs/repository-ownership.md`.

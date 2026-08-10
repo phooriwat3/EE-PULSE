@@ -29,6 +29,8 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 | R-22 | A clean package audit is mistaken for a complete supply-chain/container scan. | M | H | Keep NuGet/npm audits in CI; add SBOM, image scan, and dedicated secret scan in WP-11; resolve critical/high findings. | QA/Security, WP-11 | L/H |
 | R-23 | Parallel agents drift from frozen shared contracts. | M | H | WP-02 OpenAPI is checked in and Lead-frozen; generate clients from it, require compatibility tests, and keep migrations Backend-owned. | Lead/All, continuous | L/M |
 | R-24 | Node-local CSV preview tokens disappear on restart or cannot be shared across API replicas. | M | M | Bounded 15-minute cache is explicit for MVP single-node; return clear invalid-token behavior and revisit durable/distributed storage before scale-out. | Backend, WP-10/11 | M/L |
+| R-25 | Synthetic Development authentication or its role headers leak into a production Web bundle. | M | H | Compile-time Development gating, API-client fail-closed checks, production authentication-required state, bundle-content verification, and later production OIDC integration. | Web/Security, WP-02/07/11 | L/H |
+| R-26 | Hand-maintained frontend types drift from the frozen OpenAPI artifact. | M | M | Contract-shaped types, request-level component tests, runtime/checked-in OpenAPI compatibility gate, Lead review, and generated-client evaluation before broader API growth. | Lead/Web, continuous/WP-07 | L/M |
 
 ## Temporary assumptions
 
@@ -47,7 +49,9 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 
 ## Checkpoint notes
 
-- WP-01 and the WP-02 integration gates pass. PostgreSQL, VictoriaMetrics, and API containers are healthy; readiness verifies PostgreSQL schema/connectivity.
+- WP-01 is verified and WP-02 is user-approved. PostgreSQL, VictoriaMetrics, and API containers are healthy; readiness verifies PostgreSQL schema/connectivity.
 - NuGet and npm audits report no known vulnerable packages. `gitleaks` and `trivy` are not installed, so full dedicated secret and image scanning remains outstanding.
-- The current Git worktree is on local `main`, one commit ahead of configured `origin/main`; first-wave changes remain uncommitted.
-- The Lead-reviewed WP-02 inventory/OpenAPI v1 contract is stable for an explicitly authorized Agent C; later compatible changes remain governed by `docs/repository-ownership.md`.
+- The current Git worktree is on local `main` at `c0e53ff`, two commits ahead of configured `origin/main`; Agent C and checkpoint-document changes remain uncommitted.
+- Agent C consumed the Lead-frozen WP-02 inventory/OpenAPI v1 contract. Frontend lint, 7 component tests, production build, 2 Playwright flows, full 43-test .NET gate, Compose/runtime, OpenAPI, and quality/security checks pass.
+- Production Web authentication intentionally fails closed until UA-06/OIDC work; synthetic headers and role-selection markers are absent from the production bundle.
+- The user accepted production OIDC, unavailable `gitleaks`/`trivy`, integer OpenAPI criticality values 0-3, manually maintained frontend contract types, and containerized .NET 10 builds as tracked follow-on risks rather than WP-02 blockers.
