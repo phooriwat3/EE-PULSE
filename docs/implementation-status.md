@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-10 (Asia/Bangkok)  
 Owner: Lead/Integration Agent  
-Current checkpoint: WP-02 approved; awaiting authorization for the next work package
+Current checkpoint: WP-03 contract design approved and frozen; awaiting documentation checkpoint commit
 
 ## Outcome
 
@@ -14,14 +14,14 @@ WP-00 and WP-01 remain verified. The user approved WP-02 after the backend basel
 - Lead reviewed the changes, returned in-scope defects to their owners, rebuilt the final stack, and generated/reviewed `docs/api/openapi-v1.json`.
 - Agent C delivered the Site, Device, Probe-configuration, and CSV inventory UI plus Vitest and Playwright coverage. Lead returned production-authentication, OpenAPI-filter, and conflict-recovery defects; the corrected implementation passes the full integration gate.
 
-WP-03 integration has not started and still requires explicit user approval.
+The committed WP-02 checkpoint was clean at `8ca821d`. The user approved the design-only enrollment, identity, heartbeat, configuration, and network-scope contract plus ADR-007 through ADR-009. WP-03 implementation has not started; Agents A, B, C, and D remain idle until the user confirms the documentation checkpoint commit.
 
 ## Current repository
 
 | Area | State |
 | --- | --- |
 | Specifications | Six authoritative files under `docs/spec`; no `AGENTS.md` or additional repository instruction file is present. |
-| Git | Local `main` at `c0e53ff`, two commits ahead of configured `origin/main`; Agent C and checkpoint-document changes are uncommitted. |
+| Git | Local `main` and `origin/main` were synchronized at `8ca821d` before this design gate; only Lead-owned WP-03 proposal/control documents are now modified or untracked. |
 | Backend | PostgreSQL-backed Site, Device, AgentGroup, Probe, MaintenanceWindow, AuditEvent, CSV import, authorization policies, migration, seed gate, and dependency-aware readiness. |
 | Contracts/OpenAPI | Compatible v1 inventory DTOs; checked-in OpenAPI 3.1.1 artifact with 14 paths, 19 protected operations, Bearer/OIDC-ready metadata, and explicit Development-header note. |
 | Probe Agent | Deterministic jitter, monotonic scheduling, per-Probe non-overlap, bounded concurrency, injectable transport seam, and graceful host behavior; no network probe implementation. |
@@ -36,7 +36,7 @@ WP-03 integration has not started and still requires explicit user approval.
 | WP-00 | Verified | Audit/control documents and repository governance established. |
 | WP-01 | Verified | Foundation/project graph/contracts/health/CI/Compose/ADRs pass. |
 | WP-02 | Approved | Backend/PostgreSQL plus inventory frontend pass together: metadata, migration, APIs, validation, authorization, audit, CSV, OpenAPI, enabled-only Device uniqueness, accessible UI, component tests, and critical-flow browser tests. |
-| WP-03 | Not started | Enrollment/configuration integration is explicitly deferred. |
+| WP-03 | Contract approved; implementation gated | Additive v1 endpoints, schemas, auth/error semantics, persistence/migration plan, threat analysis, test matrix, ownership, and Agent A/B/D acceptance criteria are frozen in `docs/api/wp03-agent-contract-proposal.md`. No implementation has started. |
 | WP-04 | Partial foundation only | Contract-neutral scheduling/concurrency/transport seams exist; ICMP/config-dependent work is not started. |
 | WP-05 through WP-11 | Not started | Continue in dependency order after the next approved checkpoint. |
 
@@ -84,4 +84,4 @@ The first sandboxed Vitest attempt could not spawn Vite's helper (`EPERM`); the 
 
 ## Next checkpoint
 
-WP-02 is approved and ready for a user-created checkpoint commit. Do not start WP-03 until the user gives separate authorization. Keep shared-contract, migration, and ownership rules in `docs/repository-ownership.md`.
+Create the documentation checkpoint commit using the recommended Lead message, then notify Lead when it is complete. Do not spawn Agents A, B, or D until that confirmation; do not start Agent C. The generated WP-02 `openapi-v1.json` remains unchanged at this design checkpoint.

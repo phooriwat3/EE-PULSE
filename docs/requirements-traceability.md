@@ -11,7 +11,7 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | --- | --- | --- | --- |
 | FR-01 Device inventory | WP-02, WP-07 | Verified | Backend CRUD, server filtering/pagination, IPv4/hostname validation, enabled-only Site/address uniqueness, disabled/cross-Site IP reuse, hostname reuse, re-enable/concurrent conflicts, CSV row errors, history-preserving disable, Administrator audited delete, PostgreSQL migration, and responsive inventory UI pass component/browser/integration tests. |
 | FR-02 Probe configuration | WP-02, WP-04 | In progress | Verified Probe metadata/defaults/threshold validation/config version and UI editing of stable fields, plus deterministic jitter, bounded concurrency, and non-overlap foundations. Configuration delivery and scheduling runtime remain. |
-| FR-03 Agent | WP-03-05, WP-10 | In progress | Verified Windows-Service-capable host, graceful failure/shutdown behavior, monotonic scheduling seams, per-Probe/global concurrency, non-overlap, and injectable transport without network activity. Enrollment, LKG config, heartbeat, SQLite queue, batching/retry, and installer remain. |
+| FR-03 Agent | WP-03-05, WP-10 | In progress | Verified Windows-Service-capable host, graceful failure/shutdown behavior, monotonic scheduling seams, per-Probe/global concurrency, non-overlap, and injectable transport without network activity. WP-03 enrollment, per-Agent credential, heartbeat, acknowledged pull configuration/LKG, revocation, and dual AllowedNetworks contracts are proposed for approval; implementation, SQLite queue, batching/retry, and installer remain. |
 | FR-04 Status engine | WP-06 | Not started | Require the full state matrix, thresholds, Agent-expiry UNKNOWN, maintenance, transition history, watermark, and flapping. |
 | FR-05 Incident management | WP-06, WP-07 | Not started | Require atomic uniqueness, lifecycle, comments, attribution, resolution, downtime, and occurrence evidence. |
 | FR-06 Dashboard | WP-07 | Not started | Health shell only. Require summary/filter/live/NOC/recent-down/offline-Agent/open-incident behavior. |
@@ -38,7 +38,7 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | Maintenance probes but suppresses notifications | WP-04/06/08 | Not started | Integration/E2E Scenario G. |
 | Freshness uses `max(2 x interval, heartbeat grace)` | WP-06 | Not started | Fake-clock boundaries. |
 | Failure/recovery thresholds and Scenarios B-D | WP-06 | Not started | Table-driven state matrix. |
-| Config effective only after acknowledgement | WP-03 | Not started | Version/ack integration test. |
+| Config effective only after acknowledgement | WP-03 | In progress | Contract proposed: atomic local apply precedes idempotent acknowledgement, while central effective version advances only after `Applied`; implementation/integration evidence remains. |
 | Late data cannot move current state backward | WP-05/06 | Not started | Duplicate/out-of-order/watermark tests. |
 | Availability exposes monitoring coverage | WP-09 | Not started | Report fixture cross-check. |
 | Scenario A normal operation/latest RTT | WP-05-07 | Not started | E2E flow. |
@@ -52,7 +52,7 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | WP-00 Discovery/audit | Verified | Specifications/instructions/source/config/Git reviewed; inventory, gaps, sequence, actions, risks, and toolchain refreshed. |
 | WP-01 Foundation/contracts | Verified | 12-project graph; v1 health/result contracts; Problem Details; correlation/UTC; health/OpenAPI; Compose; CI; ADRs; format/lint/build/tests/audits all pass. |
 | WP-02 Database/inventory | Verified | User-approved PostgreSQL schema/migration, CRUD/filter/pagination, validation, confirmed enabled-only duplicate policy, concurrency, audit, CSV, policies, readiness, frozen OpenAPI, responsive inventory UI, 7 component tests, and 2 critical-flow Playwright tests. |
-| WP-03 Enrollment/config | Not started | Depends on WP-02 metadata and Lead-approved contracts. |
+| WP-03 Enrollment/config | Contract approved; implementation gated | Frozen Lead contract defines additive v1 endpoints/DTOs, separate Agent authentication, transactional enrollment, heartbeat expiry, atomic LKG/ack/rollback, dual AllowedNetworks enforcement, persistence migration, threat model, matrix, and A/B/D ownership. No runtime implementation exists; start awaits the documentation checkpoint commit confirmation. |
 | WP-04 Scheduler/ICMP | In progress | Contract-neutral deterministic jitter, monotonic timing, non-overlap, bounded concurrency, and transport seam verified; configuration-dependent scheduler and ICMP implementation wait for WP-03. |
 | WP-05 Queue/ingestion | Not started | Depends on identity, configuration, and Probe result production. |
 | WP-06 Status/incidents | Not started | Depends on durable idempotent ingestion. |

@@ -31,6 +31,10 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 | R-24 | Node-local CSV preview tokens disappear on restart or cannot be shared across API replicas. | M | M | Bounded 15-minute cache is explicit for MVP single-node; return clear invalid-token behavior and revisit durable/distributed storage before scale-out. | Backend, WP-10/11 | M/L |
 | R-25 | Synthetic Development authentication or its role headers leak into a production Web bundle. | M | H | Compile-time Development gating, API-client fail-closed checks, production authentication-required state, bundle-content verification, and later production OIDC integration. | Web/Security, WP-02/07/11 | L/H |
 | R-26 | Hand-maintained frontend types drift from the frozen OpenAPI artifact. | M | M | Contract-shaped types, request-level component tests, runtime/checked-in OpenAPI compatibility gate, Lead review, and generated-client evaluation before broader API growth. | Lead/Web, continuous/WP-07 | L/M |
+| R-27 | Enrollment or rotation concurrency creates multiple identities, leaks a response secret, or locks an Agent out. | M | H | Row-locked transactional one-time token use, digest-only persistence, one pending credential, promote-on-first-use rotation, strict redaction, and concurrency/lost-response tests. | Backend/Agent/Security, WP-03/11 | L/H |
+| R-28 | Heartbeat clock skew or inconsistent configuration acknowledgement misstates Agent status/effective version. | M | H | Server receive time, deterministic 60-second default expiry, skew flag, immutable monotonic snapshots, idempotent acknowledgements, and fake-clock/restart tests. | Backend/Agent, WP-03/06 | L/M |
+| R-29 | A compromised Server widens Agent target scope or supplies executable configuration. | M | H | Local non-expandable network ceiling, Server and Agent CIDR checks, closed ICMP-only schema, full-snapshot rejection, execution-time containment, and no command fields. | Lead/Backend/Agent/Security, WP-03/04/11 | L/H |
+| R-30 | A disconnected Agent continues probing after central revocation because it cannot receive the 410 response. | M | M | Server rejects immediately; Agent halts on reconnect; short heartbeat/config polling; credential expiry; document that immediate offline revocation requires an external host/network control. | IT/Agent, WP-03/10/11 | M/M |
 
 ## Temporary assumptions
 
@@ -51,7 +55,8 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 
 - WP-01 is verified and WP-02 is user-approved. PostgreSQL, VictoriaMetrics, and API containers are healthy; readiness verifies PostgreSQL schema/connectivity.
 - NuGet and npm audits report no known vulnerable packages. `gitleaks` and `trivy` are not installed, so full dedicated secret and image scanning remains outstanding.
-- The current Git worktree is on local `main` at `c0e53ff`, two commits ahead of configured `origin/main`; Agent C and checkpoint-document changes remain uncommitted.
+- The approved WP-02 checkpoint is committed at `8ca821d`; local `main` and `origin/main` were synchronized and the worktree was clean before Lead created the WP-03 design documents.
 - Agent C consumed the Lead-frozen WP-02 inventory/OpenAPI v1 contract. Frontend lint, 7 component tests, production build, 2 Playwright flows, full 43-test .NET gate, Compose/runtime, OpenAPI, and quality/security checks pass.
 - Production Web authentication intentionally fails closed until UA-06/OIDC work; synthetic headers and role-selection markers are absent from the production bundle.
 - The user accepted production OIDC, unavailable `gitleaks`/`trivy`, integer OpenAPI criticality values 0-3, manually maintained frontend contract types, and containerized .NET 10 builds as tracked follow-on risks rather than WP-02 blockers.
+- WP-03 remains design-only. The user approved and froze ADR-007 through ADR-009 and the additive OpenAPI v1 contract; Agents A, B, and D remain gated on confirmation of the documentation checkpoint commit, and Agent C remains stopped.

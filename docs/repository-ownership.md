@@ -2,6 +2,8 @@
 
 Status: Frozen at the WP-01 integration gate on 2026-08-10 (Asia/Bangkok).
 
+WP-03 design addendum: the additive Agent enrollment/identity/heartbeat/configuration contract in `docs/api/wp03-agent-contract-proposal.md` and ADR-007 through ADR-009 were approved and frozen on 2026-08-10. The generated WP-02 OpenAPI artifact remains unchanged until verified implementation regeneration. Any deviation follows the shared contract change protocol below.
+
 The initial project set, project-reference graph, shared contract version, and ADR set are enforced by `scripts/verify-wp01-foundation.ps1`. Changes to those frozen items require Lead/Integration approval and a coordinated update to this document, the verification script, and affected consumers.
 
 ## Ownership boundaries

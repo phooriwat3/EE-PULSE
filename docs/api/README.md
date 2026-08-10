@@ -11,3 +11,5 @@ curl.exe --noproxy '*' --silent --show-error --fail-with-body --output .\docs\ap
 After regeneration, run the integration tests and verify that the checked-in artifact contains the expected inventory operations, response schemas, Bearer security requirements, 401/403 responses, and unauthenticated health operations. Do not hand-edit the generated JSON.
 
 Frontend policy: generate or derive typed API clients from this checked-in v1 artifact, keep generated code in a clearly identified frontend path, and fail CI when regeneration produces an unexplained diff. Compatible additions may extend v1 after Lead review; breaking changes require a new API/schema version.
+
+The approved and frozen WP-03 additive design contract is recorded in `wp03-agent-contract-proposal.md`. It does not alter the frozen WP-02 artifact. During implementation, regenerate `openapi-v1.json` from the verified API rather than hand-editing it.
