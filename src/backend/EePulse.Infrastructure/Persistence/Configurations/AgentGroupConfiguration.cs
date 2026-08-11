@@ -17,6 +17,7 @@ internal sealed class AgentGroupConfiguration : IEntityTypeConfiguration<AgentGr
         builder.Property(group => group.CreatedAt).HasColumnName("created_at");
         builder.Property(group => group.UpdatedAt).HasColumnName("updated_at");
         builder.Property(group => group.RowVersion).HasColumnName("row_version").IsConcurrencyToken();
+        builder.Property(group => group.ConfigurationVersion).HasColumnName("configuration_version");
         builder.HasIndex(group => group.Name).IsUnique().HasDatabaseName("ux_agent_groups_name");
     }
 }

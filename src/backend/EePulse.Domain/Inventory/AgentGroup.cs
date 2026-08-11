@@ -25,6 +25,7 @@ public sealed class AgentGroup
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
     public long RowVersion { get; private set; }
+    public long ConfigurationVersion { get; private set; }
 
     public void Update(string name, string? description, bool enabled, DateTimeOffset now)
     {
@@ -32,5 +33,11 @@ public sealed class AgentGroup
         Description = Guard.Optional(description, nameof(description), 1_000);
         Enabled = enabled;
         UpdatedAt = Guard.Utc(now, nameof(now));
+    }
+
+    public long PublishConfiguration()
+    {
+        ConfigurationVersion = checked(ConfigurationVersion + 1);
+        return ConfigurationVersion;
     }
 }

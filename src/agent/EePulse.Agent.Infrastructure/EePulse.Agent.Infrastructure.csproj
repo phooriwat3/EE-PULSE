@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="System.IO.FileSystem.AccessControl" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\EePulse.Agent.Core\EePulse.Agent.Core.csproj" />
   </ItemGroup>
 </Project>

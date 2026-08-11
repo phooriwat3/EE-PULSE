@@ -10,6 +10,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\agent\EePulse.Agent.Core\EePulse.Agent.Core.csproj" />
+    <ProjectReference Include="..\..\src\agent\EePulse.Agent.Infrastructure\EePulse.Agent.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\backend\EePulse.Contracts\EePulse.Contracts.csproj" />
   </ItemGroup>
 </Project>

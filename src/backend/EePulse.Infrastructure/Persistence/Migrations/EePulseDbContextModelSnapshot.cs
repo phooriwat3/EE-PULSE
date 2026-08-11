@@ -23,6 +23,424 @@ namespace EePulse.Infrastructure.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("EePulse.Domain.Agents.Agent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AgentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_group_id");
+
+                    b.Property<string>("AgentVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("agent_version");
+
+                    b.Property<Guid>("ClientInstanceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("client_instance_id");
+
+                    b.Property<bool>("ClockSkewSuspected")
+                        .HasColumnType("boolean")
+                        .HasColumnName("clock_skew_suspected");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("CredentialExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("credential_expires_at");
+
+                    b.Property<long>("DesiredConfigurationVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("desired_configuration_version");
+
+                    b.Property<int>("HeartbeatIntervalSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("heartbeat_interval_seconds");
+
+                    b.Property<long>("LastAppliedConfigurationVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("last_applied_configuration_version");
+
+                    b.Property<DateTimeOffset?>("LastConfigurationAcknowledgedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_configuration_acknowledged_at");
+
+                    b.Property<DateTimeOffset?>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_heartbeat_at");
+
+                    b.Property<DateTimeOffset?>("LastReportedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_reported_at");
+
+                    b.Property<string>("MachineName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasColumnName("machine_name");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasColumnName("name");
+
+                    b.Property<long>("QueueDepth")
+                        .HasColumnType("bigint")
+                        .HasColumnName("queue_depth");
+
+                    b.Property<string>("RevocationReason")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("revocation_reason");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("row_version");
+
+                    b.Property<string>("SelfHealth")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("self_health");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientInstanceId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_agents_active_client_instance")
+                        .HasFilter("revoked_at IS NULL");
+
+                    b.HasIndex("AgentGroupId", "Status")
+                        .HasDatabaseName("ix_agents_group_status");
+
+                    b.HasIndex("Status", "LastHeartbeatAt")
+                        .HasDatabaseName("ix_agents_status_heartbeat");
+
+                    b.ToTable("agents", (string)null);
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentAllowedNetwork", b =>
+                {
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_id");
+
+                    b.Property<IPNetwork>("Network")
+                        .HasColumnType("cidr")
+                        .HasColumnName("network");
+
+                    b.HasKey("AgentId", "Network");
+
+                    b.ToTable("agent_allowed_networks", (string)null);
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentConfigurationAcknowledgement", b =>
+                {
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("acknowledgement_id");
+
+                    b.Property<DateTimeOffset?>("AppliedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("applied_at");
+
+                    b.Property<long>("CentralEffectiveConfigurationVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("central_effective_configuration_version");
+
+                    b.Property<long>("ConfigurationVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("configuration_version");
+
+                    b.Property<long>("DesiredConfigurationVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("desired_configuration_version");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("error_code");
+
+                    b.Property<DateTimeOffset>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<DateTimeOffset>("SentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sent_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.HasKey("AgentId", "Id");
+
+                    b.ToTable("agent_configuration_acknowledgements", (string)null);
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentConfigurationSnapshot", b =>
+                {
+                    b.Property<Guid>("AgentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_group_id");
+
+                    b.Property<long>("Version")
+                        .HasColumnType("bigint")
+                        .HasColumnName("version");
+
+                    b.Property<DateTimeOffset>("GeneratedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("generated_at");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<byte[]>("PayloadDigest")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("payload_digest");
+
+                    b.Property<long?>("RollbackOfVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("rollback_of_version");
+
+                    b.HasKey("AgentGroupId", "Version");
+
+                    b.ToTable("agent_configuration_snapshots", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_agent_snapshot_digest", "octet_length(payload_digest) = 32");
+                        });
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentCredential", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<byte[]>("Digest")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("digest");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<DateTimeOffset?>("FirstUsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_used_at");
+
+                    b.Property<DateTimeOffset?>("PendingExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("pending_expires_at");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<DateTimeOffset>("RotateAfter")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("rotate_after");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("state");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex(new[] { "AgentId" }, "UX_AgentCredential_Active_Model")
+                        .IsUnique()
+                        .HasDatabaseName("ux_agent_credentials_active")
+                        .HasFilter("state = 'Active'");
+
+                    b.HasIndex(new[] { "AgentId" }, "UX_AgentCredential_Pending_Model")
+                        .IsUnique()
+                        .HasDatabaseName("ux_agent_credentials_pending")
+                        .HasFilter("state = 'Pending'");
+
+                    b.ToTable("agent_credentials", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_agent_credential_digest", "octet_length(digest) = 32");
+                        });
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentEnrollmentToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AgentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_group_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<byte[]>("Digest")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("digest");
+
+                    b.Property<string>("ExpectedMachineName")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasColumnName("expected_machine_name");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("label");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("row_version");
+
+                    b.Property<DateTimeOffset?>("UsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("used_at");
+
+                    b.Property<Guid?>("UsedByAgentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("used_by_agent_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AgentGroupId");
+
+                    b.ToTable("agent_enrollment_tokens", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_agent_enrollment_token_digest", "octet_length(digest) = 32");
+                        });
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentEnrollmentTokenAllowedNetwork", b =>
+                {
+                    b.Property<Guid>("TokenId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("token_id");
+
+                    b.Property<IPNetwork>("Network")
+                        .HasColumnType("cidr")
+                        .HasColumnName("network");
+
+                    b.HasKey("TokenId", "Network");
+
+                    b.ToTable("agent_enrollment_token_allowed_networks", (string)null);
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentGroupAllowedNetwork", b =>
+                {
+                    b.Property<Guid>("AgentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_group_id");
+
+                    b.Property<IPNetwork>("Network")
+                        .HasColumnType("cidr")
+                        .HasColumnName("network");
+
+                    b.HasKey("AgentGroupId", "Network");
+
+                    b.ToTable("agent_group_allowed_networks", (string)null);
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentHeartbeatReceipt", b =>
+                {
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_id");
+
+                    b.Property<Guid>("HeartbeatId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("heartbeat_id");
+
+                    b.Property<DateTimeOffset>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("ResponseJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("response_json");
+
+                    b.HasKey("AgentId", "HeartbeatId");
+
+                    b.HasIndex("ReceivedAt")
+                        .HasDatabaseName("ix_agent_heartbeat_receipts_received");
+
+                    b.ToTable("agent_heartbeat_receipts", (string)null);
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentPolicyAllowedNetwork", b =>
+                {
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_id");
+
+                    b.Property<IPNetwork>("Network")
+                        .HasColumnType("cidr")
+                        .HasColumnName("network");
+
+                    b.HasKey("AgentId", "Network");
+
+                    b.ToTable("agent_policy_allowed_networks", (string)null);
+                });
+
             modelBuilder.Entity("EePulse.Domain.Auditing.AuditEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -89,6 +507,10 @@ namespace EePulse.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
                         .HasColumnName("id");
+
+                    b.Property<long>("ConfigurationVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("configuration_version");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -202,8 +624,8 @@ namespace EePulse.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("SiteId", "Address")
                         .IsUnique()
-                        .HasFilter("\"enabled\"")
-                        .HasDatabaseName("ux_devices_site_address");
+                        .HasDatabaseName("ux_devices_site_address")
+                        .HasFilter("\"enabled\"");
 
                     b.HasIndex("SiteId", "Enabled")
                         .HasDatabaseName("ix_devices_site_enabled");
@@ -405,6 +827,96 @@ namespace EePulse.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ux_sites_code");
 
                     b.ToTable("sites", (string)null);
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.Agent", b =>
+                {
+                    b.HasOne("EePulse.Domain.Inventory.AgentGroup", null)
+                        .WithMany()
+                        .HasForeignKey("AgentGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentAllowedNetwork", b =>
+                {
+                    b.HasOne("EePulse.Domain.Agents.Agent", null)
+                        .WithMany()
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentConfigurationAcknowledgement", b =>
+                {
+                    b.HasOne("EePulse.Domain.Agents.Agent", null)
+                        .WithMany()
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentConfigurationSnapshot", b =>
+                {
+                    b.HasOne("EePulse.Domain.Inventory.AgentGroup", null)
+                        .WithMany()
+                        .HasForeignKey("AgentGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentCredential", b =>
+                {
+                    b.HasOne("EePulse.Domain.Agents.Agent", null)
+                        .WithMany()
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentEnrollmentToken", b =>
+                {
+                    b.HasOne("EePulse.Domain.Inventory.AgentGroup", null)
+                        .WithMany()
+                        .HasForeignKey("AgentGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentEnrollmentTokenAllowedNetwork", b =>
+                {
+                    b.HasOne("EePulse.Domain.Agents.AgentEnrollmentToken", null)
+                        .WithMany()
+                        .HasForeignKey("TokenId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentGroupAllowedNetwork", b =>
+                {
+                    b.HasOne("EePulse.Domain.Inventory.AgentGroup", null)
+                        .WithMany()
+                        .HasForeignKey("AgentGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentHeartbeatReceipt", b =>
+                {
+                    b.HasOne("EePulse.Domain.Agents.Agent", null)
+                        .WithMany()
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EePulse.Domain.Agents.AgentPolicyAllowedNetwork", b =>
+                {
+                    b.HasOne("EePulse.Domain.Agents.Agent", null)
+                        .WithMany()
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("EePulse.Domain.Inventory.Device", b =>

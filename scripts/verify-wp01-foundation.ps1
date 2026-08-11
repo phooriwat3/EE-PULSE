@@ -58,6 +58,7 @@ $expectedProjects = @{
     )
     'tests/EePulse.Agent.Tests/EePulse.Agent.Tests.csproj' = @(
         'src/agent/EePulse.Agent.Core/EePulse.Agent.Core.csproj'
+        'src/agent/EePulse.Agent.Infrastructure/EePulse.Agent.Infrastructure.csproj'
         'src/backend/EePulse.Contracts/EePulse.Contracts.csproj'
     )
 }
