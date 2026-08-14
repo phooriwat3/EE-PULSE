@@ -1,6 +1,6 @@
 # Quality and security verification
 
-This directory contains cross-cutting QA assets and evidence for the approved WP-02 contract. It does not define public API DTOs, database migrations, authorization implementation, or the inventory CSV schema; those remain Backend and Lead/Integration decisions.
+This directory contains cross-cutting QA assets and evidence for the approved WP-02 contract and frozen WP-03 Agent contract. It does not define public API DTOs, database migrations, authorization implementation, or application schemas; those remain Backend, Probe Agent, and Lead/Integration decisions.
 
 Run the local static/deployment gate from the repository root:
 
@@ -18,3 +18,9 @@ npm --prefix .\src\web audit --audit-level=high
 ```
 
 Use [wp02-test-matrix.md](wp02-test-matrix.md) when reviewing WP-02. It distinguishes verified evidence from partial coverage and genuine gaps; the matrix itself does not replace the referenced executable evidence.
+
+Use [wp03-test-matrix.md](wp03-test-matrix.md) for WP-03 and run the additive static contract gate after implementation and OpenAPI regeneration:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\wp03-verify-contract.ps1
+```

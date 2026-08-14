@@ -87,6 +87,9 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
         Assert.Equal("bearer", bearer.GetProperty("scheme").GetString());
         Assert.Contains("OIDC", bearer.GetProperty("description").GetString(), StringComparison.Ordinal);
         Assert.Contains("X-EE-Pulse-Role", bearer.GetProperty("description").GetString(), StringComparison.Ordinal);
+        var agentCredential = document.RootElement.GetProperty("components").GetProperty("securitySchemes")
+            .GetProperty("AgentCredential");
+        Assert.Equal("EE-Pulse-Agent-v1", agentCredential.GetProperty("bearerFormat").GetString());
 
         foreach (var path in document.RootElement.GetProperty("paths").EnumerateObject()
                      .Where(candidate => candidate.Name.StartsWith("/api/v1/", StringComparison.Ordinal)))
@@ -94,11 +97,26 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
             foreach (var operation in path.Value.EnumerateObject().Where(candidate =>
                          candidate.Name is "get" or "post" or "put" or "delete" or "patch"))
             {
+                var isEnrollment = path.Name == "/api/v1/agents/enroll";
+                var isAgentOperation = path.Name.StartsWith("/api/v1/agents/{agentId}/heartbeat", StringComparison.Ordinal) ||
+                    path.Name.StartsWith("/api/v1/agents/{agentId}/configuration", StringComparison.Ordinal) ||
+                    path.Name.StartsWith("/api/v1/agents/{agentId}/credentials/rotate", StringComparison.Ordinal);
                 var security = operation.Value.GetProperty("security");
-                Assert.Contains(security.EnumerateArray(), requirement => requirement.TryGetProperty("Bearer", out _));
+                if (isEnrollment)
+                {
+                    Assert.Empty(security.EnumerateArray());
+                }
+                else
+                {
+                    Assert.Contains(security.EnumerateArray(), requirement =>
+                        requirement.TryGetProperty(isAgentOperation ? "AgentCredential" : "Bearer", out _));
+                }
                 var responses = operation.Value.GetProperty("responses");
                 Assert.True(responses.TryGetProperty("401", out _), $"{operation.Name.ToUpperInvariant()} {path.Name} lacks 401.");
-                Assert.True(responses.TryGetProperty("403", out _), $"{operation.Name.ToUpperInvariant()} {path.Name} lacks 403.");
+                if (!isEnrollment)
+                {
+                    Assert.True(responses.TryGetProperty("403", out _), $"{operation.Name.ToUpperInvariant()} {path.Name} lacks 403.");
+                }
             }
         }
 

@@ -2,6 +2,7 @@ using System.Reflection;
 using EePulse.Api.Middleware;
 using EePulse.Api.Authorization;
 using EePulse.Api.Inventory;
+using EePulse.Api.Agents;
 using EePulse.Api.OpenApi;
 using EePulse.Application.Time;
 using EePulse.Contracts;
@@ -10,6 +11,8 @@ using EePulse.Infrastructure;
 using EePulse.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.HttpOverrides;
+using System.Net;
 using Serilog;
 using Serilog.Formatting.Compact;
 
@@ -32,9 +35,30 @@ try
     builder.Services.AddEePulseInfrastructure();
     builder.Services.AddAuthentication(DevelopmentAuthenticationHandler.SchemeName)
         .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(
-            DevelopmentAuthenticationHandler.SchemeName, _ => { });
+            DevelopmentAuthenticationHandler.SchemeName, _ => { })
+        .AddScheme<AuthenticationSchemeOptions, AgentCredentialAuthenticationHandler>(
+            EePulse.Contracts.Agents.AgentContract.CredentialAuthenticationScheme, _ => { });
     builder.Services.AddInventoryAuthorization();
     builder.Services.AddSingleton<DeviceCsvImportService>();
+    builder.Services.AddHostedService<AgentOfflineService>();
+    builder.Services.AddSingleton<AgentRateLimiter>();
+    builder.Services.AddSingleton(new AgentRateLimitDefaults());
+
+    var knownProxyValues = builder.Configuration.GetSection("AgentIdentity:KnownProxies").Get<string[]>() ?? [];
+    var knownProxies = knownProxyValues.Select(value => IPAddress.TryParse(value, out var address)
+        ? address : throw new InvalidOperationException("Every AgentIdentity:KnownProxies entry must be a valid IP address.")).ToArray();
+    if (!builder.Environment.IsDevelopment() &&
+        (!builder.Configuration.GetValue<bool>("AgentIdentity:Enabled") ||
+         !builder.Configuration.GetValue<bool>("AgentIdentity:TrustedHttpsProxy") || knownProxies.Length == 0))
+    {
+        throw new InvalidOperationException("Production Agent identity requires AgentIdentity:Enabled and trusted HTTPS proxy configuration.");
+    }
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.KnownIPNetworks.Clear(); options.KnownProxies.Clear();
+        foreach (var address in knownProxies) options.KnownProxies.Add(address);
+    });
 
     var postgresConnection = builder.Configuration.GetConnectionString("Postgres");
     if (!string.IsNullOrWhiteSpace(postgresConnection))
@@ -64,11 +88,14 @@ try
         }
     }
 
+    app.UseForwardedHeaders();
     app.UseMiddleware<CorrelationIdMiddleware>();
-    app.UseSerilogRequestLogging();
     app.UseExceptionHandler();
+    app.UseSerilogRequestLogging();
+    app.UseMiddleware<AgentRequestSecurityMiddleware>();
     app.UseStatusCodePages();
     app.UseAuthentication();
+    app.UseMiddleware<AgentRateLimitMiddleware>();
     app.UseAuthorization();
     if (string.IsNullOrWhiteSpace(postgresConnection))
     {
@@ -101,6 +128,7 @@ try
         .Produces<HealthResponse>();
 
     app.MapInventoryEndpoints();
+    app.MapAgentEndpoints();
 
     app.Run();
 }

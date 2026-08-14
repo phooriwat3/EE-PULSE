@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Text;
 using EePulse.Api.Authorization;
+using EePulse.Api.Agents;
 using EePulse.Application.Time;
 using EePulse.Contracts.Inventory;
 using EePulse.Domain.Auditing;
@@ -167,10 +168,13 @@ public static class InventoryEndpoints
         var group = await db.AgentGroups.FindAsync([id], cancellationToken);
         if (group is null) return Results.NotFound();
         var before = ToResponse(group);
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         db.Entry(group).Property(candidate => candidate.RowVersion).OriginalValue = request.RowVersion;
         group.Update(request.Name, request.Description, request.Enabled, clock.UtcNow);
         AddAudit(db, http, clock, "inventory.agent-group.updated", "AgentGroup", id, before, request);
         await db.SaveChangesAsync(cancellationToken);
+        if (before.Enabled != request.Enabled) await PublishConfiguredGroups(db, [group.Id], clock.UtcNow, http, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
         return Results.Ok(ToResponse(group));
     });
 
@@ -239,11 +243,15 @@ public static class InventoryEndpoints
         var siteId = RequiredGuid(request.SiteId, nameof(request.SiteId));
         if (!await db.Sites.AnyAsync(site => site.Id == siteId, cancellationToken)) return Results.NotFound();
         var before = ToResponse(device);
+        var affectedGroups = await db.Probes.Where(probe => probe.DeviceId == id).Select(probe => probe.AgentGroupId).Distinct().ToListAsync(cancellationToken);
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         db.Entry(device).Property(candidate => candidate.RowVersion).OriginalValue = request.RowVersion;
         device.Update(siteId, request.Name, request.Address, request.Hostname, request.DeviceType, request.Area,
             request.Owner, RequiredCriticality(request.Criticality), request.Tags, request.Enabled, clock.UtcNow);
         AddAudit(db, http, clock, "inventory.device.updated", "Device", id, before, request);
         await db.SaveChangesAsync(cancellationToken);
+        if (before.Address != request.Address || before.Enabled != request.Enabled) { await PublishConfiguredGroups(db, affectedGroups, clock.UtcNow, http, cancellationToken); await db.SaveChangesAsync(cancellationToken); }
+        await transaction.CommitAsync(cancellationToken);
         return Results.Ok(ToResponse(device));
     });
 
@@ -288,8 +296,10 @@ public static class InventoryEndpoints
             request.AttemptCount, request.WarningRttMilliseconds, request.CriticalRttMilliseconds,
             request.FailureThreshold, request.RecoveryThreshold);
         db.Probes.Add(probe);
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         AddAudit(db, http, clock, "inventory.probe.created", "Probe", probe.Id, null, request);
         await db.SaveChangesAsync(cancellationToken);
+        await PublishConfiguredGroups(db, [groupId], clock.UtcNow, http, cancellationToken); await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
         return Results.Created($"/api/v1/probes/{probe.Id}", ToResponse(probe));
     });
 
@@ -302,12 +312,15 @@ public static class InventoryEndpoints
         var groupId = RequiredGuid(request.AgentGroupId, nameof(request.AgentGroupId));
         if (!await db.AgentGroups.AnyAsync(group => group.Id == groupId, cancellationToken)) return Results.NotFound();
         var before = ToResponse(probe);
+        var oldGroupId = probe.AgentGroupId;
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         db.Entry(probe).Property(candidate => candidate.RowVersion).OriginalValue = request.RowVersion;
         probe.Update(groupId, request.IntervalSeconds, request.TimeoutMilliseconds, request.AttemptCount,
             request.WarningRttMilliseconds, request.CriticalRttMilliseconds, request.FailureThreshold,
             request.RecoveryThreshold, request.Enabled);
         AddAudit(db, http, clock, "inventory.probe.updated", "Probe", id, before, request);
         await db.SaveChangesAsync(cancellationToken);
+        await PublishConfiguredGroups(db, [oldGroupId, groupId], clock.UtcNow, http, cancellationToken); await db.SaveChangesAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
         return Results.Ok(ToResponse(probe));
     });
 
@@ -391,6 +404,10 @@ public static class InventoryEndpoints
         {
             return await action();
         }
+        catch (AgentEndpoints.AgentConfigurationPublicationException exception)
+        {
+            return Results.Json(new { type = $"https://ee-pulse.invalid/problems/{EePulse.Contracts.Agents.AgentProblemCodes.ConfigurationConflict}", title = EePulse.Contracts.Agents.AgentProblemCodes.ConfigurationConflict, status = 409, detail = "The mutation would produce an invalid Agent configuration.", instance = exception.Instance, code = EePulse.Contracts.Agents.AgentProblemCodes.ConfigurationConflict, retryable = false, correlationId = exception.CorrelationId }, statusCode: 409, contentType: "application/problem+json");
+        }
         catch (DomainValidationException exception)
         {
             return Results.Problem(exception.Message, statusCode: 400, title: "Validation failed",
@@ -457,6 +474,16 @@ public static class InventoryEndpoints
 
     private static SiteResponse ToResponse(Site site) => new(site.Id.ToString(), site.Code, site.Name, site.Timezone,
         site.Enabled, site.CreatedAt, site.UpdatedAt, site.RowVersion);
+    private static async Task PublishConfiguredGroups(EePulseDbContext db, IEnumerable<Guid> groupIds, DateTimeOffset now, HttpContext http, CancellationToken ct)
+    {
+        foreach (var groupId in groupIds.Distinct().OrderBy(x => x))
+        {
+            var group = await db.AgentGroups.FromSqlInterpolated($"SELECT * FROM agent_groups WHERE id = {groupId} FOR UPDATE").SingleAsync(ct);
+            if (!await db.AgentGroupAllowedNetworks.AnyAsync(x => x.AgentGroupId == groupId, ct)) continue;
+            await AgentEndpoints.Publish(db, group, now, null, ct, null, http);
+        }
+    }
+
     private static AgentGroupResponse ToResponse(AgentGroup group) => new(group.Id.ToString(), group.Name, group.Description,
         group.Enabled, group.CreatedAt, group.UpdatedAt, group.RowVersion);
     private static DeviceResponse ToResponse(Device device) => new(device.Id.ToString(), device.SiteId.ToString(), device.Name,
