@@ -1,8 +1,8 @@
 # EE Pulse implementation status
 
-Last updated: 2026-08-10 (Asia/Bangkok)  
+Last updated: 2026-08-14 (Asia/Bangkok)
 Owner: Lead/Integration Agent  
-Current checkpoint: WP-03 contract design approved and frozen; awaiting documentation checkpoint commit
+Current checkpoint: WP-03 implementation integrated and verified locally; awaiting user checkpoint commit decision
 
 ## Outcome
 
@@ -14,7 +14,7 @@ WP-00 and WP-01 remain verified. The user approved WP-02 after the backend basel
 - Lead reviewed the changes, returned in-scope defects to their owners, rebuilt the final stack, and generated/reviewed `docs/api/openapi-v1.json`.
 - Agent C delivered the Site, Device, Probe-configuration, and CSV inventory UI plus Vitest and Playwright coverage. Lead returned production-authentication, OpenAPI-filter, and conflict-recovery defects; the corrected implementation passes the full integration gate.
 
-The committed WP-02 checkpoint was clean at `8ca821d`. The user approved the design-only enrollment, identity, heartbeat, configuration, and network-scope contract plus ADR-007 through ADR-009. WP-03 implementation has not started; Agents A, B, C, and D remain idle until the user confirms the documentation checkpoint commit.
+The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13727d8e84e5f56b61e854cbbabc5adab`. WP-03 now implements the approved additive enrollment, identity, heartbeat, configuration, revocation, credential-rotation, and AllowedNetworks contract plus ADR-007 through ADR-009. Agent C remained deferred.
 
 ## Current repository
 
@@ -36,8 +36,8 @@ The committed WP-02 checkpoint was clean at `8ca821d`. The user approved the des
 | WP-00 | Verified | Audit/control documents and repository governance established. |
 | WP-01 | Verified | Foundation/project graph/contracts/health/CI/Compose/ADRs pass. |
 | WP-02 | Approved | Backend/PostgreSQL plus inventory frontend pass together: metadata, migration, APIs, validation, authorization, audit, CSV, OpenAPI, enabled-only Device uniqueness, accessible UI, component tests, and critical-flow browser tests. |
-| WP-03 | Contract approved; implementation gated | Additive v1 endpoints, schemas, auth/error semantics, persistence/migration plan, threat analysis, test matrix, ownership, and Agent A/B/D acceptance criteria are frozen in `docs/api/wp03-agent-contract-proposal.md`. No implementation has started. |
-| WP-04 | Partial foundation only | Contract-neutral scheduling/concurrency/transport seams exist; ICMP/config-dependent work is not started. |
+| WP-03 | Implemented and integration-verified | Additive v1 Agent endpoints/DTOs, separate Agent credentials, one additive PostgreSQL migration, enrollment/revocation/rotation, heartbeat/offline processing, immutable configuration snapshots/acknowledgements/rollback, dual AllowedNetworks enforcement, DPAPI/ACL-backed Agent storage, and generated OpenAPI are verified. |
+| WP-04 | Partial foundation only | Contract-neutral scheduling/concurrency/transport seams exist; real ICMP/config-dependent operational rollout remains deferred. |
 | WP-05 through WP-11 | Not started | Continue in dependency order after the next approved checkpoint. |
 
 ## Stable contract decision
@@ -68,6 +68,17 @@ Breaking changes require a new API/schema version. Compatible additions remain L
 | OpenAPI | 3.1.1; 14 paths; 19 protected operations; Bearer scheme; protected operations declare 401/403; health remains unauthenticated. |
 | Repository hygiene | `git diff --check` passed; no commit, push, deployment, real credentials, real probes, or notifications. |
 
+### WP-03 final integration evidence (2026-08-14)
+
+| Gate | Result |
+| --- | --- |
+| Release builds | Backend solution and Windows Agent passed with 0 warnings and 0 errors using `mcr.microsoft.com/dotnet/sdk:10.0.302`. |
+| .NET regression | 103/103 passed: Unit 34/34, Agent 54/54, PostgreSQL-backed Integration 14/14, Security 1/1. |
+| Migration/model | Integration coverage passed clean migration, WP-02-to-WP-03 inventory preservation, constraints/indexes, no pending model changes, and rollback-script generation. The WP-02 migration files are unchanged; one additive WP-03 migration is present. |
+| Runtime/Compose | PostgreSQL, VictoriaMetrics, and API healthy. `/health/live`, `/health/ready`, and `/openapi/v1.json` returned 200; user/Admin/Agent authentication separation and anonymous malformed enrollment validation passed. |
+| OpenAPI/contract | Generated OpenAPI 3.1.1 SHA-256 `25A4B67C5B0CBD62A42FAF0A2F99A47F789525059AF9B13E664C3056277B9A6E` matches the live API; WP-03 static gate, frozen WP-02 semantic comparison, and frozen WP-03 proposal comparison passed. |
+| Security/quality | Quality/security gate passed, including source/history secret checks, dependency/lockfile/Compose checks, and WP-01 graph governance. `gitleaks` and `trivy` remain unavailable external scanner gaps. |
+
 The first sandboxed Vitest attempt could not spawn Vite's helper (`EPERM`); the authorized rerun is the passing 7/7 evidence above. Invalid earlier concurrent/nested-Docker runs remain excluded; the current isolated .NET run is 43/43.
 
 ## Accepted follow-on risks
@@ -81,7 +92,10 @@ The first sandboxed Vitest attempt could not spawn Vite's helper (`EPERM`); the 
 - Frontend contract types are manually maintained against the frozen OpenAPI; compatibility tests and Lead review mitigate drift until generated-client work is selected.
 - The host lacks .NET SDK 10; the pinned `mcr.microsoft.com/dotnet/sdk:10.0.302` container remains the verified build environment.
 - VictoriaMetrics dependency behavior is a WP-05 concern; current readiness verifies PostgreSQL schema/connectivity.
+- Real Windows DPAPI LocalMachine and service-account ACL/recovery evidence requires a disposable Windows host (WP-10/11).
+- Immediate revocation of a disconnected Agent cannot be guaranteed until it reconnects; credential expiry and short polling limit exposure.
+- `gitleaks` and `trivy` are still unavailable; dedicated secret/image scanning remains a WP-11 release requirement.
 
 ## Next checkpoint
 
-Create the documentation checkpoint commit using the recommended Lead message, then notify Lead when it is complete. Do not spawn Agents A, B, or D until that confirmation; do not start Agent C. The generated WP-02 `openapi-v1.json` remains unchanged at this design checkpoint.
+Obtain the checkpoint commit/PR approval, then perform the Windows DPAPI/service-account and approved-network operational evidence before WP-10/11 release readiness. Do not treat the local Compose credentials or documentation CIDRs as production authorization.

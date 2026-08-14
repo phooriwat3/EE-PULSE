@@ -29,7 +29,6 @@ try
         .Enrich.FromLogContext()
         .WriteTo.Console(new CompactJsonFormatter()));
     builder.Services.AddProblemDetails();
-    builder.Services.ConfigureHttpJsonOptions(options => EePulse.Contracts.Agents.AgentJsonContract.AddConverters(options.SerializerOptions));
     builder.Services.AddOpenApi("v1", options =>
         options.AddDocumentTransformer<InventorySecurityDocumentTransformer>());
     builder.Services.AddHealthChecks();

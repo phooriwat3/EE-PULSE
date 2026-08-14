@@ -1,6 +1,6 @@
 # EE Pulse risk register
 
-Last updated: 2026-08-10  
+Last updated: 2026-08-14
 Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings assume the treatment is implemented.
 
 | ID | Risk | L | I | Treatment / control | Owner / WP | Residual |
@@ -59,4 +59,5 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 - Agent C consumed the Lead-frozen WP-02 inventory/OpenAPI v1 contract. Frontend lint, 7 component tests, production build, 2 Playwright flows, full 43-test .NET gate, Compose/runtime, OpenAPI, and quality/security checks pass.
 - Production Web authentication intentionally fails closed until UA-06/OIDC work; synthetic headers and role-selection markers are absent from the production bundle.
 - The user accepted production OIDC, unavailable `gitleaks`/`trivy`, integer OpenAPI criticality values 0-3, manually maintained frontend contract types, and containerized .NET 10 builds as tracked follow-on risks rather than WP-02 blockers.
-- WP-03 remains design-only. The user approved and froze ADR-007 through ADR-009 and the additive OpenAPI v1 contract; Agents A, B, and D remain gated on confirmation of the documentation checkpoint commit, and Agent C remains stopped.
+- WP-03 local integration checkpoint passed: 103/103 .NET tests, Release builds, migration/model coverage, Compose/runtime auth checks, generated OpenAPI SHA parity, frozen WP-02 comparison, frozen WP-03 proposal comparison, and quality/security gates. Agent C remained deferred.
+- Residual WP-03 risks are accepted only for this local checkpoint: real Windows DPAPI/ACL/service recovery, approved production CIDRs/ICMP routing, disconnected-Agent revocation latency, OIDC/TLS deployment, and unavailable `gitleaks`/`trivy` evidence remain WP-10/11/operator work.

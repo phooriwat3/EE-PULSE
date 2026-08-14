@@ -7,6 +7,31 @@ namespace EePulse.Api.OpenApi;
 public sealed class InventorySecurityDocumentTransformer : IOpenApiDocumentTransformer
 {
     public const string SchemeName = "Bearer";
+    private static readonly HashSet<string> Wp03Paths = new(StringComparer.Ordinal)
+    {
+        "/api/v1/agent-enrollment-tokens",
+        "/api/v1/agent-enrollment-tokens/{tokenId}",
+        "/api/v1/agents/enroll",
+        "/api/v1/agent-groups/{agentGroupId}/allowed-networks",
+        "/api/v1/agents/{agentId}/allowed-networks",
+        "/api/v1/agent-groups/{agentGroupId}/configuration/rollback",
+        "/api/v1/agents/{agentId}/revoke",
+        "/api/v1/agents/{agentId}/heartbeat",
+        "/api/v1/agents/{agentId}/configuration",
+        "/api/v1/agents/{agentId}/configuration/acknowledgements",
+        "/api/v1/agents/{agentId}/credentials/rotate"
+    };
+
+    private static readonly HashSet<string> ClosedWp03Schemas = new(StringComparer.Ordinal)
+    {
+        "CreateAgentEnrollmentTokenRequest", "CreateAgentEnrollmentTokenResponse",
+        "AgentEnrollmentRequest", "AgentEnrollmentResponse", "AgentResponse", "PagedAgentResponse",
+        "AgentHeartbeatRequest", "AgentHeartbeatResponse", "AgentConfigurationResponse", "AgentProbeConfiguration",
+        "AgentConfigurationAcknowledgementRequest", "AgentConfigurationAcknowledgementResponse",
+        "RotateAgentCredentialRequest", "RotateAgentCredentialResponse", "RevokeAgentRequest",
+        "UpdateAgentAllowedNetworksRequest", "UpdateAgentGroupAllowedNetworksRequest", "AgentNetworkPolicyResponse",
+        "RollbackAgentConfigurationRequest", "AgentConfigurationPublicationResponse"
+    };
 
     public Task TransformAsync(
         OpenApiDocument document,
@@ -55,17 +80,17 @@ public sealed class InventorySecurityDocumentTransformer : IOpenApiDocumentTrans
                 operation.Responses ??= new OpenApiResponses();
                 operation.Responses.TryAdd("401", new OpenApiResponse { Description = "Authentication is required or invalid." });
                 if (!isEnrollment) operation.Responses.TryAdd("403", new OpenApiResponse { Description = "The authenticated principal lacks the required role or policy." });
-                if(path.Key=="/api/v1/agents/{agentId}/configuration")
+                if (path.Key == "/api/v1/agents/{agentId}/configuration")
                 {
-                    operation.Parameters ??=[];
-                    operation.Parameters.Add(new OpenApiParameter{Name="If-None-Match",In=ParameterLocation.Header,Required=false,Schema=new OpenApiSchema{Type=JsonSchemaType.String}});
-                    if(operation.Responses.TryGetValue("200",out var ok)&&ok is OpenApiResponse okResponse)
-                    {okResponse.Headers??=new Dictionary<string,IOpenApiHeader>();okResponse.Headers["ETag"]=new OpenApiHeader{Description="Strong configuration entity tag.",Schema=new OpenApiSchema{Type=JsonSchemaType.String}};}
-                    if(operation.Responses.TryGetValue("304",out var notModified)&&notModified is OpenApiResponse notModifiedResponse)
-                    {notModifiedResponse.Headers??=new Dictionary<string,IOpenApiHeader>();notModifiedResponse.Headers["ETag"]=new OpenApiHeader{Description="Strong configuration entity tag.",Schema=new OpenApiSchema{Type=JsonSchemaType.String}};}
+                    operation.Parameters ??= [];
+                    operation.Parameters.Add(new OpenApiParameter { Name = "If-None-Match", In = ParameterLocation.Header, Required = false, Schema = new OpenApiSchema { Type = JsonSchemaType.String } });
+                    if (operation.Responses.TryGetValue("200", out var ok) && ok is OpenApiResponse okResponse)
+                    { okResponse.Headers ??= new Dictionary<string, IOpenApiHeader>(); okResponse.Headers["ETag"] = new OpenApiHeader { Description = "Strong configuration entity tag.", Schema = new OpenApiSchema { Type = JsonSchemaType.String } }; }
+                    if (operation.Responses.TryGetValue("304", out var notModified) && notModified is OpenApiResponse notModifiedResponse)
+                    { notModifiedResponse.Headers ??= new Dictionary<string, IOpenApiHeader>(); notModifiedResponse.Headers["ETag"] = new OpenApiHeader { Description = "Strong configuration entity tag.", Schema = new OpenApiSchema { Type = JsonSchemaType.String } }; }
                 }
-                if(operation.Responses.TryGetValue("429",out var limited)&&limited is OpenApiResponse limitedResponse)
-                {limitedResponse.Headers??=new Dictionary<string,IOpenApiHeader>();limitedResponse.Headers["Retry-After"]=new OpenApiHeader{Description="Seconds until the request may be retried.",Schema=new OpenApiSchema{Type=JsonSchemaType.Integer}};}
+                if (Wp03Paths.Contains(path.Key) && operation.Responses.TryGetValue("429", out var limited) && limited is OpenApiResponse limitedResponse)
+                { limitedResponse.Headers ??= new Dictionary<string, IOpenApiHeader>(); limitedResponse.Headers["Retry-After"] = new OpenApiHeader { Description = "Seconds until the request may be retried.", Schema = new OpenApiSchema { Type = JsonSchemaType.Integer } }; }
             }
         }
 
@@ -73,10 +98,10 @@ public sealed class InventorySecurityDocumentTransformer : IOpenApiDocumentTrans
         MarkWriteOnly(document, "AgentEnrollmentRequest", "enrollmentToken");
         MarkWriteOnly(document, "AgentEnrollmentResponse", "agentCredential");
         MarkWriteOnly(document, "RotateAgentCredentialResponse", "agentCredential");
-        if(document.Components?.Schemas is not null)
+        if (document.Components?.Schemas is not null)
         {
-            foreach(var candidate in document.Components.Schemas.Where(x=>x.Key.Contains("Agent",StringComparison.Ordinal)))
-                if(candidate.Value is OpenApiSchema schema)schema.AdditionalPropertiesAllowed=false;
+            foreach (var candidate in document.Components.Schemas.Where(x => ClosedWp03Schemas.Contains(x.Key)))
+                if (candidate.Value is OpenApiSchema schema) schema.AdditionalPropertiesAllowed = false;
         }
 
         return Task.CompletedTask;

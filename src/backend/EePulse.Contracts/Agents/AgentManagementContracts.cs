@@ -65,8 +65,8 @@ public sealed record CreateAgentEnrollmentTokenResponse(
     [property: StringLength(256, MinimumLength = 48)] string EnrollmentToken,
     Guid AgentGroupId,
     IReadOnlyList<string> AllowedNetworks,
-    DateTimeOffset ExpiresAt,
-    DateTimeOffset CreatedAt);
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset ExpiresAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset CreatedAt);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AgentEnrollmentRequest(
@@ -76,7 +76,7 @@ public sealed record AgentEnrollmentRequest(
     [property: StringLength(255, MinimumLength = 1)] string MachineName,
     [property: StringLength(64, MinimumLength = 1)] string AgentVersion,
     [property: MinLength(1), MaxLength(64)] IReadOnlyList<string> LocalAllowedNetworks,
-    DateTimeOffset SentAt);
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset SentAt);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AgentEnrollmentResponse(
@@ -85,9 +85,9 @@ public sealed record AgentEnrollmentResponse(
     Guid AgentGroupId,
     Guid CredentialId,
     [property: StringLength(256, MinimumLength = 48)] string AgentCredential,
-    DateTimeOffset CredentialExpiresAt,
-    DateTimeOffset RotateAfter,
-    DateTimeOffset ServerTime,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset CredentialExpiresAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset RotateAfter,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset ServerTime,
     int HeartbeatIntervalSeconds,
     int HeartbeatExpiresAfterSeconds,
     long DesiredConfigurationVersion,
@@ -105,15 +105,15 @@ public sealed record AgentResponse(
     string SelfHealth,
     long QueueDepth,
     IReadOnlyList<string> AllowedNetworks,
-    DateTimeOffset? LastHeartbeatAt,
-    DateTimeOffset? LastReportedAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? LastHeartbeatAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? LastReportedAt,
     long DesiredConfigurationVersion,
     long LastAppliedConfigurationVersion,
-    DateTimeOffset? LastConfigurationAcknowledgedAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? LastConfigurationAcknowledgedAt,
     bool ClockSkewSuspected,
-    DateTimeOffset? CredentialExpiresAt,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset? RevokedAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? CredentialExpiresAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset CreatedAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? RevokedAt,
     long RowVersion);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -132,15 +132,15 @@ public sealed record AgentHeartbeatRequest(
     [property: Range(typeof(long), "0", "9223372036854775807")] long CurrentConfigurationVersion,
     [property: Range(typeof(long), "0", "9223372036854775807")] long QueueDepth,
     string HealthState,
-    DateTimeOffset SentAt);
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset SentAt);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AgentHeartbeatResponse(
     int SchemaVersion,
     Guid HeartbeatId,
     Guid AgentId,
-    DateTimeOffset ReceivedAt,
-    DateTimeOffset ServerTime,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset ReceivedAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset ServerTime,
     int NextHeartbeatSeconds,
     long DesiredConfigurationVersion,
     bool ConfigurationChanged,
@@ -154,7 +154,7 @@ public sealed record AgentConfigurationResponse(
     Guid AgentId,
     Guid AgentGroupId,
     long ConfigurationVersion,
-    DateTimeOffset GeneratedAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset GeneratedAt,
     long? RollbackOfVersion,
     IReadOnlyList<string> AllowedNetworks,
     IReadOnlyList<AgentProbeConfiguration> Probes);
@@ -180,9 +180,9 @@ public sealed record AgentConfigurationAcknowledgementRequest(
     Guid AcknowledgementId,
     [property: Range(typeof(long), "1", "9223372036854775807")] long ConfigurationVersion,
     string Status,
-    DateTimeOffset? AppliedAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? AppliedAt,
     [property: StringLength(100)] string? ErrorCode,
-    DateTimeOffset SentAt);
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset SentAt);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AgentConfigurationAcknowledgementResponse(
@@ -190,7 +190,7 @@ public sealed record AgentConfigurationAcknowledgementResponse(
     Guid AcknowledgementId,
     Guid AgentId,
     long ConfigurationVersion,
-    DateTimeOffset AcceptedAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset AcceptedAt,
     long CentralEffectiveConfigurationVersion,
     long DesiredConfigurationVersion);
 
@@ -202,8 +202,8 @@ public sealed record RotateAgentCredentialResponse(
     int SchemaVersion,
     Guid CredentialId,
     [property: StringLength(256, MinimumLength = 48)] string AgentCredential,
-    DateTimeOffset ExpiresAt,
-    DateTimeOffset RotateAfter);
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset ExpiresAt,
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset RotateAfter);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RevokeAgentRequest(
@@ -243,4 +243,4 @@ public sealed record AgentConfigurationPublicationResponse(
     Guid AgentGroupId,
     long ConfigurationVersion,
     long? RollbackOfVersion,
-    DateTimeOffset GeneratedAt);
+    [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset GeneratedAt);

@@ -86,12 +86,17 @@ function Test-SecretSchemaNodes {
 
     foreach ($property in $Node.PSObject.Properties) {
         $childLocation = "$Location.$($property.Name)"
-        if ($property.Name -in @('enrollmentToken', 'agentCredential')) {
-            $secretSchema = $property.Value
-            Assert-Condition ($secretSchema.writeOnly -eq $true) "$childLocation must be writeOnly."
-            Assert-Condition ($null -eq $secretSchema.PSObject.Properties['example']) "$childLocation must not have an example."
-            Assert-Condition ($null -eq $secretSchema.PSObject.Properties['default']) "$childLocation must not have a default."
-            Assert-Condition ($null -eq $secretSchema.PSObject.Properties['enum']) "$childLocation must not expose an enum value."
+        if ($property.Name -ceq 'properties' -and $property.Value -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($schemaProperty in $property.Value.PSObject.Properties) {
+                if ($schemaProperty.Name -ceq 'enrollmentToken' -or $schemaProperty.Name -ceq 'agentCredential') {
+                    $secretSchema = $schemaProperty.Value
+                    $secretLocation = "$childLocation.$($schemaProperty.Name)"
+                    Assert-Condition ($secretSchema.writeOnly -eq $true) "$secretLocation must be writeOnly."
+                    Assert-Condition ($null -eq $secretSchema.PSObject.Properties['example']) "$secretLocation must not have an example."
+                    Assert-Condition ($null -eq $secretSchema.PSObject.Properties['default']) "$secretLocation must not have a default."
+                    Assert-Condition ($null -eq $secretSchema.PSObject.Properties['enum']) "$secretLocation must not expose an enum value."
+                }
+            }
         }
         Test-SecretSchemaNodes $property.Value $childLocation
     }

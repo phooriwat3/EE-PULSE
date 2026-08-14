@@ -61,6 +61,9 @@ $expectedProjects = @{
         'src/agent/EePulse.Agent.Infrastructure/EePulse.Agent.Infrastructure.csproj'
         'src/backend/EePulse.Contracts/EePulse.Contracts.csproj'
     )
+    'tests/EePulse.SecurityTests/EePulse.SecurityTests.csproj' = @(
+        'src/backend/EePulse.Api/EePulse.Api.csproj'
+    )
 }
 
 $actualProjects = Get-ChildItem -Path (Join-Path $repositoryRoot 'src'), (Join-Path $repositoryRoot 'tests') -Recurse -Filter '*.csproj' |

@@ -52,8 +52,8 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
                 throw new InvalidOperationException("Audit events are append-only and cannot be modified or deleted.");
             }
         }
-        RejectChanges(ChangeTracker.Entries<AgentConfigurationSnapshot>(),"Configuration snapshots are immutable.");
-        RejectChanges(ChangeTracker.Entries<AgentConfigurationAcknowledgement>(),"Configuration acknowledgements are append-only.");
+        RejectChanges(ChangeTracker.Entries<AgentConfigurationSnapshot>(), "Configuration snapshots are immutable.");
+        RejectChanges(ChangeTracker.Entries<AgentConfigurationAcknowledgement>(), "Configuration acknowledgements are append-only.");
 
         IncrementVersion(ChangeTracker.Entries<Site>());
         IncrementVersion(ChangeTracker.Entries<Device>());
@@ -64,8 +64,8 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         IncrementVersion(ChangeTracker.Entries<AgentEnrollmentToken>());
     }
 
-    private static void RejectChanges<TEntity>(IEnumerable<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<TEntity>> entries,string message) where TEntity:class
-    {if(entries.Any(entry=>entry.State is EntityState.Modified or EntityState.Deleted))throw new InvalidOperationException(message);}
+    private static void RejectChanges<TEntity>(IEnumerable<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<TEntity>> entries, string message) where TEntity : class
+    { if (entries.Any(entry => entry.State is EntityState.Modified or EntityState.Deleted)) throw new InvalidOperationException(message); }
 
     private static void IncrementVersion<TEntity>(IEnumerable<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<TEntity>> entries)
         where TEntity : class

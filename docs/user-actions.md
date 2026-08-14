@@ -1,6 +1,6 @@
 # EE Pulse user and IT actions
 
-Last updated: 2026-08-10
+Last updated: 2026-08-14
 
 Never place real credentials, keys, tokens, SMTP passwords, or certificates in this file, chat, source control, or sample configuration. Use the organization's approved secret-delivery mechanism.
 
@@ -23,9 +23,9 @@ Never place real credentials, keys, tokens, SMTP passwords, or certificates in t
 - The duplicate-device portion of UA-01 is confirmed and verified. Remaining Site/VLAN, scale, role-owner, and operational-threshold details approach later acceptance but do not block this WP-02 rule.
 - UA-02 is partially satisfied because `origin` is configured. Branch/PR policy, CI runner/artifact destination, and reviewers still need confirmation before external collaboration or release evidence.
 - UA-03 is required before any real ICMP environment test. No network scanning or unapproved probing is authorized.
-- The WP-03 proposal uses a non-empty local AllowedNetworks ceiling that the Server may narrow but cannot remotely expand. Approving the contract does not supply or authorize real CIDRs; UA-03 remains required before real probing.
+- WP-03 implementation is locally verified: the Server may narrow but cannot remotely expand the Agent's non-empty AllowedNetworks ceiling. UA-03 remains required before real enrollment/probing; approve only explicit CIDRs and controlled targets.
 - UA-06 is not needed for this local WP-02 checkpoint, but production Web access intentionally remains denied until OIDC is configured and integrated.
 
-WP-02 is committed. The WP-03 contract and secure defaults are approved and frozen. Create the documentation checkpoint commit and notify Lead when complete; no implementation agent starts before that confirmation.
+WP-03 is implementation-verified locally. Before release or real Agent use, complete UA-03/04/05/06/07 as applicable: approved CIDRs and ICMP/firewall policy, disposable Windows service/DPAPI/ACL/recovery evidence, central runtime/backups, OIDC, and TLS/proxy/DNS. Obtain checkpoint commit/PR approval before external repository writes.
 
 Approval remains required immediately before external repository writes, deployment, firewall/DNS/AD changes, real notification delivery, destructive operations, privileged machine changes, or real-credential handling.

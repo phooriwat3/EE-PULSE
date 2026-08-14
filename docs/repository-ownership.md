@@ -21,6 +21,7 @@ The initial project set, project-reference graph, shared contract version, and A
 | `tests/EePulse.UnitTests/**` | Backend | QA may add cross-cutting fixtures through Backend review. |
 | `tests/EePulse.IntegrationTests/**` | Backend | QA reviews integration coverage; Lead reviews shared-contract assertions. |
 | `tests/EePulse.Agent.Tests/**` | Probe Agent | QA reviews queue, restart, and network-safety coverage. |
+| `tests/EePulse.SecurityTests/**` | QA/Security | Backend reviews API and security-test behavior; Lead reviews shared-contract and mandatory-gate changes. |
 | `tests/e2e/**` | QA | Frontend reviews selectors, fixtures, and UI behavior. |
 | `scripts/verify-*.ps1`, future `tests/quality/**` | QA | Lead reviews changes to mandatory gates. |
 | `docker-compose.yml`, `deploy/compose/**`, `.github/**`, root build/version files | Lead/Integration | Backend, Frontend, Probe Agent, and QA review changes affecting their runtime or gate. |

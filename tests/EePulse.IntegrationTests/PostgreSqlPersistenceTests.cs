@@ -19,17 +19,17 @@ public sealed class PostgreSqlPersistenceTests
     [Fact]
     public async Task Wp02SchemaUpgradesToWp03WithoutLosingInventoryData()
     {
-        var ct=TestContext.Current.CancellationToken;await using var postgres=await PostgresTestDatabase.StartAsync(ct);
-        var options=new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
-        await using var db=new EePulseDbContext(options);var migrator=db.GetService<IMigrator>();
-        await migrator.MigrateAsync("20260810040920_InitialInventory",ct);
-        var now=new DateTimeOffset(2026,8,11,0,0,0,TimeSpan.Zero);var site=new Site(Guid.NewGuid(),"KEEP","Preserved","UTC",now);db.Sites.Add(site);await db.SaveChangesAsync(ct);
-        var wp02Applied=await db.Database.GetAppliedMigrationsAsync(ct);
-        Assert.DoesNotContain(wp02Applied,x=>x.EndsWith("_WP03AgentEnrollmentConfiguration",StringComparison.Ordinal));
-        await migrator.MigrateAsync(null,ct);
-        db.ChangeTracker.Clear();Assert.Equal("Preserved",(await db.Sites.SingleAsync(x=>x.Id==site.Id,ct)).Name);
-        Assert.Contains(await db.Database.GetAppliedMigrationsAsync(ct),x=>x.EndsWith("_WP03AgentEnrollmentConfiguration",StringComparison.Ordinal));
-        Assert.Equal(0,await db.Agents.CountAsync(ct));
+        var ct = TestContext.Current.CancellationToken; await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using var db = new EePulseDbContext(options); var migrator = db.GetService<IMigrator>();
+        await migrator.MigrateAsync("20260810040920_InitialInventory", ct);
+        var now = new DateTimeOffset(2026, 8, 11, 0, 0, 0, TimeSpan.Zero); var site = new Site(Guid.NewGuid(), "KEEP", "Preserved", "UTC", now); db.Sites.Add(site); await db.SaveChangesAsync(ct);
+        var wp02Applied = await db.Database.GetAppliedMigrationsAsync(ct);
+        Assert.DoesNotContain(wp02Applied, x => x.EndsWith("_WP03AgentEnrollmentConfiguration", StringComparison.Ordinal));
+        await migrator.MigrateAsync(null, ct);
+        db.ChangeTracker.Clear(); Assert.Equal("Preserved", (await db.Sites.SingleAsync(x => x.Id == site.Id, ct)).Name);
+        Assert.Contains(await db.Database.GetAppliedMigrationsAsync(ct), x => x.EndsWith("_WP03AgentEnrollmentConfiguration", StringComparison.Ordinal));
+        Assert.Equal(0, await db.Agents.CountAsync(ct));
     }
 
     [Fact]
@@ -81,10 +81,10 @@ public sealed class PostgreSqlPersistenceTests
             Assert.Contains("ix_agents_status_heartbeat", indexes);
             Assert.Contains("ix_agents_group_status", indexes);
             Assert.False(migrationContext.Database.HasPendingModelChanges());
-            var migrator=migrationContext.GetService<IMigrator>();
-            var rollbackSql=migrator.GenerateScript("20260811060912_WP03AgentEnrollmentConfiguration","20260810040920_InitialInventory");
-            Assert.Contains("DROP TABLE",rollbackSql,StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("agent_credentials",rollbackSql,StringComparison.OrdinalIgnoreCase);
+            var migrator = migrationContext.GetService<IMigrator>();
+            var rollbackSql = migrator.GenerateScript("20260811060912_WP03AgentEnrollmentConfiguration", "20260810040920_InitialInventory");
+            Assert.Contains("DROP TABLE", rollbackSql, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("agent_credentials", rollbackSql, StringComparison.OrdinalIgnoreCase);
         }
 
         var now = new DateTimeOffset(2026, 8, 10, 8, 0, 0, TimeSpan.Zero);
@@ -109,20 +109,20 @@ public sealed class PostgreSqlPersistenceTests
             Assert.Equal(1, site.RowVersion);
         }
 
-        await using(var digestContext=new EePulseDbContext(options))
+        await using (var digestContext = new EePulseDbContext(options))
         {
-            var tokenId=Guid.NewGuid();var invalidDigest=new byte[31];
-            var violation=await Assert.ThrowsAsync<PostgresException>(()=>digestContext.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO agent_enrollment_tokens (id,agent_group_id,digest,label,expires_at,created_by,created_at,row_version) VALUES ({tokenId},{group.Id},{invalidDigest},{"invalid-digest"},{now.AddMinutes(15)},{Guid.NewGuid()},{now},{1L})",cancellationToken));Assert.Equal(PostgresErrorCodes.CheckViolation,violation.SqlState);
+            var tokenId = Guid.NewGuid(); var invalidDigest = new byte[31];
+            var violation = await Assert.ThrowsAsync<PostgresException>(() => digestContext.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO agent_enrollment_tokens (id,agent_group_id,digest,label,expires_at,created_by,created_at,row_version) VALUES ({tokenId},{group.Id},{invalidDigest},{"invalid-digest"},{now.AddMinutes(15)},{Guid.NewGuid()},{now},{1L})", cancellationToken)); Assert.Equal(PostgresErrorCodes.CheckViolation, violation.SqlState);
         }
 
-        var indexAgent=new Agent(Guid.NewGuid(),group.Id,Guid.NewGuid(),"index-agent","1.2.3",20,now);
-        await using(var credentialSeed=new EePulseDbContext(options)){credentialSeed.Add(indexAgent);credentialSeed.Add(new AgentCredential(Guid.NewGuid(),indexAgent.Id,new byte[32],AgentCredentialState.Active,now.AddDays(90),now.AddDays(75),now));await credentialSeed.SaveChangesAsync(cancellationToken);}
-        await using(var duplicateActive=new EePulseDbContext(options)){duplicateActive.Add(new AgentCredential(Guid.NewGuid(),indexAgent.Id,new byte[32],AgentCredentialState.Active,now.AddDays(90),now.AddDays(75),now));await Assert.ThrowsAsync<DbUpdateException>(()=>duplicateActive.SaveChangesAsync(cancellationToken));}
-        await using(var pendingSeed=new EePulseDbContext(options)){pendingSeed.Add(new AgentCredential(Guid.NewGuid(),indexAgent.Id,new byte[32],AgentCredentialState.Pending,now.AddDays(90),now.AddDays(75),now));await pendingSeed.SaveChangesAsync(cancellationToken);}
-        await using(var duplicatePending=new EePulseDbContext(options)){duplicatePending.Add(new AgentCredential(Guid.NewGuid(),indexAgent.Id,new byte[32],AgentCredentialState.Pending,now.AddDays(90),now.AddDays(75),now));await Assert.ThrowsAsync<DbUpdateException>(()=>duplicatePending.SaveChangesAsync(cancellationToken));}
-        await using(var credentialDigest=new EePulseDbContext(options)){var violation=await Assert.ThrowsAsync<PostgresException>(()=>credentialDigest.Database.ExecuteSqlInterpolatedAsync($"UPDATE agent_credentials SET digest = {new byte[31]} WHERE agent_id = {indexAgent.Id}",cancellationToken));Assert.Equal(PostgresErrorCodes.CheckViolation,violation.SqlState);}
-        await using(var snapshotSeed=new EePulseDbContext(options)){snapshotSeed.Add(new AgentConfigurationSnapshot(group.Id,1,"{}",new byte[32],now,null));await snapshotSeed.SaveChangesAsync(cancellationToken);}
-        await using(var snapshotDigest=new EePulseDbContext(options)){var violation=await Assert.ThrowsAsync<PostgresException>(()=>snapshotDigest.Database.ExecuteSqlInterpolatedAsync($"UPDATE agent_configuration_snapshots SET payload_digest = {new byte[31]} WHERE agent_group_id = {group.Id}",cancellationToken));Assert.Equal(PostgresErrorCodes.CheckViolation,violation.SqlState);}
+        var indexAgent = new Agent(Guid.NewGuid(), group.Id, Guid.NewGuid(), "index-agent", "1.2.3", 20, now);
+        await using (var credentialSeed = new EePulseDbContext(options)) { credentialSeed.Add(indexAgent); credentialSeed.Add(new AgentCredential(Guid.NewGuid(), indexAgent.Id, new byte[32], AgentCredentialState.Active, now.AddDays(90), now.AddDays(75), now)); await credentialSeed.SaveChangesAsync(cancellationToken); }
+        await using (var duplicateActive = new EePulseDbContext(options)) { duplicateActive.Add(new AgentCredential(Guid.NewGuid(), indexAgent.Id, new byte[32], AgentCredentialState.Active, now.AddDays(90), now.AddDays(75), now)); await Assert.ThrowsAsync<DbUpdateException>(() => duplicateActive.SaveChangesAsync(cancellationToken)); }
+        await using (var pendingSeed = new EePulseDbContext(options)) { pendingSeed.Add(new AgentCredential(Guid.NewGuid(), indexAgent.Id, new byte[32], AgentCredentialState.Pending, now.AddDays(90), now.AddDays(75), now)); await pendingSeed.SaveChangesAsync(cancellationToken); }
+        await using (var duplicatePending = new EePulseDbContext(options)) { duplicatePending.Add(new AgentCredential(Guid.NewGuid(), indexAgent.Id, new byte[32], AgentCredentialState.Pending, now.AddDays(90), now.AddDays(75), now)); await Assert.ThrowsAsync<DbUpdateException>(() => duplicatePending.SaveChangesAsync(cancellationToken)); }
+        await using (var credentialDigest = new EePulseDbContext(options)) { var violation = await Assert.ThrowsAsync<PostgresException>(() => credentialDigest.Database.ExecuteSqlInterpolatedAsync($"UPDATE agent_credentials SET digest = {new byte[31]} WHERE agent_id = {indexAgent.Id}", cancellationToken)); Assert.Equal(PostgresErrorCodes.CheckViolation, violation.SqlState); }
+        await using (var snapshotSeed = new EePulseDbContext(options)) { snapshotSeed.Add(new AgentConfigurationSnapshot(group.Id, 1, "{}", new byte[32], now, null)); await snapshotSeed.SaveChangesAsync(cancellationToken); }
+        await using (var snapshotDigest = new EePulseDbContext(options)) { var violation = await Assert.ThrowsAsync<PostgresException>(() => snapshotDigest.Database.ExecuteSqlInterpolatedAsync($"UPDATE agent_configuration_snapshots SET payload_digest = {new byte[31]} WHERE agent_group_id = {group.Id}", cancellationToken)); Assert.Equal(PostgresErrorCodes.CheckViolation, violation.SqlState); }
 
         await using (var readContext = new EePulseDbContext(options))
         {

@@ -82,10 +82,10 @@ public sealed class Agent
         LastConfigurationAcknowledgedAt = Guard.Utc(receivedAt, nameof(receivedAt));
     public void Revoke(string reason, DateTimeOffset now)
     {
-        if (!RevokedAt.HasValue) { RevokedAt = Guard.Utc(now, nameof(now)); RevocationReason = Guard.Required(reason, nameof(reason), 50); Status=AgentStatus.Revoked; }
+        if (!RevokedAt.HasValue) { RevokedAt = Guard.Utc(now, nameof(now)); RevocationReason = Guard.Required(reason, nameof(reason), 50); Status = AgentStatus.Revoked; }
     }
     public bool MarkOffline(DateTimeOffset now)
-    { if(Status!=AgentStatus.Online||!LastHeartbeatAt.HasValue)return false; var expiry=TimeSpan.FromSeconds(Math.Max(60,3*HeartbeatIntervalSeconds)); if(now-LastHeartbeatAt.Value<expiry)return false; Status=AgentStatus.Offline; return true; }
+    { if (Status != AgentStatus.Online || !LastHeartbeatAt.HasValue) return false; var expiry = TimeSpan.FromSeconds(Math.Max(60, 3 * HeartbeatIntervalSeconds)); if (now - LastHeartbeatAt.Value < expiry) return false; Status = AgentStatus.Offline; return true; }
     private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
 }
 
@@ -154,7 +154,7 @@ public sealed class AgentCredential
     private AgentCredential() { }
     public AgentCredential(Guid id, Guid agentId, byte[] digest, AgentCredentialState state, DateTimeOffset expiresAt,
         DateTimeOffset rotateAfter, DateTimeOffset now)
-    { Id=id; AgentId=agentId; Digest=digest.Length == 32 ? digest.ToArray() : throw new DomainValidationException(nameof(digest), "Digest must contain 32 bytes."); State=state; ExpiresAt=expiresAt; RotateAfter=rotateAfter; CreatedAt=now; PendingExpiresAt=state==AgentCredentialState.Pending?now.AddHours(24):null; }
+    { Id = id; AgentId = agentId; Digest = digest.Length == 32 ? digest.ToArray() : throw new DomainValidationException(nameof(digest), "Digest must contain 32 bytes."); State = state; ExpiresAt = expiresAt; RotateAfter = rotateAfter; CreatedAt = now; PendingExpiresAt = state == AgentCredentialState.Pending ? now.AddHours(24) : null; }
     public Guid Id { get; private set; }
     public Guid AgentId { get; private set; }
     public byte[] Digest { get; private set; } = [];
@@ -165,15 +165,15 @@ public sealed class AgentCredential
     public DateTimeOffset? PendingExpiresAt { get; private set; }
     public DateTimeOffset? FirstUsedAt { get; private set; }
     public DateTimeOffset? RevokedAt { get; private set; }
-    public void Promote(DateTimeOffset now) { State=AgentCredentialState.Active; FirstUsedAt ??= now; PendingExpiresAt=null; }
-    public void Revoke(DateTimeOffset now) { State=AgentCredentialState.Revoked; RevokedAt ??= now; }
+    public void Promote(DateTimeOffset now) { State = AgentCredentialState.Active; FirstUsedAt ??= now; PendingExpiresAt = null; }
+    public void Revoke(DateTimeOffset now) { State = AgentCredentialState.Revoked; RevokedAt ??= now; }
 }
 
 public sealed class AgentConfigurationSnapshot
 {
     private AgentConfigurationSnapshot() { }
     public AgentConfigurationSnapshot(Guid groupId, long version, string payload, byte[] digest, DateTimeOffset generatedAt, long? rollbackOfVersion)
-    { AgentGroupId=groupId; Version=version; Payload=Guard.Required(payload,nameof(payload),2_097_152); PayloadDigest=digest.Length==32?digest.ToArray():throw new DomainValidationException(nameof(digest),"Digest must contain 32 bytes."); GeneratedAt=generatedAt; RollbackOfVersion=rollbackOfVersion; }
+    { AgentGroupId = groupId; Version = version; Payload = Guard.Required(payload, nameof(payload), 2_097_152); PayloadDigest = digest.Length == 32 ? digest.ToArray() : throw new DomainValidationException(nameof(digest), "Digest must contain 32 bytes."); GeneratedAt = generatedAt; RollbackOfVersion = rollbackOfVersion; }
     public Guid AgentGroupId { get; private set; }
     public long Version { get; private set; }
     public string Payload { get; private set; } = string.Empty;
@@ -187,8 +187,8 @@ public sealed class AgentConfigurationAcknowledgement
     private AgentConfigurationAcknowledgement() { }
     public AgentConfigurationAcknowledgement(Guid id, Guid agentId, long version, AgentAcknowledgementStatus status,
         DateTimeOffset? appliedAt, DateTimeOffset sentAt, DateTimeOffset receivedAt, string? errorCode,
-        long centralEffectiveConfigurationVersion,long desiredConfigurationVersion)
-    { Id=id; AgentId=agentId; ConfigurationVersion=version; Status=status; AppliedAt=appliedAt; SentAt=sentAt; ReceivedAt=receivedAt; ErrorCode=errorCode; CentralEffectiveConfigurationVersion=centralEffectiveConfigurationVersion; DesiredConfigurationVersion=desiredConfigurationVersion; }
+        long centralEffectiveConfigurationVersion, long desiredConfigurationVersion)
+    { Id = id; AgentId = agentId; ConfigurationVersion = version; Status = status; AppliedAt = appliedAt; SentAt = sentAt; ReceivedAt = receivedAt; ErrorCode = errorCode; CentralEffectiveConfigurationVersion = centralEffectiveConfigurationVersion; DesiredConfigurationVersion = desiredConfigurationVersion; }
     public Guid Id { get; private set; }
     public Guid AgentId { get; private set; }
     public long ConfigurationVersion { get; private set; }
@@ -205,7 +205,7 @@ public sealed class AgentHeartbeatReceipt
 {
     private AgentHeartbeatReceipt() { }
     public AgentHeartbeatReceipt(Guid agentId, Guid heartbeatId, DateTimeOffset receivedAt, string responseJson)
-    { AgentId=agentId; HeartbeatId=heartbeatId; ReceivedAt=receivedAt; ResponseJson=Guard.Required(responseJson,nameof(responseJson),4096); }
+    { AgentId = agentId; HeartbeatId = heartbeatId; ReceivedAt = receivedAt; ResponseJson = Guard.Required(responseJson, nameof(responseJson), 4096); }
     public Guid AgentId { get; private set; }
     public Guid HeartbeatId { get; private set; }
     public DateTimeOffset ReceivedAt { get; private set; }

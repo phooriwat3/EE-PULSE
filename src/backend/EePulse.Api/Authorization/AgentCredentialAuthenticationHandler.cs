@@ -24,9 +24,9 @@ public sealed class AgentCredentialAuthenticationHandler(
         if (!AgentSecret.TryParseAndDigest("EE-Pulse-Agent-Credential-v1", header[7..].Trim(), out var id, out var digest)) return AuthenticateResult.Fail("Invalid Agent credential.");
         try
         {
-            var credential = await db.AgentCredentials.SingleOrDefaultAsync(x => x.Id == id, Context.RequestAborted);
+            var credential = await db.AgentCredentials.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, Context.RequestAborted);
             if (credential is null || !AgentSecret.EqualsDigest(digest, credential.Digest)) return AuthenticateResult.Fail("Invalid Agent credential.");
-            var agent = await db.Agents.SingleAsync(x => x.Id == credential.AgentId, Context.RequestAborted);
+            var agent = await db.Agents.AsNoTracking().SingleAsync(x => x.Id == credential.AgentId, Context.RequestAborted);
             if (agent.RevokedAt.HasValue) return Success(agent.Id, true);
             if (credential.State == AgentCredentialState.Revoked) return AuthenticateResult.Fail("Revoked Agent credential.");
             if (credential.ExpiresAt <= clock.UtcNow) return AuthenticateResult.Fail("Expired Agent credential.");
@@ -34,14 +34,14 @@ public sealed class AgentCredentialAuthenticationHandler(
                 return AuthenticateResult.Fail("Expired pending Agent credential.");
             if (credential.State == AgentCredentialState.Pending)
             {
-                var agentId=agent.Id;
+                var agentId = agent.Id;
                 await using var transaction = await db.Database.BeginTransactionAsync(Context.RequestAborted);
                 db.ChangeTracker.Clear();
-                var lockedAgent=await db.Agents.FromSqlInterpolated($"SELECT * FROM agents WHERE id = {agentId} FOR UPDATE").SingleAsync(Context.RequestAborted);
+                var lockedAgent = await db.Agents.FromSqlInterpolated($"SELECT * FROM agents WHERE id = {agentId} FOR UPDATE").SingleAsync(Context.RequestAborted);
                 var locked = await db.AgentCredentials.FromSqlInterpolated($"SELECT * FROM agent_credentials WHERE agent_id = {agentId} FOR UPDATE").ToListAsync(Context.RequestAborted);
                 var replacement = locked.Single(x => x.Id == credential.Id);
-                if(replacement.State==AgentCredentialState.Pending&&(replacement.PendingExpiresAt<=clock.UtcNow||replacement.ExpiresAt<=clock.UtcNow))
-                {await transaction.RollbackAsync(Context.RequestAborted);return AuthenticateResult.Fail("Expired pending Agent credential.");}
+                if (replacement.State == AgentCredentialState.Pending && (replacement.PendingExpiresAt <= clock.UtcNow || replacement.ExpiresAt <= clock.UtcNow))
+                { await transaction.RollbackAsync(Context.RequestAborted); return AuthenticateResult.Fail("Expired pending Agent credential."); }
                 if (replacement.State == AgentCredentialState.Pending)
                 {
                     var active = locked.SingleOrDefault(x => x.State == AgentCredentialState.Active);
@@ -52,6 +52,7 @@ public sealed class AgentCredentialAuthenticationHandler(
                     await db.SaveChangesAsync(Context.RequestAborted);
                 }
                 await transaction.CommitAsync(Context.RequestAborted);
+                db.ChangeTracker.Clear();
             }
             return Success(agent.Id, false);
         }

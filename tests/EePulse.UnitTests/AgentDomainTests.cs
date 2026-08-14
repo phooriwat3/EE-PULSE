@@ -58,23 +58,23 @@ public sealed class AgentDomainTests
     [Fact]
     public void PendingCredentialExpiresAfterTwentyFourHoursWhileWireCredentialLifetimeIsNinetyDays()
     {
-        var now=new DateTimeOffset(2026,8,11,0,0,0,TimeSpan.Zero);
-        var credential=new AgentCredential(Guid.NewGuid(),Guid.NewGuid(),new byte[32],AgentCredentialState.Pending,now.AddDays(90),now.AddDays(75),now);
-        Assert.Equal(now.AddHours(24),credential.PendingExpiresAt);
-        Assert.Equal(now.AddDays(90),credential.ExpiresAt);
+        var now = new DateTimeOffset(2026, 8, 11, 0, 0, 0, TimeSpan.Zero);
+        var credential = new AgentCredential(Guid.NewGuid(), Guid.NewGuid(), new byte[32], AgentCredentialState.Pending, now.AddDays(90), now.AddDays(75), now);
+        Assert.Equal(now.AddHours(24), credential.PendingExpiresAt);
+        Assert.Equal(now.AddDays(90), credential.ExpiresAt);
     }
 
     [Fact]
     public void SnapshotsAndAcknowledgementsAreApplicationImmutable()
     {
-        var options=new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql("Host=127.0.0.1;Port=1;Database=none;Username=none").Options;
-        using var db=new EePulseDbContext(options);
-        var snapshot=new AgentConfigurationSnapshot(Guid.NewGuid(),1,"{}",System.Security.Cryptography.SHA256.HashData("{}"u8.ToArray()),DateTimeOffset.UtcNow,null);
-        db.Attach(snapshot);db.Entry(snapshot).State=EntityState.Modified;
-        Assert.Throws<InvalidOperationException>(()=>db.SaveChanges());
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql("Host=127.0.0.1;Port=1;Database=none;Username=none").Options;
+        using var db = new EePulseDbContext(options);
+        var snapshot = new AgentConfigurationSnapshot(Guid.NewGuid(), 1, "{}", System.Security.Cryptography.SHA256.HashData("{}"u8.ToArray()), DateTimeOffset.UtcNow, null);
+        db.Attach(snapshot); db.Entry(snapshot).State = EntityState.Modified;
+        Assert.Throws<InvalidOperationException>(() => db.SaveChanges());
         db.ChangeTracker.Clear();
-        var acknowledgement=new AgentConfigurationAcknowledgement(Guid.NewGuid(),Guid.NewGuid(),1,AgentAcknowledgementStatus.Rejected,null,DateTimeOffset.UtcNow,DateTimeOffset.UtcNow,"configuration-invalid",0,1);
-        db.Attach(acknowledgement);db.Entry(acknowledgement).State=EntityState.Deleted;
-        Assert.Throws<InvalidOperationException>(()=>db.SaveChanges());
+        var acknowledgement = new AgentConfigurationAcknowledgement(Guid.NewGuid(), Guid.NewGuid(), 1, AgentAcknowledgementStatus.Rejected, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "configuration-invalid", 0, 1);
+        db.Attach(acknowledgement); db.Entry(acknowledgement).State = EntityState.Deleted;
+        Assert.Throws<InvalidOperationException>(() => db.SaveChanges());
     }
 }
