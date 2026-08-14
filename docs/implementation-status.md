@@ -1,8 +1,8 @@
 # EE Pulse implementation status
 
 Last updated: 2026-08-14 (Asia/Bangkok)
-Owner: Lead/Integration Agent  
-Current checkpoint: WP-03 implementation integrated and verified locally; awaiting user checkpoint commit decision
+Owner: Lead/Integration Agent
+Current checkpoint: WP-04 probe-runtime design frozen; implementation awaits the design-freeze checkpoint commit
 
 ## Outcome
 
@@ -37,7 +37,7 @@ The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13
 | WP-01 | Verified | Foundation/project graph/contracts/health/CI/Compose/ADRs pass. |
 | WP-02 | Approved | Backend/PostgreSQL plus inventory frontend pass together: metadata, migration, APIs, validation, authorization, audit, CSV, OpenAPI, enabled-only Device uniqueness, accessible UI, component tests, and critical-flow browser tests. |
 | WP-03 | Implemented and integration-verified | Additive v1 Agent endpoints/DTOs, separate Agent credentials, one additive PostgreSQL migration, enrollment/revocation/rotation, heartbeat/offline processing, immutable configuration snapshots/acknowledgements/rollback, dual AllowedNetworks enforcement, DPAPI/ACL-backed Agent storage, and generated OpenAPI are verified. |
-| WP-04 | Partial foundation only | Contract-neutral scheduling/concurrency/transport seams exist; real ICMP/config-dependent operational rollout remains deferred. |
+| WP-04 | Design frozen; implementation not started | ADR-010 and the local Agent runtime contract freeze IPv4-only scope, bounded deterministic scheduling, local immutable result semantics, error categories, observability, and fake-only acceptance. No WP-05+ delivery behavior is included. |
 | WP-05 through WP-11 | Not started | Continue in dependency order after the next approved checkpoint. |
 
 ## Stable contract decision
@@ -98,4 +98,4 @@ The first sandboxed Vitest attempt could not spawn Vite's helper (`EPERM`); the 
 
 ## Next checkpoint
 
-Obtain the checkpoint commit/PR approval, then perform the Windows DPAPI/service-account and approved-network operational evidence before WP-10/11 release readiness. Do not treat the local Compose credentials or documentation CIDRs as production authorization.
+Obtain the WP-04 design-freeze checkpoint commit/PR approval before Agent implementation. UA-03 remains mandatory before real ICMP; UA-04 remains mandatory before Windows Service operational evidence. Do not treat documentation CIDRs or local Compose credentials as production authorization.
