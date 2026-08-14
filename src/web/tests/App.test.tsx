@@ -105,11 +105,11 @@ describe('WP-02 inventory App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use synthetic role' }));
     await screen.findByText('No Devices match these filters');
 
-    fireEvent.mouseDown(screen.getByLabelText('Criticality'));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Criticality' }));
     fireEvent.click(screen.getByRole('option', { name: 'High' }));
 
     await waitFor(() => expect(urls.some((url) => url.includes('criticality=2'))).toBe(true));
-    expect(screen.getByLabelText('Criticality')).toHaveTextContent('High');
+    expect(screen.getByRole('combobox', { name: 'Criticality' })).toHaveTextContent('High');
   });
 
   it('renders an explicit forbidden CSV state for a Viewer', async () => {
