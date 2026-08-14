@@ -40,15 +40,21 @@ public sealed class AgentCredentialAuthenticationHandler(
                 var lockedAgent = await db.Agents.FromSqlInterpolated($"SELECT * FROM agents WHERE id = {agentId} FOR UPDATE").SingleAsync(Context.RequestAborted);
                 var locked = await db.AgentCredentials.FromSqlInterpolated($"SELECT * FROM agent_credentials WHERE agent_id = {agentId} FOR UPDATE").ToListAsync(Context.RequestAborted);
                 var replacement = locked.Single(x => x.Id == credential.Id);
-                if (replacement.State == AgentCredentialState.Pending && (replacement.PendingExpiresAt <= clock.UtcNow || replacement.ExpiresAt <= clock.UtcNow))
+                var now = clock.UtcNow;
+                if (replacement.State == AgentCredentialState.Pending && (replacement.PendingExpiresAt <= now || replacement.ExpiresAt <= now))
                 { await transaction.RollbackAsync(Context.RequestAborted); return AuthenticateResult.Fail("Expired pending Agent credential."); }
                 if (replacement.State == AgentCredentialState.Pending)
                 {
                     var active = locked.SingleOrDefault(x => x.State == AgentCredentialState.Active);
-                    active?.Revoke(clock.UtcNow); replacement.Promote(clock.UtcNow); lockedAgent.SetCredentialExpiry(replacement.ExpiresAt);
+                    if (active is not null)
+                    {
+                        active.Revoke(now);
+                        await db.SaveChangesAsync(Context.RequestAborted);
+                    }
+                    replacement.Promote(now); lockedAgent.SetCredentialExpiry(replacement.ExpiresAt);
                     db.AuditEvents.Add(new AuditEvent(Guid.NewGuid(), null, "agent.credential.promoted", "Agent", lockedAgent.Id, null,
                         System.Text.Json.JsonSerializer.Serialize(new { agentId = lockedAgent.Id, credentialId = replacement.Id, replacedCredentialId = active?.Id }),
-                        Context.TraceIdentifier, clock.UtcNow, Context.Connection.RemoteIpAddress?.ToString()));
+                        Context.TraceIdentifier, now, Context.Connection.RemoteIpAddress?.ToString()));
                     await db.SaveChangesAsync(Context.RequestAborted);
                 }
                 await transaction.CommitAsync(Context.RequestAborted);
