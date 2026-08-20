@@ -1,8 +1,8 @@
 # EE Pulse implementation status
 
-Last updated: 2026-08-14 (Asia/Bangkok)
+Last updated: 2026-08-20 (Asia/Bangkok)
 Owner: Lead/Integration Agent
-Current checkpoint: WP-04 probe-runtime design frozen; implementation awaits the design-freeze checkpoint commit
+Current checkpoint: WP-04 deterministic probe-runtime foundation implemented and integration-verified locally
 
 ## Outcome
 
@@ -14,7 +14,7 @@ WP-00 and WP-01 remain verified. The user approved WP-02 after the backend basel
 - Lead reviewed the changes, returned in-scope defects to their owners, rebuilt the final stack, and generated/reviewed `docs/api/openapi-v1.json`.
 - Agent C delivered the Site, Device, Probe-configuration, and CSV inventory UI plus Vitest and Playwright coverage. Lead returned production-authentication, OpenAPI-filter, and conflict-recovery defects; the corrected implementation passes the full integration gate.
 
-The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13727d8e84e5f56b61e854cbbabc5adab`. WP-03 now implements the approved additive enrollment, identity, heartbeat, configuration, revocation, credential-rotation, and AllowedNetworks contract plus ADR-007 through ADR-009. Agent C remained deferred.
+The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13727d8e84e5f56b61e854cbbabc5adab`. WP-03 now implements the approved additive enrollment, identity, heartbeat, configuration, revocation, credential-rotation, and AllowedNetworks contract plus ADR-007 through ADR-009. Agent C remained deferred. WP-04 now provides the deterministic, fake-transport-tested probe-runtime foundation only; final integration review passed.
 
 ## Current repository
 
@@ -24,9 +24,9 @@ The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13
 | Git | Local `main` and `origin/main` were synchronized at `8ca821d` before this design gate; only Lead-owned WP-03 proposal/control documents are now modified or untracked. |
 | Backend | PostgreSQL-backed Site, Device, AgentGroup, Probe, MaintenanceWindow, AuditEvent, CSV import, authorization policies, migration, seed gate, and dependency-aware readiness. |
 | Contracts/OpenAPI | Compatible v1 inventory DTOs; checked-in OpenAPI 3.1.1 artifact with 14 paths, 19 protected operations, Bearer/OIDC-ready metadata, and explicit Development-header note. |
-| Probe Agent | Deterministic jitter, monotonic scheduling, per-Probe non-overlap, bounded concurrency, injectable transport seam, and graceful host behavior; no network probe implementation. |
+| Probe Agent | WP-04 deterministic probe-runtime foundation: stable jitter, monotonic scheduling, per-Probe non-overlap, bounded admission, immutable local results, fixed outcome categories, and fake transport/time tests. No real ICMP evidence or persistence/delivery behavior is claimed. |
 | Web | Responsive inventory console for Sites, server-filtered/paged Devices, create/edit/soft-disable, Probe fields, CSV preview/commit, row errors, stale/partial/retry states, and actionable concurrency conflicts. Development synthetic identity is absent from the production bundle, which fails closed pending OIDC. |
-| QA | 43 .NET tests, 7 frontend component tests, 2 Playwright inventory tests, PostgreSQL integration coverage, quality/security script, and WP-02 evidence matrix. |
+| QA | WP-04 final integration review passed: Agent tests 112/112, formatting, Agent host and Agent Tests Release builds (0 warnings/errors), quality/security gate, and `git diff --check`. Earlier WP-02/03 evidence remains recorded below. |
 | Compose | PostgreSQL 18.4, VictoriaMetrics 1.148.0, and API healthy; only API publishes a host port. |
 
 ## Work-package status
@@ -37,7 +37,7 @@ The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13
 | WP-01 | Verified | Foundation/project graph/contracts/health/CI/Compose/ADRs pass. |
 | WP-02 | Approved | Backend/PostgreSQL plus inventory frontend pass together: metadata, migration, APIs, validation, authorization, audit, CSV, OpenAPI, enabled-only Device uniqueness, accessible UI, component tests, and critical-flow browser tests. |
 | WP-03 | Implemented and integration-verified | Additive v1 Agent endpoints/DTOs, separate Agent credentials, one additive PostgreSQL migration, enrollment/revocation/rotation, heartbeat/offline processing, immutable configuration snapshots/acknowledgements/rollback, dual AllowedNetworks enforcement, DPAPI/ACL-backed Agent storage, and generated OpenAPI are verified. |
-| WP-04 | Design frozen; implementation not started | ADR-010 and the local Agent runtime contract freeze IPv4-only scope, bounded deterministic scheduling, local immutable result semantics, error categories, observability, and fake-only acceptance. No WP-05+ delivery behavior is included. |
+| WP-04 | Implemented and integration-verified locally | Deterministic probe-runtime foundation verified with fake time/transport: IPv4-literal scope validation, stable jitter/monotonic cadence, bounded admission/non-overlap, coalesced missed slots, sequential attempts, immutable local results, fixed outcome categories, cancellation, and cardinality-safe observability. No real ICMP, persistence, delivery, ingestion, UI, deployment, or Windows Service evidence is included. |
 | WP-05 through WP-11 | Not started | Continue in dependency order after the next approved checkpoint. |
 
 ## Stable contract decision
@@ -81,6 +81,19 @@ Breaking changes require a new API/schema version. Compatible additions remain L
 
 The first sandboxed Vitest attempt could not spawn Vite's helper (`EPERM`); the authorized rerun is the passing 7/7 evidence above. Invalid earlier concurrent/nested-Docker runs remain excluded; the current isolated .NET run is 43/43.
 
+### WP-04 final integration evidence (2026-08-20)
+
+| Gate | Result |
+| --- | --- |
+| Final integration review | PASS. |
+| Agent tests | 112/112 passed. |
+| Formatting | Passed. |
+| Release builds | Agent host and Agent Tests Release builds passed with 0 warnings and 0 errors. |
+| Quality/security | Passed. `gitleaks` and `trivy` remain WP-11 gaps. |
+| Repository hygiene | `git diff --check` passed. |
+
+This checkpoint verifies a deterministic local runtime using fake time and fake transport. It is not evidence of real ICMP, host/DI wiring, Windows Service operation, persistence, delivery, backend ingestion, UI, deployment, or IP discovery.
+
 ## Accepted follow-on risks
 
 - The duplicate-device portion of UA-01 is confirmed and fully enforced. Remaining UA-01 Site/VLAN/role/operational-threshold details do not block this rule or the technical gate.
@@ -95,7 +108,8 @@ The first sandboxed Vitest attempt could not spawn Vite's helper (`EPERM`); the 
 - Real Windows DPAPI LocalMachine and service-account ACL/recovery evidence requires a disposable Windows host (WP-10/11).
 - Immediate revocation of a disconnected Agent cannot be guaranteed until it reconnects; credential expiry and short polling limit exposure.
 - `gitleaks` and `trivy` are still unavailable; dedicated secret/image scanning remains a WP-11 release requirement.
+- WP-04's fake-only runtime evidence does not substitute for UA-03 controlled real-ICMP approval or UA-04 Windows Service operational evidence.
 
 ## Next checkpoint
 
-Obtain the WP-04 design-freeze checkpoint commit/PR approval before Agent implementation. UA-03 remains mandatory before real ICMP; UA-04 remains mandatory before Windows Service operational evidence. Do not treat documentation CIDRs or local Compose credentials as production authorization.
+WP-04 is a deterministic probe-runtime foundation, not an operational probe release. UA-03 remains mandatory before any real ICMP validation; UA-04 remains mandatory before Windows Service operational evidence. WP-05+ owns persistence, delivery, ingestion, and all central outcomes. Do not treat documentation CIDRs or local Compose credentials as production authorization.

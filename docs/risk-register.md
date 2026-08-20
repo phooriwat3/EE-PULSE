@@ -1,11 +1,11 @@
 # EE Pulse risk register
 
-Last updated: 2026-08-14
+Last updated: 2026-08-20
 Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings assume the treatment is implemented.
 
 | ID | Risk | L | I | Treatment / control | Owner / WP | Residual |
 | --- | --- | --- | --- | --- | --- | --- |
-| R-01 | ICMP needs privileges or is blocked and is not proof of application health. | H | H | Injectable transport, fixed categorized errors, IPv4-only dual AllowedNetworks enforcement, controlled targets, documented Windows limitation; no discovery/scanning. | Agent + IT, WP-03/04/10 | M/H |
+| R-01 | ICMP needs privileges or is blocked and is not proof of application health. | H | H | WP-04 deterministic fake-transport foundation, fixed categorized errors, IPv4-only dual AllowedNetworks enforcement, controlled targets, documented Windows limitation; no discovery/scanning. Real ICMP remains separately gated. | Agent + IT, WP-03/04/10 | M/H |
 | R-02 | Windows Service account/install/recovery cannot be proven here. | M | H | Idempotent installer, Program Files/ProgramData split, queue preservation, disposable Windows reboot/recovery test. | Agent + IT, WP-10/11 | L/H |
 | R-03 | A 72-hour queue exhausts disk or silently loses data. | M | H | Capacity formula, quota, WAL/transactions, explicit drop policy, dead letters, critical metric/log, disk-full tests. | Agent, WP-05/11 | L/H |
 | R-04 | Duplicate batches/runs create duplicate metrics, transitions, incidents, or notifications. | H | H | Unique batch/run IDs, durable dedupe, one-open-incident constraint, transactional outbox/delivery keys. | Backend, WP-05/06/08 | L/H |
@@ -19,7 +19,7 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 | R-12 | Concurrent state processing opens multiple incidents. | M | H | Per-Probe serialization/optimistic concurrency; atomic state/transition/incident/outbox; uniqueness. | Backend, WP-06 | L/H |
 | R-13 | Deployment exposes stores or uses weak defaults. | M | H | Internal data network, proxy-only production path, placeholders, fail-closed validation, pinned images. | Integration/IT, WP-01/10 | L/H |
 | R-14 | Backups cannot meet RPO/RTO or restore both stores consistently. | M | H | Approved policy, scripts, versioned runbook, isolated restore rehearsal. | Operations, WP-09/10/11 | M/H |
-| R-15 | Unbounded queues/backpressure miss performance targets. | M | H | WP-04 freezes bounded admission, global/per-target limits, coalesced missed runs, and lag/skipped metrics; WP-05 adds durable queues/batches; simulator and 60-minute evidence remain. | All/QA, WP-04/05/07/11 | M/H |
+| R-15 | Unbounded queues/backpressure miss performance targets. | M | H | WP-04 locally verifies bounded deterministic admission, global/per-target limits, coalesced missed runs, and lag/skipped runtime behavior with fakes; WP-05 adds durable queues/batches; simulator and 60-minute evidence remain. | All/QA, WP-04/05/07/11 | M/H |
 | R-16 | Timezone/DST handling corrupts maintenance or reports. | M | M | UTC core; explicit timezone mapping; DST fixtures. | Backend/Web, WP-06/07/09 | L/M |
 | R-17 | Host toolchain cannot reproduce net10.0 builds. | H | M | SDK 10.0.302 pin and verified official container; CI setup-dotnet 10.0.x. | Integration, WP-01 | M/L |
 | R-18 | Docker access depends on engine state and local permission boundary. | M | M | Document prerequisite; use approved local Docker execution; Compose config/build/wait health gate. | User/Integration, WP-01/10 | L/M |
@@ -61,3 +61,4 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 - The user accepted production OIDC, unavailable `gitleaks`/`trivy`, integer OpenAPI criticality values 0-3, manually maintained frontend contract types, and containerized .NET 10 builds as tracked follow-on risks rather than WP-02 blockers.
 - WP-03 local integration checkpoint passed: 103/103 .NET tests, Release builds, migration/model coverage, Compose/runtime auth checks, generated OpenAPI SHA parity, frozen WP-02 comparison, frozen WP-03 proposal comparison, and quality/security gates. Agent C remained deferred.
 - Residual WP-03 risks are accepted only for this local checkpoint: real Windows DPAPI/ACL/service recovery, approved production CIDRs/ICMP routing, disconnected-Agent revocation latency, OIDC/TLS deployment, and unavailable `gitleaks`/`trivy` evidence remain WP-10/11/operator work.
+- WP-04 final integration review passed: Agent tests 112/112, formatting, Agent host and Agent Tests Release builds with 0 warnings/errors, quality/security, and `git diff --check`. It is fake-only deterministic probe-runtime evidence, not real ICMP, host/DI wiring, Windows Service, persistence, delivery, ingestion, UI, deployment, or IP discovery. `gitleaks` and `trivy` remain WP-11 gaps.

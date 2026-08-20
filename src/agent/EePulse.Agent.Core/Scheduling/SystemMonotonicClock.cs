@@ -9,6 +9,13 @@ public sealed class SystemMonotonicClock(TimeProvider timeProvider) : IMonotonic
     public TimeSpan GetElapsedTime(long startingTimestamp, long endingTimestamp) =>
         timeProvider.GetElapsedTime(startingTimestamp, endingTimestamp);
 
+    public long GetTimestampDelta(TimeSpan duration)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(duration, TimeSpan.Zero);
+        if (duration == TimeSpan.Zero) return 0;
+        return checked((long)Math.Ceiling((decimal)duration.Ticks * timeProvider.TimestampFrequency / TimeSpan.TicksPerSecond));
+    }
+
     public ValueTask DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(delay, TimeSpan.Zero);

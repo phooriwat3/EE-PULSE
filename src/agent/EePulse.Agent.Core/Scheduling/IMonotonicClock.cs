@@ -9,5 +9,7 @@ public interface IMonotonicClock
 
     TimeSpan GetElapsedTime(long startingTimestamp, long endingTimestamp);
 
+    long GetTimestampDelta(TimeSpan duration);
+
     ValueTask DelayAsync(TimeSpan delay, CancellationToken cancellationToken);
 }

@@ -1,16 +1,16 @@
 # EE Pulse requirements traceability
 
-Last updated: 2026-08-14
+Last updated: 2026-08-20
 Status legend: Not started, In progress, Implemented, Verified, Blocked.
 
-WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. The contract-neutral Probe Agent foundation is also verified. Status remains partial where later runtime behavior or broader release evidence is required.
+WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. Status remains partial where operational, persistence, delivery, ingestion, UI, deployment, or broader release evidence is required.
 
 ## Functional requirements
 
 | Requirement | Delivery WP | Status | Current evidence / remaining acceptance |
 | --- | --- | --- | --- |
 | FR-01 Device inventory | WP-02, WP-07 | Verified | Backend CRUD, server filtering/pagination, IPv4/hostname validation, enabled-only Site/address uniqueness, disabled/cross-Site IP reuse, hostname reuse, re-enable/concurrent conflicts, CSV row errors, history-preserving disable, Administrator audited delete, PostgreSQL migration, and responsive inventory UI pass component/browser/integration tests. |
-| FR-02 Probe configuration | WP-02, WP-04 | In progress | WP-04 design freezes IPv4-only dual-scope execution, deterministic jitter, bounded concurrency, sequential ICMP attempts, local result/error semantics, cancellation, and observability. Implementation and controlled ICMP evidence remain. |
+| FR-02 Probe configuration | WP-02, WP-04 | In progress | WP-04 locally verifies the deterministic runtime foundation with fake time/transport: IPv4-literal dual-scope validation, stable jitter, bounded scheduling/non-overlap, sequential attempts, immutable local result/error semantics, cancellation, and observability. Real ICMP and all later persistence/delivery/ingestion evidence remain. |
 | FR-03 Agent | WP-03-05, WP-10 | In progress | WP-03 verified enrollment, per-Agent credential auth/rotation/revocation, heartbeat/offline state, conditional immutable configuration pull/LKG, acknowledgement/rollback, DPAPI/ACL-backed local state, and dual non-expandable AllowedNetworks enforcement. SQLite queue, result batching/ingestion, installer, and real Windows operational evidence remain. |
 | FR-04 Status engine | WP-06 | Not started | Require the full state matrix, thresholds, Agent-expiry UNKNOWN, maintenance, transition history, watermark, and flapping. |
 | FR-05 Incident management | WP-06, WP-07 | Not started | Require atomic uniqueness, lifecycle, comments, attribution, resolution, downtime, and occurrence evidence. |
@@ -27,8 +27,8 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | NFR-01 Performance | WP-05, WP-07, WP-11 | Not started | No ingest/load/dashboard workload. Require 500 targets/30 s for 60 min, 50 average and 250 burst results/s, overview p95 <=1 s, dashboard <=3 s. |
 | NFR-02 Reliability | WP-02, WP-05, WP-06, WP-11 | In progress | Verified PostgreSQL migration/model/rollback behavior, concurrent enrollment/heartbeat/ack/rotation handling, immutable snapshots, retries/LKG restoration, and schema-aware readiness. Agent queue, result ingest/status idempotency, and load evidence remain. |
 | NFR-03 Security | WP-01, WP-03, WP-08, WP-10, WP-11 | In progress | Verified digest-only credentials/tokens, separated auth schemes, secret canaries, UTC-Z/body/rate limits, non-expandable CIDRs, no command/URL configuration, DPAPI/ACL seams, source/history checks, and Compose exposure. Real Windows proof, OIDC/TLS deployment, and `gitleaks`/`trivy` scans remain. |
-| NFR-04 Observability | WP-01, WP-04-08 | In progress | Verified live/readiness, PostgreSQL/schema-aware readiness, structured JSON/request logs, correlation IDs, and Agent host lifecycle logging. Required runtime metrics/alerts remain. |
-| NFR-05 Maintainability | WP-01 onward | In progress | Verified nullable/warnings, dependency graph, checked-in OpenAPI v1, 26 unit + 10 Agent + 7 PostgreSQL integration tests, 7 Vitest component tests, 2 Playwright inventory tests, formatting/lint/build, and QA gate. Coverage expands with later behavior. |
+| NFR-04 Observability | WP-01, WP-04-08 | In progress | Verified live/readiness, PostgreSQL/schema-aware readiness, structured JSON/request logs, correlation IDs, and WP-04 fake-only runtime observability behavior. Production metrics/alerts and operational evidence remain. |
+| NFR-05 Maintainability | WP-01 onward | In progress | WP-04 final integration review passed: Agent tests 112/112, formatting, Agent host and Agent Tests Release builds with 0 warnings/errors, quality/security, and `git diff --check`. Coverage expands with later behavior. |
 
 ## Business rules and acceptance scenarios
 
@@ -53,7 +53,7 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | WP-01 Foundation/contracts | Verified | 12-project graph; v1 health/result contracts; Problem Details; correlation/UTC; health/OpenAPI; Compose; CI; ADRs; format/lint/build/tests/audits all pass. |
 | WP-02 Database/inventory | Verified | User-approved PostgreSQL schema/migration, CRUD/filter/pagination, validation, confirmed enabled-only duplicate policy, concurrency, audit, CSV, policies, readiness, frozen OpenAPI, responsive inventory UI, 7 component tests, and 2 critical-flow Playwright tests. |
 | WP-03 Enrollment/config | Verified local integration checkpoint | Implemented frozen additive endpoints/DTOs, AgentCredential separation, transactional enrollment, heartbeat expiry, immutable snapshots/ETag/ack/rollback, dual AllowedNetworks, credential rotation/revocation, one additive migration, Agent protected storage, and tests. 103/103 .NET tests, Compose/runtime, quality/security, generated OpenAPI, WP-02 comparison, and proposal comparison pass. Windows operational evidence and release scanners remain WP-10/11. |
-| WP-04 Scheduler/ICMP | Design frozen; implementation not started | ADR-010, local runtime contract, operational boundary, and fake-only acceptance matrix freeze deterministic bounded ICMP result production. WP-05 delivery/ingestion and later central behavior remain excluded. |
+| WP-04 Scheduler/ICMP | Implemented and integration-verified locally | Deterministic probe-runtime foundation verified through fake time/transport tests. Final integration review PASS; Agent tests 112/112; formatting; Agent host and Agent Tests Release builds (0 warnings/errors); quality/security; and `git diff --check` passed. This is not real ICMP, host/DI wiring, Windows Service, persistence, delivery, ingestion, UI, deployment, or IP-discovery evidence. |
 | WP-05 Queue/ingestion | Not started | Depends on identity, configuration, and Probe result production. |
 | WP-06 Status/incidents | Not started | Depends on durable idempotent ingestion. |
 | WP-07 Dashboard | Not started | Depends on stable application APIs/events. |

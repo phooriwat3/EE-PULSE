@@ -19,5 +19,8 @@ public enum ProbeTransportStatus
     Succeeded,
     TimedOut,
     Unreachable,
+    PermissionDenied,
+    InvalidTarget,
+    NetworkUnavailable,
     Failed,
 }
