@@ -558,682 +558,682 @@ public sealed class AgentScheduleRuntimeCoordinatorTests
 }
 
 internal sealed class AgentScheduleRuntimeCoordinatorTestHarness : IAsyncDisposable
+{
+    private static readonly TimeSpan GuardTimeout = TimeSpan.FromSeconds(10);
+
+    public AgentScheduleRuntimeCoordinatorTestHarness(int globalConcurrency = 64, int targetConcurrency = 1)
     {
-        private static readonly TimeSpan GuardTimeout = TimeSpan.FromSeconds(10);
+        Clock = new ControlledMonotonicClock();
+        Transport = new RecordingProbeTransport(capacity: 64);
+        ExecutionClock = new ProbeExecutionClock();
+        Sink = new BlockingResultSink(capacity: 64);
+        Coordinator = new AgentScheduleRuntimeCoordinator(
+            Clock,
+            new LocalProbeRunner(Transport, ExecutionClock),
+            new ProbeAdmissionController(globalConcurrency, targetConcurrency),
+            Sink);
+    }
 
-        public AgentScheduleRuntimeCoordinatorTestHarness(int globalConcurrency = 64, int targetConcurrency = 1)
+    public ControlledMonotonicClock Clock { get; }
+    public RecordingProbeTransport Transport { get; }
+    public ProbeExecutionClock ExecutionClock { get; }
+    public BlockingResultSink Sink { get; }
+    public AgentScheduleRuntimeCoordinator Coordinator { get; }
+
+    public static async Task DeadlockGuard(Task task) => await task.WaitAsync(GuardTimeout);
+
+    public ValueTask ReplaceAsync(AgentConfigurationResponse configuration) =>
+        Coordinator.ReplaceAsync(configuration, TestContext.Current.CancellationToken);
+
+    public ValueTask HaltAsync() => Coordinator.HaltAsync(TestContext.Current.CancellationToken);
+
+    public async Task AdvanceSlotsAsync(int count, CancellationToken cancellationToken)
+    {
+        for (var index = 0; index < count; index++)
         {
-            Clock = new ControlledMonotonicClock();
-            Transport = new RecordingProbeTransport(capacity: 64);
-            ExecutionClock = new ProbeExecutionClock();
-            Sink = new BlockingResultSink(capacity: 64);
-            Coordinator = new AgentScheduleRuntimeCoordinator(
-                Clock,
-                new LocalProbeRunner(Transport, ExecutionClock),
-                new ProbeAdmissionController(globalConcurrency, targetConcurrency),
-                Sink);
+            await Clock.WaitForPendingDelayCountAsync(index + 1, cancellationToken);
+            Clock.AdvanceBy(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    public static AgentConfigurationResponse Configuration(long version, params AgentProbeConfiguration[] probes) =>
+        ConfigurationForAgent(version, Guid.Parse("11111111-1111-1111-1111-111111111111"), probes);
+
+    public static AgentConfigurationResponse ConfigurationForAgent(long version, Guid agentId, params AgentProbeConfiguration[] probes) => new(
+        AgentContract.SchemaVersion,
+        agentId,
+        Guid.Parse("22222222-2222-2222-2222-222222222222"),
+        version,
+        DateTimeOffset.UnixEpoch,
+        null,
+        ["192.0.2.0/24"],
+        probes);
+
+    public static AgentProbeConfiguration Probe(Guid? probeId = null, string target = "192.0.2.10", int intervalSeconds = 10) => new(
+        probeId ?? Guid.NewGuid(),
+        Guid.NewGuid(),
+        1,
+        "icmp",
+        target,
+        intervalSeconds,
+        100,
+        1,
+        null,
+        null,
+        1,
+        1);
+
+    public async ValueTask DisposeAsync()
+    {
+        Sink.ReleaseAll();
+        Transport.ReleaseAll();
+        Clock.CancelAll();
+        await Coordinator.HaltAsync(CancellationToken.None).AsTask().WaitAsync(GuardTimeout);
+        Sink.ReleaseAll();
+        Transport.ReleaseAll();
+        Clock.CancelAll();
+        Sink.Dispose();
+        Transport.Dispose();
+        Clock.Dispose();
+    }
+
+    public sealed class ControlledMonotonicClock : IMonotonicClock
+    {
+        private readonly object gate = new();
+        private readonly List<PendingDelay> pending = [];
+        private readonly List<CountWaiter> pendingDelayWaiters = [];
+        private readonly List<CountWaiter> cancelledDelayWaiters = [];
+        private readonly List<DelayRegistrationWaiter> registrationWaiters = [];
+        private long timestamp;
+        private long delayRegistrationSequence;
+
+        public int CancelledDelayCount { get; private set; }
+        public long DelayRegistrationSequence { get { lock (gate) return delayRegistrationSequence; } }
+        public IReadOnlyList<DelayRegistration> PendingDelays { get { lock (gate) return pending.Select(delay => delay.Registration).ToArray(); } }
+        public int PendingDelayWaiterCount { get { lock (gate) return pendingDelayWaiters.Count; } }
+        public int CancelledDelayWaiterCount { get { lock (gate) return cancelledDelayWaiters.Count; } }
+        public int TotalWaiterCount { get { lock (gate) return pendingDelayWaiters.Count + cancelledDelayWaiters.Count + registrationWaiters.Count; } }
+
+        public long GetTimestamp()
+        {
+            lock (gate) return timestamp;
         }
 
-        public ControlledMonotonicClock Clock { get; }
-        public RecordingProbeTransport Transport { get; }
-        public ProbeExecutionClock ExecutionClock { get; }
-        public BlockingResultSink Sink { get; }
-        public AgentScheduleRuntimeCoordinator Coordinator { get; }
+        public TimeSpan GetElapsedTime(long startingTimestamp, long endingTimestamp) =>
+            TimeSpan.FromTicks(endingTimestamp - startingTimestamp);
 
-        public static async Task DeadlockGuard(Task task) => await task.WaitAsync(GuardTimeout);
-
-        public ValueTask ReplaceAsync(AgentConfigurationResponse configuration) =>
-            Coordinator.ReplaceAsync(configuration, TestContext.Current.CancellationToken);
-
-        public ValueTask HaltAsync() => Coordinator.HaltAsync(TestContext.Current.CancellationToken);
-
-        public async Task AdvanceSlotsAsync(int count, CancellationToken cancellationToken)
+        public long GetTimestampDelta(TimeSpan duration)
         {
-            for (var index = 0; index < count; index++)
-            {
-                await Clock.WaitForPendingDelayCountAsync(index + 1, cancellationToken);
-                Clock.AdvanceBy(TimeSpan.FromSeconds(10));
-            }
+            ArgumentOutOfRangeException.ThrowIfLessThan(duration, TimeSpan.Zero);
+            return duration.Ticks;
         }
 
-        public static AgentConfigurationResponse Configuration(long version, params AgentProbeConfiguration[] probes) =>
-            ConfigurationForAgent(version, Guid.Parse("11111111-1111-1111-1111-111111111111"), probes);
-
-        public static AgentConfigurationResponse ConfigurationForAgent(long version, Guid agentId, params AgentProbeConfiguration[] probes) => new(
-            AgentContract.SchemaVersion,
-            agentId,
-            Guid.Parse("22222222-2222-2222-2222-222222222222"),
-            version,
-            DateTimeOffset.UnixEpoch,
-            null,
-            ["192.0.2.0/24"],
-            probes);
-
-        public static AgentProbeConfiguration Probe(Guid? probeId = null, string target = "192.0.2.10", int intervalSeconds = 10) => new(
-            probeId ?? Guid.NewGuid(),
-            Guid.NewGuid(),
-            1,
-            "icmp",
-            target,
-            intervalSeconds,
-            100,
-            1,
-            null,
-            null,
-            1,
-            1);
-
-        public async ValueTask DisposeAsync()
+        public ValueTask DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
         {
-            Sink.ReleaseAll();
-            Transport.ReleaseAll();
-            Clock.CancelAll();
-            await Coordinator.HaltAsync(CancellationToken.None).AsTask().WaitAsync(GuardTimeout);
-            Sink.ReleaseAll();
-            Transport.ReleaseAll();
-            Clock.CancelAll();
-            Sink.Dispose();
-            Transport.Dispose();
-            Clock.Dispose();
-        }
-
-        public sealed class ControlledMonotonicClock : IMonotonicClock
-        {
-            private readonly object gate = new();
-            private readonly List<PendingDelay> pending = [];
-            private readonly List<CountWaiter> pendingDelayWaiters = [];
-            private readonly List<CountWaiter> cancelledDelayWaiters = [];
-            private readonly List<DelayRegistrationWaiter> registrationWaiters = [];
-            private long timestamp;
-            private long delayRegistrationSequence;
-
-            public int CancelledDelayCount { get; private set; }
-            public long DelayRegistrationSequence { get { lock (gate) return delayRegistrationSequence; } }
-            public IReadOnlyList<DelayRegistration> PendingDelays { get { lock (gate) return pending.Select(delay => delay.Registration).ToArray(); } }
-            public int PendingDelayWaiterCount { get { lock (gate) return pendingDelayWaiters.Count; } }
-            public int CancelledDelayWaiterCount { get { lock (gate) return cancelledDelayWaiters.Count; } }
-            public int TotalWaiterCount { get { lock (gate) return pendingDelayWaiters.Count + cancelledDelayWaiters.Count + registrationWaiters.Count; } }
-
-            public long GetTimestamp()
+            ArgumentOutOfRangeException.ThrowIfLessThan(delay, TimeSpan.Zero);
+            if (delay == TimeSpan.Zero) return ValueTask.CompletedTask;
+            var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            CancellationTokenRegistration registration = default;
+            long sequence;
+            lock (gate)
             {
-                lock (gate) return timestamp;
+                sequence = checked(++delayRegistrationSequence);
             }
 
-            public TimeSpan GetElapsedTime(long startingTimestamp, long endingTimestamp) =>
-                TimeSpan.FromTicks(endingTimestamp - startingTimestamp);
-
-            public long GetTimestampDelta(TimeSpan duration)
+            var pendingDelay = new PendingDelay(
+                new DelayRegistration(sequence, checked(GetTimestamp() + delay.Ticks)),
+                source,
+                () => registration.Dispose());
+            registration = cancellationToken.Register(() =>
             {
-                ArgumentOutOfRangeException.ThrowIfLessThan(duration, TimeSpan.Zero);
-                return duration.Ticks;
-            }
-
-            public ValueTask DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
-            {
-                ArgumentOutOfRangeException.ThrowIfLessThan(delay, TimeSpan.Zero);
-                if (delay == TimeSpan.Zero) return ValueTask.CompletedTask;
-                var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                CancellationTokenRegistration registration = default;
-                long sequence;
                 lock (gate)
                 {
-                    sequence = checked(++delayRegistrationSequence);
-                }
-
-                var pendingDelay = new PendingDelay(
-                    new DelayRegistration(sequence, checked(GetTimestamp() + delay.Ticks)),
-                    source,
-                    () => registration.Dispose());
-                registration = cancellationToken.Register(() =>
-                {
-                    lock (gate)
+                    if (pending.Remove(pendingDelay))
                     {
-                        if (pending.Remove(pendingDelay))
-                        {
-                            CancelledDelayCount++;
-                        }
+                        CancelledDelayCount++;
                     }
-
-                    pendingDelay.DisposeRegistration();
-                    source.TrySetCanceled(cancellationToken);
-                    ReleaseSatisfiedWaiters();
-                });
-
-                lock (gate)
-                {
-                    pending.Add(pendingDelay);
                 }
 
-                ReleaseRegisteredWaiters(pendingDelay.Registration);
+                pendingDelay.DisposeRegistration();
+                source.TrySetCanceled(cancellationToken);
                 ReleaseSatisfiedWaiters();
+            });
 
-                return new ValueTask(source.Task);
-            }
-
-            public void AdvanceBy(TimeSpan duration)
+            lock (gate)
             {
-                ArgumentOutOfRangeException.ThrowIfLessThan(duration, TimeSpan.Zero);
-                PendingDelay[] due;
-                lock (gate)
-                {
-                    timestamp = checked(timestamp + duration.Ticks);
-                    due = pending.Where(delay => delay.Registration.DueTimestamp <= timestamp).ToArray();
-                    foreach (var delay in due) pending.Remove(delay);
-                }
-
-                foreach (var delay in due)
-                {
-                    delay.DisposeRegistration();
-                    delay.Source.TrySetResult();
-                }
-
-                ReleaseSatisfiedWaiters();
+                pending.Add(pendingDelay);
             }
 
-            public Task WaitForPendingDelayCountAsync(int count, CancellationToken cancellationToken) =>
-                WaitForCountAsync(pendingDelayWaiters, () => pending.Count, count, cancellationToken);
+            ReleaseRegisteredWaiters(pendingDelay.Registration);
+            ReleaseSatisfiedWaiters();
 
-            public DelayRegistration GetEarliestPendingDelay()
-            {
-                lock (gate)
-                {
-                    return pending
-                        .OrderBy(delay => delay.Registration.DueTimestamp)
-                        .ThenBy(delay => delay.Registration.Sequence)
-                        .First()
-                        .Registration;
-                }
-            }
-
-            public void AdvanceTo(long dueTimestamp)
-            {
-                long current;
-                lock (gate) current = timestamp;
-                ArgumentOutOfRangeException.ThrowIfLessThan(dueTimestamp, current);
-                AdvanceBy(TimeSpan.FromTicks(dueTimestamp - current));
-            }
-
-            public async Task<DelayRegistration> WaitForPendingDelayRegisteredAfterAsync(long sequence, CancellationToken cancellationToken)
-            {
-                DelayRegistrationWaiter? waiter = null;
-                lock (gate)
-                {
-                    var registered = pending
-                        .Select(delay => delay.Registration)
-                        .Where(registration => registration.Sequence > sequence)
-                        .OrderBy(registration => registration.Sequence)
-                        .FirstOrDefault();
-                    if (registered is not null) return registered;
-
-                    waiter = new DelayRegistrationWaiter(
-                        sequence,
-                        new TaskCompletionSource<DelayRegistration>(TaskCreationOptions.RunContinuationsAsynchronously));
-                    registrationWaiters.Add(waiter);
-                }
-
-                try
-                {
-                    return await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
-                }
-                finally
-                {
-                    lock (gate) registrationWaiters.Remove(waiter);
-                }
-            }
-
-            public Task WaitForCancelledDelayCountAsync(int count, CancellationToken cancellationToken) =>
-                WaitForCountAsync(cancelledDelayWaiters, () => CancelledDelayCount, count, cancellationToken);
-
-            public void CancelAll()
-            {
-                PendingDelay[] delays;
-                lock (gate)
-                {
-                    delays = pending.ToArray();
-                    pending.Clear();
-                }
-
-                foreach (var delay in delays)
-                {
-                    delay.DisposeRegistration();
-                    delay.Source.TrySetCanceled();
-                }
-
-                ReleaseSatisfiedWaiters();
-            }
-
-            public void Dispose()
-            {
-                PendingDelay[] pendingDelays;
-                CountWaiter[] countWaiters;
-                DelayRegistrationWaiter[] sequenceWaiters;
-                lock (gate)
-                {
-                    pendingDelays = pending.ToArray();
-                    pending.Clear();
-                    countWaiters = pendingDelayWaiters.Concat(cancelledDelayWaiters).ToArray();
-                    pendingDelayWaiters.Clear();
-                    cancelledDelayWaiters.Clear();
-                    sequenceWaiters = registrationWaiters.ToArray();
-                    registrationWaiters.Clear();
-                }
-
-                foreach (var delay in pendingDelays)
-                {
-                    delay.DisposeRegistration();
-                    delay.Source.TrySetCanceled();
-                }
-
-                foreach (var waiter in countWaiters) waiter.Source.TrySetCanceled();
-                foreach (var waiter in sequenceWaiters) waiter.Source.TrySetCanceled();
-            }
-
-            private async Task WaitForCountAsync(
-                List<CountWaiter> waiters,
-                Func<int> currentCount,
-                int count,
-                CancellationToken cancellationToken)
-            {
-                ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
-                CountWaiter? waiter = null;
-                lock (gate)
-                {
-                    if (currentCount() >= count) return;
-                    waiter = new CountWaiter(count, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-                    waiters.Add(waiter);
-                }
-
-                try
-                {
-                    await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
-                }
-                finally
-                {
-                    lock (gate) waiters.Remove(waiter);
-                }
-            }
-
-            private void ReleaseSatisfiedWaiters()
-            {
-                CountWaiter[] pendingReady;
-                CountWaiter[] cancelledReady;
-                lock (gate)
-                {
-                    pendingReady = TakeSatisfiedWaiters(pendingDelayWaiters, pending.Count);
-                    cancelledReady = TakeSatisfiedWaiters(cancelledDelayWaiters, CancelledDelayCount);
-                }
-
-                Complete(pendingReady);
-                Complete(cancelledReady);
-            }
-
-            private static CountWaiter[] TakeSatisfiedWaiters(List<CountWaiter> waiters, int currentCount)
-            {
-                var ready = waiters.Where(waiter => currentCount >= waiter.RequiredCount).ToArray();
-                foreach (var waiter in ready) waiters.Remove(waiter);
-                return ready;
-            }
-
-            private static void Complete(IEnumerable<CountWaiter> waiters)
-            {
-                foreach (var waiter in waiters) waiter.Source.TrySetResult();
-            }
-
-            private void ReleaseRegisteredWaiters(DelayRegistration registration)
-            {
-                DelayRegistrationWaiter[] ready;
-                lock (gate)
-                {
-                    ready = registrationWaiters
-                        .Where(waiter => registration.Sequence > waiter.AfterSequence)
-                        .ToArray();
-                    foreach (var waiter in ready) registrationWaiters.Remove(waiter);
-                }
-
-                foreach (var waiter in ready) waiter.Source.TrySetResult(registration);
-            }
-
-            public sealed record DelayRegistration(long Sequence, long DueTimestamp);
-
-            private sealed record DelayRegistrationWaiter(
-                long AfterSequence,
-                TaskCompletionSource<DelayRegistration> Source);
-
-            private sealed record CountWaiter(int RequiredCount, TaskCompletionSource Source);
-
-            private sealed record PendingDelay(
-                DelayRegistration Registration,
-                TaskCompletionSource Source,
-                Action DisposeRegistration);
+            return new ValueTask(source.Task);
         }
 
-        public sealed class ProbeExecutionClock : IProbeExecutionClock
+        public void AdvanceBy(TimeSpan duration)
         {
-            private long timestamp;
-            public DateTimeOffset UtcNow { get; private set; } = DateTimeOffset.UnixEpoch;
-
-            public DateTimeOffset GetUtcNow() => UtcNow;
-
-            public long GetTimestamp() => timestamp;
-
-            public TimeSpan GetElapsedTime(long startingTimestamp, long endingTimestamp) =>
-                TimeSpan.FromTicks(endingTimestamp - startingTimestamp);
-
-            public ValueTask DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+            ArgumentOutOfRangeException.ThrowIfLessThan(duration, TimeSpan.Zero);
+            PendingDelay[] due;
+            lock (gate)
             {
-                UtcNow += delay;
-                timestamp += delay.Ticks;
-                return ValueTask.CompletedTask;
+                timestamp = checked(timestamp + duration.Ticks);
+                due = pending.Where(delay => delay.Registration.DueTimestamp <= timestamp).ToArray();
+                foreach (var delay in due) pending.Remove(delay);
             }
+
+            foreach (var delay in due)
+            {
+                delay.DisposeRegistration();
+                delay.Source.TrySetResult();
+            }
+
+            ReleaseSatisfiedWaiters();
         }
 
-        public sealed class RecordingProbeTransport(int capacity) : IProbeTransport
+        public Task WaitForPendingDelayCountAsync(int count, CancellationToken cancellationToken) =>
+            WaitForCountAsync(pendingDelayWaiters, () => pending.Count, count, cancellationToken);
+
+        public DelayRegistration GetEarliestPendingDelay()
         {
-            private readonly object gate = new();
-            private readonly List<Invocation> invocations = [];
-            private readonly List<CountWaiter> startWaiters = [];
-            private readonly List<CountWaiter> cancelWaiters = [];
-            private readonly List<CountWaiter> completionWaiters = [];
-            private readonly List<TaskCompletionSource<ProbeTransportReply>> blocked = [];
-
-            public bool BlockCompletions { get; set; }
-            public bool CompleteCancelledWithSuccess { get; set; }
-            public HashSet<string> ThrowOnTargets { get; } = new(StringComparer.Ordinal);
-            public IReadOnlyList<Invocation> Invocations { get { lock (gate) return invocations.ToArray(); } }
-            public int CancellationCount { get; private set; }
-            public int CompletionCount { get; private set; }
-            public int PendingStartWaiterCount { get { lock (gate) return startWaiters.Count; } }
-            public int TotalWaiterCount { get { lock (gate) return startWaiters.Count + cancelWaiters.Count + completionWaiters.Count; } }
-
-            public ValueTask<ProbeTransportReply> SendAsync(ProbeTransportRequest request, CancellationToken cancellationToken)
+            lock (gate)
             {
-                TaskCompletionSource<ProbeTransportReply>? blockedCompletion = null;
-                CountWaiter[] started;
-                var throws = false;
-                lock (gate)
-                {
-                    if (invocations.Count >= capacity) throw new InvalidOperationException("Fake transport capacity exceeded.");
-                    invocations.Add(new Invocation(request.Target));
-                    started = TakeSatisfiedWaiters(startWaiters, invocations.Count);
-                    throws = ThrowOnTargets.Contains(request.Target);
-                    if (!throws && BlockCompletions)
-                    {
-                        blockedCompletion = new TaskCompletionSource<ProbeTransportReply>(TaskCreationOptions.RunContinuationsAsynchronously);
-                        blocked.Add(blockedCompletion);
-                    }
-                }
-
-                Complete(started);
-                if (throws) throw new InvalidOperationException("frozen fake transport failure");
-
-                if (blockedCompletion is null)
-                {
-                    MarkCompleted();
-                    return ValueTask.FromResult(new ProbeTransportReply(ProbeTransportStatus.Succeeded, TimeSpan.FromMilliseconds(1)));
-                }
-
-                cancellationToken.Register(() =>
-                {
-                    CountWaiter[] cancelled;
-                    lock (gate)
-                    {
-                        CancellationCount++;
-                        cancelled = TakeSatisfiedWaiters(cancelWaiters, CancellationCount);
-                    }
-
-                    Complete(cancelled);
-
-                    if (!CompleteCancelledWithSuccess)
-                    {
-                        blockedCompletion.TrySetCanceled(cancellationToken);
-                    }
-                });
-
-                return AwaitBlocked(blockedCompletion);
+                return pending
+                    .OrderBy(delay => delay.Registration.DueTimestamp)
+                    .ThenBy(delay => delay.Registration.Sequence)
+                    .First()
+                    .Registration;
             }
-
-            public void ReleaseAll()
-            {
-                TaskCompletionSource<ProbeTransportReply>[] completions;
-                lock (gate)
-                {
-                    completions = blocked.ToArray();
-                    blocked.Clear();
-                }
-
-                foreach (var completion in completions)
-                {
-                    completion.TrySetResult(new ProbeTransportReply(ProbeTransportStatus.Succeeded, TimeSpan.FromMilliseconds(1)));
-                }
-            }
-
-            public Task WaitForStartedCountAsync(int count, CancellationToken cancellationToken) =>
-                WaitForCountAsync(startWaiters, () => invocations.Count, count, cancellationToken);
-
-            public Task WaitForCancellationCountAsync(int count, CancellationToken cancellationToken) =>
-                WaitForCountAsync(cancelWaiters, () => CancellationCount, count, cancellationToken);
-
-            public Task WaitForCompletionCountAsync(int count, CancellationToken cancellationToken) =>
-                WaitForCountAsync(completionWaiters, () => CompletionCount, count, cancellationToken);
-
-            private async ValueTask<ProbeTransportReply> AwaitBlocked(TaskCompletionSource<ProbeTransportReply> completion)
-            {
-                try
-                {
-                    return await completion.Task.ConfigureAwait(false);
-                }
-                finally
-                {
-                    MarkCompleted();
-                }
-            }
-
-            private void MarkCompleted()
-            {
-                CountWaiter[] completed;
-                lock (gate)
-                {
-                    CompletionCount++;
-                    completed = TakeSatisfiedWaiters(completionWaiters, CompletionCount);
-                }
-
-                Complete(completed);
-            }
-
-            public void Dispose()
-            {
-                CountWaiter[] waiters;
-                lock (gate)
-                {
-                    waiters = startWaiters.Concat(cancelWaiters).Concat(completionWaiters).ToArray();
-                    startWaiters.Clear();
-                    cancelWaiters.Clear();
-                    completionWaiters.Clear();
-                }
-
-                foreach (var waiter in waiters) waiter.Source.TrySetCanceled();
-            }
-
-            private async Task WaitForCountAsync(
-                List<CountWaiter> waiters,
-                Func<int> current,
-                int count,
-                CancellationToken cancellationToken)
-            {
-                ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
-                CountWaiter? waiter = null;
-                lock (gate)
-                {
-                    if (current() >= count) return;
-                    waiter = new CountWaiter(count, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-                    waiters.Add(waiter);
-                }
-
-                try
-                {
-                    await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
-                }
-                finally
-                {
-                    lock (gate) waiters.Remove(waiter);
-                }
-            }
-
-            private static CountWaiter[] TakeSatisfiedWaiters(List<CountWaiter> waiters, int currentCount)
-            {
-                var ready = waiters.Where(waiter => currentCount >= waiter.RequiredCount).ToArray();
-                foreach (var waiter in ready) waiters.Remove(waiter);
-                return ready;
-            }
-
-            private static void Complete(IEnumerable<CountWaiter> waiters)
-            {
-                foreach (var waiter in waiters) waiter.Source.TrySetResult();
-            }
-
-            public sealed record Invocation(string Target);
-
-            private sealed record CountWaiter(int RequiredCount, TaskCompletionSource Source);
         }
 
-        public sealed class BlockingResultSink(int capacity) : ILocalProbeResultSink
+        public void AdvanceTo(long dueTimestamp)
         {
-            private readonly object gate = new();
-            private readonly List<LocalProbeResult> results = [];
-            private readonly List<ResultWaiter> resultWaiters = [];
-            private readonly List<CountWaiter> enteredWaiters = [];
-            private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            public bool BlockPublications { get; set; }
-            public bool ThrowOnPublish { get; set; }
-            public int PublishAttempts { get; private set; }
-            public IReadOnlyList<LocalProbeResult> Results { get { lock (gate) return results.ToArray(); } }
-            public int PendingResultWaiterCount { get { lock (gate) return resultWaiters.Count; } }
-            public int PendingEnteredWaiterCount { get { lock (gate) return enteredWaiters.Count; } }
-            public int TotalWaiterCount { get { lock (gate) return resultWaiters.Count + enteredWaiters.Count; } }
-
-            public void Publish(LocalProbeResult result)
-            {
-                CountWaiter[] entered;
-                var throws = false;
-                lock (gate)
-                {
-                    PublishAttempts++;
-                    entered = TakeSatisfiedWaiters(enteredWaiters, PublishAttempts);
-                    throws = ThrowOnPublish;
-                }
-
-                Complete(entered);
-                if (throws) throw new InvalidOperationException("fake sink failure");
-
-                if (BlockPublications)
-                {
-                    release.Task.GetAwaiter().GetResult();
-                }
-
-                lock (gate)
-                {
-                    if (results.Count >= capacity) throw new InvalidOperationException("Fake result sink capacity exceeded.");
-                    results.Add(result);
-                    ReleaseResultWaiters();
-                }
-            }
-
-            public void ReleaseAll() => release.TrySetResult();
-
-            public async Task<IReadOnlyList<LocalProbeResult>> WaitForResultsAsync(
-                int count,
-                CancellationToken cancellationToken = default)
-            {
-                ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
-                ResultWaiter? waiter = null;
-                lock (gate)
-                {
-                    if (results.Count >= count) return results.ToArray();
-                    waiter = new ResultWaiter(count, new TaskCompletionSource<IReadOnlyList<LocalProbeResult>>(
-                        TaskCreationOptions.RunContinuationsAsynchronously));
-                    resultWaiters.Add(waiter);
-                }
-
-                try
-                {
-                    return await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
-                }
-                finally
-                {
-                    lock (gate) resultWaiters.Remove(waiter);
-                }
-            }
-
-            public Task WaitForEnteredCountAsync(int count, CancellationToken cancellationToken) =>
-                WaitForCountAsync(enteredWaiters, () => PublishAttempts, count, cancellationToken);
-
-            public void Dispose()
-            {
-                ResultWaiter[] resultsToCancel;
-                CountWaiter[] enteredToCancel;
-                lock (gate)
-                {
-                    resultsToCancel = resultWaiters.ToArray();
-                    resultWaiters.Clear();
-                    enteredToCancel = enteredWaiters.ToArray();
-                    enteredWaiters.Clear();
-                }
-
-                ReleaseAll();
-                foreach (var waiter in resultsToCancel) waiter.Source.TrySetCanceled();
-                foreach (var waiter in enteredToCancel) waiter.Source.TrySetCanceled();
-            }
-
-            private async Task WaitForCountAsync(
-                List<CountWaiter> waiters,
-                Func<int> current,
-                int count,
-                CancellationToken cancellationToken)
-            {
-                ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
-                CountWaiter? waiter = null;
-                lock (gate)
-                {
-                    if (current() >= count) return;
-                    waiter = new CountWaiter(count, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-                    waiters.Add(waiter);
-                }
-
-                try
-                {
-                    await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
-                }
-                finally
-                {
-                    lock (gate) waiters.Remove(waiter);
-                }
-            }
-
-            private void ReleaseResultWaiters()
-            {
-                var ready = resultWaiters.Where(waiter => results.Count >= waiter.RequiredCount).ToArray();
-                foreach (var waiter in ready) resultWaiters.Remove(waiter);
-                var snapshot = results.ToArray();
-                foreach (var waiter in ready) waiter.Source.TrySetResult(snapshot);
-            }
-
-            private static CountWaiter[] TakeSatisfiedWaiters(List<CountWaiter> waiters, int currentCount)
-            {
-                var ready = waiters.Where(waiter => currentCount >= waiter.RequiredCount).ToArray();
-                foreach (var waiter in ready) waiters.Remove(waiter);
-                return ready;
-            }
-
-            private static void Complete(IEnumerable<CountWaiter> waiters)
-            {
-                foreach (var waiter in waiters) waiter.Source.TrySetResult();
-            }
-
-            private sealed record ResultWaiter(
-                int RequiredCount,
-                TaskCompletionSource<IReadOnlyList<LocalProbeResult>> Source);
-
-            private sealed record CountWaiter(int RequiredCount, TaskCompletionSource Source);
+            long current;
+            lock (gate) current = timestamp;
+            ArgumentOutOfRangeException.ThrowIfLessThan(dueTimestamp, current);
+            AdvanceBy(TimeSpan.FromTicks(dueTimestamp - current));
         }
+
+        public async Task<DelayRegistration> WaitForPendingDelayRegisteredAfterAsync(long sequence, CancellationToken cancellationToken)
+        {
+            DelayRegistrationWaiter? waiter = null;
+            lock (gate)
+            {
+                var registered = pending
+                    .Select(delay => delay.Registration)
+                    .Where(registration => registration.Sequence > sequence)
+                    .OrderBy(registration => registration.Sequence)
+                    .FirstOrDefault();
+                if (registered is not null) return registered;
+
+                waiter = new DelayRegistrationWaiter(
+                    sequence,
+                    new TaskCompletionSource<DelayRegistration>(TaskCreationOptions.RunContinuationsAsynchronously));
+                registrationWaiters.Add(waiter);
+            }
+
+            try
+            {
+                return await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
+            }
+            finally
+            {
+                lock (gate) registrationWaiters.Remove(waiter);
+            }
+        }
+
+        public Task WaitForCancelledDelayCountAsync(int count, CancellationToken cancellationToken) =>
+            WaitForCountAsync(cancelledDelayWaiters, () => CancelledDelayCount, count, cancellationToken);
+
+        public void CancelAll()
+        {
+            PendingDelay[] delays;
+            lock (gate)
+            {
+                delays = pending.ToArray();
+                pending.Clear();
+            }
+
+            foreach (var delay in delays)
+            {
+                delay.DisposeRegistration();
+                delay.Source.TrySetCanceled();
+            }
+
+            ReleaseSatisfiedWaiters();
+        }
+
+        public void Dispose()
+        {
+            PendingDelay[] pendingDelays;
+            CountWaiter[] countWaiters;
+            DelayRegistrationWaiter[] sequenceWaiters;
+            lock (gate)
+            {
+                pendingDelays = pending.ToArray();
+                pending.Clear();
+                countWaiters = pendingDelayWaiters.Concat(cancelledDelayWaiters).ToArray();
+                pendingDelayWaiters.Clear();
+                cancelledDelayWaiters.Clear();
+                sequenceWaiters = registrationWaiters.ToArray();
+                registrationWaiters.Clear();
+            }
+
+            foreach (var delay in pendingDelays)
+            {
+                delay.DisposeRegistration();
+                delay.Source.TrySetCanceled();
+            }
+
+            foreach (var waiter in countWaiters) waiter.Source.TrySetCanceled();
+            foreach (var waiter in sequenceWaiters) waiter.Source.TrySetCanceled();
+        }
+
+        private async Task WaitForCountAsync(
+            List<CountWaiter> waiters,
+            Func<int> currentCount,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
+            CountWaiter? waiter = null;
+            lock (gate)
+            {
+                if (currentCount() >= count) return;
+                waiter = new CountWaiter(count, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                waiters.Add(waiter);
+            }
+
+            try
+            {
+                await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
+            }
+            finally
+            {
+                lock (gate) waiters.Remove(waiter);
+            }
+        }
+
+        private void ReleaseSatisfiedWaiters()
+        {
+            CountWaiter[] pendingReady;
+            CountWaiter[] cancelledReady;
+            lock (gate)
+            {
+                pendingReady = TakeSatisfiedWaiters(pendingDelayWaiters, pending.Count);
+                cancelledReady = TakeSatisfiedWaiters(cancelledDelayWaiters, CancelledDelayCount);
+            }
+
+            Complete(pendingReady);
+            Complete(cancelledReady);
+        }
+
+        private static CountWaiter[] TakeSatisfiedWaiters(List<CountWaiter> waiters, int currentCount)
+        {
+            var ready = waiters.Where(waiter => currentCount >= waiter.RequiredCount).ToArray();
+            foreach (var waiter in ready) waiters.Remove(waiter);
+            return ready;
+        }
+
+        private static void Complete(IEnumerable<CountWaiter> waiters)
+        {
+            foreach (var waiter in waiters) waiter.Source.TrySetResult();
+        }
+
+        private void ReleaseRegisteredWaiters(DelayRegistration registration)
+        {
+            DelayRegistrationWaiter[] ready;
+            lock (gate)
+            {
+                ready = registrationWaiters
+                    .Where(waiter => registration.Sequence > waiter.AfterSequence)
+                    .ToArray();
+                foreach (var waiter in ready) registrationWaiters.Remove(waiter);
+            }
+
+            foreach (var waiter in ready) waiter.Source.TrySetResult(registration);
+        }
+
+        public sealed record DelayRegistration(long Sequence, long DueTimestamp);
+
+        private sealed record DelayRegistrationWaiter(
+            long AfterSequence,
+            TaskCompletionSource<DelayRegistration> Source);
+
+        private sealed record CountWaiter(int RequiredCount, TaskCompletionSource Source);
+
+        private sealed record PendingDelay(
+            DelayRegistration Registration,
+            TaskCompletionSource Source,
+            Action DisposeRegistration);
+    }
+
+    public sealed class ProbeExecutionClock : IProbeExecutionClock
+    {
+        private long timestamp;
+        public DateTimeOffset UtcNow { get; private set; } = DateTimeOffset.UnixEpoch;
+
+        public DateTimeOffset GetUtcNow() => UtcNow;
+
+        public long GetTimestamp() => timestamp;
+
+        public TimeSpan GetElapsedTime(long startingTimestamp, long endingTimestamp) =>
+            TimeSpan.FromTicks(endingTimestamp - startingTimestamp);
+
+        public ValueTask DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+        {
+            UtcNow += delay;
+            timestamp += delay.Ticks;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    public sealed class RecordingProbeTransport(int capacity) : IProbeTransport
+    {
+        private readonly object gate = new();
+        private readonly List<Invocation> invocations = [];
+        private readonly List<CountWaiter> startWaiters = [];
+        private readonly List<CountWaiter> cancelWaiters = [];
+        private readonly List<CountWaiter> completionWaiters = [];
+        private readonly List<TaskCompletionSource<ProbeTransportReply>> blocked = [];
+
+        public bool BlockCompletions { get; set; }
+        public bool CompleteCancelledWithSuccess { get; set; }
+        public HashSet<string> ThrowOnTargets { get; } = new(StringComparer.Ordinal);
+        public IReadOnlyList<Invocation> Invocations { get { lock (gate) return invocations.ToArray(); } }
+        public int CancellationCount { get; private set; }
+        public int CompletionCount { get; private set; }
+        public int PendingStartWaiterCount { get { lock (gate) return startWaiters.Count; } }
+        public int TotalWaiterCount { get { lock (gate) return startWaiters.Count + cancelWaiters.Count + completionWaiters.Count; } }
+
+        public ValueTask<ProbeTransportReply> SendAsync(ProbeTransportRequest request, CancellationToken cancellationToken)
+        {
+            TaskCompletionSource<ProbeTransportReply>? blockedCompletion = null;
+            CountWaiter[] started;
+            var throws = false;
+            lock (gate)
+            {
+                if (invocations.Count >= capacity) throw new InvalidOperationException("Fake transport capacity exceeded.");
+                invocations.Add(new Invocation(request.Target));
+                started = TakeSatisfiedWaiters(startWaiters, invocations.Count);
+                throws = ThrowOnTargets.Contains(request.Target);
+                if (!throws && BlockCompletions)
+                {
+                    blockedCompletion = new TaskCompletionSource<ProbeTransportReply>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    blocked.Add(blockedCompletion);
+                }
+            }
+
+            Complete(started);
+            if (throws) throw new InvalidOperationException("frozen fake transport failure");
+
+            if (blockedCompletion is null)
+            {
+                MarkCompleted();
+                return ValueTask.FromResult(new ProbeTransportReply(ProbeTransportStatus.Succeeded, TimeSpan.FromMilliseconds(1)));
+            }
+
+            cancellationToken.Register(() =>
+            {
+                CountWaiter[] cancelled;
+                lock (gate)
+                {
+                    CancellationCount++;
+                    cancelled = TakeSatisfiedWaiters(cancelWaiters, CancellationCount);
+                }
+
+                Complete(cancelled);
+
+                if (!CompleteCancelledWithSuccess)
+                {
+                    blockedCompletion.TrySetCanceled(cancellationToken);
+                }
+            });
+
+            return AwaitBlocked(blockedCompletion);
+        }
+
+        public void ReleaseAll()
+        {
+            TaskCompletionSource<ProbeTransportReply>[] completions;
+            lock (gate)
+            {
+                completions = blocked.ToArray();
+                blocked.Clear();
+            }
+
+            foreach (var completion in completions)
+            {
+                completion.TrySetResult(new ProbeTransportReply(ProbeTransportStatus.Succeeded, TimeSpan.FromMilliseconds(1)));
+            }
+        }
+
+        public Task WaitForStartedCountAsync(int count, CancellationToken cancellationToken) =>
+            WaitForCountAsync(startWaiters, () => invocations.Count, count, cancellationToken);
+
+        public Task WaitForCancellationCountAsync(int count, CancellationToken cancellationToken) =>
+            WaitForCountAsync(cancelWaiters, () => CancellationCount, count, cancellationToken);
+
+        public Task WaitForCompletionCountAsync(int count, CancellationToken cancellationToken) =>
+            WaitForCountAsync(completionWaiters, () => CompletionCount, count, cancellationToken);
+
+        private async ValueTask<ProbeTransportReply> AwaitBlocked(TaskCompletionSource<ProbeTransportReply> completion)
+        {
+            try
+            {
+                return await completion.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                MarkCompleted();
+            }
+        }
+
+        private void MarkCompleted()
+        {
+            CountWaiter[] completed;
+            lock (gate)
+            {
+                CompletionCount++;
+                completed = TakeSatisfiedWaiters(completionWaiters, CompletionCount);
+            }
+
+            Complete(completed);
+        }
+
+        public void Dispose()
+        {
+            CountWaiter[] waiters;
+            lock (gate)
+            {
+                waiters = startWaiters.Concat(cancelWaiters).Concat(completionWaiters).ToArray();
+                startWaiters.Clear();
+                cancelWaiters.Clear();
+                completionWaiters.Clear();
+            }
+
+            foreach (var waiter in waiters) waiter.Source.TrySetCanceled();
+        }
+
+        private async Task WaitForCountAsync(
+            List<CountWaiter> waiters,
+            Func<int> current,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
+            CountWaiter? waiter = null;
+            lock (gate)
+            {
+                if (current() >= count) return;
+                waiter = new CountWaiter(count, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                waiters.Add(waiter);
+            }
+
+            try
+            {
+                await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
+            }
+            finally
+            {
+                lock (gate) waiters.Remove(waiter);
+            }
+        }
+
+        private static CountWaiter[] TakeSatisfiedWaiters(List<CountWaiter> waiters, int currentCount)
+        {
+            var ready = waiters.Where(waiter => currentCount >= waiter.RequiredCount).ToArray();
+            foreach (var waiter in ready) waiters.Remove(waiter);
+            return ready;
+        }
+
+        private static void Complete(IEnumerable<CountWaiter> waiters)
+        {
+            foreach (var waiter in waiters) waiter.Source.TrySetResult();
+        }
+
+        public sealed record Invocation(string Target);
+
+        private sealed record CountWaiter(int RequiredCount, TaskCompletionSource Source);
+    }
+
+    public sealed class BlockingResultSink(int capacity) : ILocalProbeResultSink
+    {
+        private readonly object gate = new();
+        private readonly List<LocalProbeResult> results = [];
+        private readonly List<ResultWaiter> resultWaiters = [];
+        private readonly List<CountWaiter> enteredWaiters = [];
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool BlockPublications { get; set; }
+        public bool ThrowOnPublish { get; set; }
+        public int PublishAttempts { get; private set; }
+        public IReadOnlyList<LocalProbeResult> Results { get { lock (gate) return results.ToArray(); } }
+        public int PendingResultWaiterCount { get { lock (gate) return resultWaiters.Count; } }
+        public int PendingEnteredWaiterCount { get { lock (gate) return enteredWaiters.Count; } }
+        public int TotalWaiterCount { get { lock (gate) return resultWaiters.Count + enteredWaiters.Count; } }
+
+        public void Publish(LocalProbeResult result)
+        {
+            CountWaiter[] entered;
+            var throws = false;
+            lock (gate)
+            {
+                PublishAttempts++;
+                entered = TakeSatisfiedWaiters(enteredWaiters, PublishAttempts);
+                throws = ThrowOnPublish;
+            }
+
+            Complete(entered);
+            if (throws) throw new InvalidOperationException("fake sink failure");
+
+            if (BlockPublications)
+            {
+                release.Task.GetAwaiter().GetResult();
+            }
+
+            lock (gate)
+            {
+                if (results.Count >= capacity) throw new InvalidOperationException("Fake result sink capacity exceeded.");
+                results.Add(result);
+                ReleaseResultWaiters();
+            }
+        }
+
+        public void ReleaseAll() => release.TrySetResult();
+
+        public async Task<IReadOnlyList<LocalProbeResult>> WaitForResultsAsync(
+            int count,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
+            ResultWaiter? waiter = null;
+            lock (gate)
+            {
+                if (results.Count >= count) return results.ToArray();
+                waiter = new ResultWaiter(count, new TaskCompletionSource<IReadOnlyList<LocalProbeResult>>(
+                    TaskCreationOptions.RunContinuationsAsynchronously));
+                resultWaiters.Add(waiter);
+            }
+
+            try
+            {
+                return await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
+            }
+            finally
+            {
+                lock (gate) resultWaiters.Remove(waiter);
+            }
+        }
+
+        public Task WaitForEnteredCountAsync(int count, CancellationToken cancellationToken) =>
+            WaitForCountAsync(enteredWaiters, () => PublishAttempts, count, cancellationToken);
+
+        public void Dispose()
+        {
+            ResultWaiter[] resultsToCancel;
+            CountWaiter[] enteredToCancel;
+            lock (gate)
+            {
+                resultsToCancel = resultWaiters.ToArray();
+                resultWaiters.Clear();
+                enteredToCancel = enteredWaiters.ToArray();
+                enteredWaiters.Clear();
+            }
+
+            ReleaseAll();
+            foreach (var waiter in resultsToCancel) waiter.Source.TrySetCanceled();
+            foreach (var waiter in enteredToCancel) waiter.Source.TrySetCanceled();
+        }
+
+        private async Task WaitForCountAsync(
+            List<CountWaiter> waiters,
+            Func<int> current,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
+            CountWaiter? waiter = null;
+            lock (gate)
+            {
+                if (current() >= count) return;
+                waiter = new CountWaiter(count, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                waiters.Add(waiter);
+            }
+
+            try
+            {
+                await waiter.Source.Task.WaitAsync(GuardTimeout, cancellationToken);
+            }
+            finally
+            {
+                lock (gate) waiters.Remove(waiter);
+            }
+        }
+
+        private void ReleaseResultWaiters()
+        {
+            var ready = resultWaiters.Where(waiter => results.Count >= waiter.RequiredCount).ToArray();
+            foreach (var waiter in ready) resultWaiters.Remove(waiter);
+            var snapshot = results.ToArray();
+            foreach (var waiter in ready) waiter.Source.TrySetResult(snapshot);
+        }
+
+        private static CountWaiter[] TakeSatisfiedWaiters(List<CountWaiter> waiters, int currentCount)
+        {
+            var ready = waiters.Where(waiter => currentCount >= waiter.RequiredCount).ToArray();
+            foreach (var waiter in ready) waiters.Remove(waiter);
+            return ready;
+        }
+
+        private static void Complete(IEnumerable<CountWaiter> waiters)
+        {
+            foreach (var waiter in waiters) waiter.Source.TrySetResult();
+        }
+
+        private sealed record ResultWaiter(
+            int RequiredCount,
+            TaskCompletionSource<IReadOnlyList<LocalProbeResult>> Source);
+
+        private sealed record CountWaiter(int RequiredCount, TaskCompletionSource Source);
+    }
 }
