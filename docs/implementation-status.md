@@ -38,7 +38,8 @@ The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13
 | WP-02 | Approved | Backend/PostgreSQL plus inventory frontend pass together: metadata, migration, APIs, validation, authorization, audit, CSV, OpenAPI, enabled-only Device uniqueness, accessible UI, component tests, and critical-flow browser tests. |
 | WP-03 | Implemented and integration-verified | Additive v1 Agent endpoints/DTOs, separate Agent credentials, one additive PostgreSQL migration, enrollment/revocation/rotation, heartbeat/offline processing, immutable configuration snapshots/acknowledgements/rollback, dual AllowedNetworks enforcement, DPAPI/ACL-backed Agent storage, and generated OpenAPI are verified. |
 | WP-04 | Implemented and integration-verified locally | Deterministic probe-runtime foundation verified with fake time/transport: IPv4-literal scope validation, stable jitter/monotonic cadence, bounded admission/non-overlap, coalesced missed slots, sequential attempts, immutable local results, fixed outcome categories, cancellation, and cardinality-safe observability. No real ICMP, persistence, delivery, ingestion, UI, deployment, or Windows Service evidence is included. |
-| WP-05 through WP-11 | Not started | Continue in dependency order after the next approved checkpoint. |
+| WP-05 | Design proposed | Durable local SQLite outbox and idempotent Backend ingestion are specified in ADR-011 and the proposed WP-05 contract. UA-11 approves the 5 GB quota, reserve, pressure thresholds, suspension/resumption, cleanup, and no-silent-loss policy; implementation is not started. |
+| WP-06 through WP-11 | Not started | Continue in dependency order after the next approved checkpoint. |
 
 ## Stable contract decision
 
@@ -112,4 +113,4 @@ This checkpoint verifies a deterministic local runtime using fake time and fake 
 
 ## Next checkpoint
 
-WP-04 is a deterministic probe-runtime foundation, not an operational probe release. UA-03 remains mandatory before any real ICMP validation; UA-04 remains mandatory before Windows Service operational evidence. WP-05+ owns persistence, delivery, ingestion, and all central outcomes. Do not treat documentation CIDRs or local Compose credentials as production authorization.
+WP-04 is a deterministic probe-runtime foundation, not an operational probe release. WP-05 design now assigns durable result persistence, at-least-once delivery, idempotent ingestion, and the UA-11-approved 5 GB/reserve pressure policy to a bounded SQLite/PostgreSQL boundary; implementation remains unstarted. UA-03 remains mandatory before any real ICMP validation; UA-04 remains mandatory before Windows Service operational evidence. Do not treat documentation CIDRs or local Compose credentials as production authorization.
