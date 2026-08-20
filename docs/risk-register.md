@@ -7,7 +7,7 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 | --- | --- | --- | --- | --- | --- | --- |
 | R-01 | ICMP needs privileges or is blocked and is not proof of application health. | H | H | WP-04 deterministic fake-transport foundation, fixed categorized errors, IPv4-only dual AllowedNetworks enforcement, controlled targets, documented Windows limitation; no discovery/scanning. Real ICMP remains separately gated. | Agent + IT, WP-03/04/10 | M/H |
 | R-02 | Windows Service account/install/recovery cannot be proven here. | M | H | Idempotent installer, Program Files/ProgramData split, queue preservation, disposable Windows reboot/recovery test. | Agent + IT, WP-10/11 | L/H |
-| R-03 | A 72-hour queue exhausts disk or silently loses data. | M | H | Capacity formula, quota, WAL/transactions, explicit drop policy, dead letters, critical metric/log, disk-full tests. | Agent, WP-05/11 | L/H |
+| R-03 | A 72-hour queue exhausts disk or silently loses data. | M | H | UA-11 approves a 5 GB quota, greater-of-2-GB-or-10%-volume reserve, 80% degraded health, 95%/reserve-breach production stop, below-70% resume, acknowledged cleanup within 24 hours, durable quarantine, and no age-based unacknowledged deletion; disk-full and recovery tests are required. | Agent, WP-05/11 | M/H |
 | R-04 | Duplicate batches/runs create duplicate metrics, transitions, incidents, or notifications. | H | H | Unique batch/run IDs, durable dedupe, one-open-incident constraint, transactional outbox/delivery keys. | Backend, WP-05/06/08 | L/H |
 | R-05 | Late/clock-skewed events corrupt current state. | H | H | UTC, skew flag, per-Probe watermark, historical-only late writes, NTP, deterministic tests. | Backend/Agent, WP-05/06 | L/H |
 | R-06 | Agent outage causes a DOWN/notification storm. | M | H | Heartbeat/freshness expiry forces UNKNOWN; state-matrix and E2E tests. | Backend, WP-03/06/11 | L/H |
@@ -50,6 +50,7 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 | A-08 | Normal Device workflow is soft-disable; permanent deletion is exceptional, Administrator-only, and audited. | WP-02 |
 | A-09 | Agent pull configuration is effective only after acknowledgement and retains a last-known-good version. | WP-03 |
 | A-10 | Direct dependencies/images are version-pinned; automated updates require review. | Continuous/WP-11 |
+| A-11 | UA-11-approved MVP policy: 5 GB Agent outbox quota; reserve is greater of 2 GB or 10% of hosting volume; degrade at 80%; stop new production/scheduling at 95% or reserve breach; resume below 70%; remove acknowledged rows within 24 hours; never age-delete unacknowledged rows. | Revisit through governed policy change |
 
 ## Checkpoint notes
 

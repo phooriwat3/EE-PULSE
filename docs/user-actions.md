@@ -17,6 +17,7 @@ Never place real credentials, keys, tokens, SMTP passwords, or certificates in t
 | 9 | UA-08 | Messaging / security | Approve SMTP or webhook allowlist, sender, recipients, escalation owners, quiet hours, and test recipient. | Approved test delivery and redaction review. | WP-08 production validation. | Fake local receivers only. |
 | 10 | UA-09 | Data / operations | Decide raw/aggregate/audit retention, backup target, RPO/RTO, and restore authority. | Isolated restore rehearsal meets policy. | WP-09/11 acceptance. | Conservative documented local defaults. |
 | 11 | UA-10 | Product / change owners | Name UAT testers, window, change ticket, go-live owner, and rollback owner. | Signed go/no-go checklist. | Production release. | No deployment. |
+| 12 | UA-11 | Product / data / operations | Approved 2026-08-20: 5 GB default Agent quota; reserve is greater of 2 GB or 10% of hosting volume; degraded at 80%; stop new Probe-result production/scheduling at 95% or reserve breach; resume below 70%; clean acknowledged records within 24 hours; preserve unacknowledged and corrupt files; prohibit silent loss. | Approval recorded in ADR-011 and WP-05 acceptance plan. | Closed; implementation must conform. | No additional placeholder. |
 
 ## Actions approaching the next checkpoint
 
@@ -26,6 +27,7 @@ Never place real credentials, keys, tokens, SMTP passwords, or certificates in t
 - UA-03 is required before any real ICMP environment test. WP-04 accepts IPv4 literals only; no network scanning, DNS resolution, IP discovery, or unapproved probing is authorized.
 - WP-03 implementation is locally verified: the Server may narrow but cannot remotely expand the Agent's non-empty AllowedNetworks ceiling. UA-03 remains required before real enrollment/probing; approve only explicit CIDRs and controlled targets.
 - UA-06 is not needed for this local WP-02 checkpoint, but production Web access intentionally remains denied until OIDC is configured and integrated.
+- UA-11 is closed: its approved MVP policy is recorded in ADR-011, the WP-05 contract, recovery runbook, and acceptance plan. Any policy change requires renewed approval.
 
 WP-04 does not provide real ICMP, host/DI wiring, Windows Service, persistence, delivery, backend ingestion, UI, or deployment evidence. Before release or real Agent use, complete UA-03/04/05/06/07 as applicable: approved CIDRs and ICMP/firewall policy, disposable Windows service/DPAPI/ACL/recovery evidence, central runtime/backups, OIDC, and TLS/proxy/DNS. Obtain checkpoint commit/PR approval before external repository writes.
 
