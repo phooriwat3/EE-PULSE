@@ -434,101 +434,101 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
             {
                 // From this point the durable claim, rather than caller cancellation, governs recovery safety.
                 var transitionCancellationToken = CancellationToken.None;
-            OutboxRecoveryState? marker;
-            try
-            {
-                marker = await recoveryMarkerStore.ReadAsync(databasePath, transitionCancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception)
-            {
-                throw FailClosed(new OutboxCorruptionException(new(OutboxRecoveryStatus.RecoveryMarkerFailed, null)));
-            }
-
-            if (marker is not null)
-            {
-                throw FailClosed(new OutboxCorruptionException(marker));
-            }
-
-            if (FindExistingSnapshot() is { } residualEvidencePath)
-            {
-                throw await FailWithRecoveryMarkerAsync(
-                    new(OutboxRecoveryStatus.SnapshotNotAdmitted, residualEvidencePath), transitionCancellationToken).ConfigureAwait(false);
-            }
-
-            var existingDatabase = File.Exists(databasePath);
-            if (existingDatabase)
-            {
-                string? preflightEvidencePath = null;
-                if (new FileInfo(databasePath).Length == 0)
-                {
-                    throw await QuarantineAndFailClosedAsync(null, transitionCancellationToken).ConfigureAwait(false);
-                }
-
+                OutboxRecoveryState? marker;
                 try
                 {
-                    preflightEvidencePath = await CreatePreflightEvidenceSnapshotAsync(transitionCancellationToken).ConfigureAwait(false);
+                    marker = await recoveryMarkerStore.ReadAsync(databasePath, transitionCancellationToken).ConfigureAwait(false);
                 }
-                catch (OutboxCorruptionException)
+                catch (OperationCanceledException)
                 {
                     throw;
                 }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    throw await FailWithRecoveryMarkerAsync(
-                        new(OutboxRecoveryStatus.SnapshotNotAdmitted, preflightEvidencePath), transitionCancellationToken).ConfigureAwait(false);
-                }
-
-                if (preflightEvidencePath is null)
-                {
-                    throw await FailWithRecoveryMarkerAsync(
-                        new(OutboxRecoveryStatus.SnapshotNotAdmitted, null), transitionCancellationToken).ConfigureAwait(false);
-                }
-
-                try
-                {
-                    await ValidateExistingDatabaseAsync(transitionCancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    throw await QuarantineAndFailClosedAsync(preflightEvidencePath, transitionCancellationToken).ConfigureAwait(false);
-                }
-
-                var unsupportedSchemaVersion = await FindUnsupportedSchemaVersionAsync(transitionCancellationToken).ConfigureAwait(false);
-                if (unsupportedSchemaVersion is { } version)
-                {
-                    DeletePreflightEvidenceSnapshot(preflightEvidencePath);
-                    throw FailClosed(new OutboxUnsupportedSchemaException(version));
-                }
-
-                try
-                {
-                    DeletePreflightEvidenceSnapshot(preflightEvidencePath);
-                }
                 catch (Exception)
                 {
-                    throw await FailWithRecoveryMarkerAsync(
-                        new(OutboxRecoveryStatus.SnapshotCleanupFailed, preflightEvidencePath), transitionCancellationToken).ConfigureAwait(false);
+                    throw FailClosed(new OutboxCorruptionException(new(OutboxRecoveryStatus.RecoveryMarkerFailed, null)));
                 }
-            }
 
-            var connectionString = new SqliteConnectionStringBuilder
-            {
-                DataSource = databasePath,
-                Mode = existingDatabase ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadWriteCreate,
-                Cache = SqliteCacheMode.Shared,
-                DefaultTimeout = 5,
-            }.ToString();
-            await using (var connection = new SqliteConnection(connectionString))
-            {
-                await connection.OpenAsync(transitionCancellationToken).ConfigureAwait(false);
-                await ExecuteAsync(connection, "PRAGMA foreign_keys = ON;", transitionCancellationToken).ConfigureAwait(false);
-                await ExecuteAsync(connection, "PRAGMA journal_mode = WAL;", transitionCancellationToken).ConfigureAwait(false);
-                await ExecuteAsync(connection, "PRAGMA synchronous = FULL;", transitionCancellationToken).ConfigureAwait(false);
-                await ExecuteAsync(connection, """
+                if (marker is not null)
+                {
+                    throw FailClosed(new OutboxCorruptionException(marker));
+                }
+
+                if (FindExistingSnapshot() is { } residualEvidencePath)
+                {
+                    throw await FailWithRecoveryMarkerAsync(
+                        new(OutboxRecoveryStatus.SnapshotNotAdmitted, residualEvidencePath), transitionCancellationToken).ConfigureAwait(false);
+                }
+
+                var existingDatabase = File.Exists(databasePath);
+                if (existingDatabase)
+                {
+                    string? preflightEvidencePath = null;
+                    if (new FileInfo(databasePath).Length == 0)
+                    {
+                        throw await QuarantineAndFailClosedAsync(null, transitionCancellationToken).ConfigureAwait(false);
+                    }
+
+                    try
+                    {
+                        preflightEvidencePath = await CreatePreflightEvidenceSnapshotAsync(transitionCancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OutboxCorruptionException)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        throw await FailWithRecoveryMarkerAsync(
+                            new(OutboxRecoveryStatus.SnapshotNotAdmitted, preflightEvidencePath), transitionCancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (preflightEvidencePath is null)
+                    {
+                        throw await FailWithRecoveryMarkerAsync(
+                            new(OutboxRecoveryStatus.SnapshotNotAdmitted, null), transitionCancellationToken).ConfigureAwait(false);
+                    }
+
+                    try
+                    {
+                        await ValidateExistingDatabaseAsync(transitionCancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        throw await QuarantineAndFailClosedAsync(preflightEvidencePath, transitionCancellationToken).ConfigureAwait(false);
+                    }
+
+                    var unsupportedSchemaVersion = await FindUnsupportedSchemaVersionAsync(transitionCancellationToken).ConfigureAwait(false);
+                    if (unsupportedSchemaVersion is { } version)
+                    {
+                        DeletePreflightEvidenceSnapshot(preflightEvidencePath);
+                        throw FailClosed(new OutboxUnsupportedSchemaException(version));
+                    }
+
+                    try
+                    {
+                        DeletePreflightEvidenceSnapshot(preflightEvidencePath);
+                    }
+                    catch (Exception)
+                    {
+                        throw await FailWithRecoveryMarkerAsync(
+                            new(OutboxRecoveryStatus.SnapshotCleanupFailed, preflightEvidencePath), transitionCancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                var connectionString = new SqliteConnectionStringBuilder
+                {
+                    DataSource = databasePath,
+                    Mode = existingDatabase ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadWriteCreate,
+                    Cache = SqliteCacheMode.Shared,
+                    DefaultTimeout = 5,
+                }.ToString();
+                await using (var connection = new SqliteConnection(connectionString))
+                {
+                    await connection.OpenAsync(transitionCancellationToken).ConfigureAwait(false);
+                    await ExecuteAsync(connection, "PRAGMA foreign_keys = ON;", transitionCancellationToken).ConfigureAwait(false);
+                    await ExecuteAsync(connection, "PRAGMA journal_mode = WAL;", transitionCancellationToken).ConfigureAwait(false);
+                    await ExecuteAsync(connection, "PRAGMA synchronous = FULL;", transitionCancellationToken).ConfigureAwait(false);
+                    await ExecuteAsync(connection, """
                     CREATE TABLE IF NOT EXISTS probe_result_outbox (
                         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                         result_id TEXT NOT NULL UNIQUE,
@@ -562,19 +562,19 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
                         quarantined_at_ticks INTEGER NOT NULL
                     );
                     """, transitionCancellationToken).ConfigureAwait(false);
-            }
+                }
 
-            try
-            {
-                claim.Complete();
-            }
-            catch (Exception)
-            {
-                throw await FailWithRecoveryMarkerAsync(
-                    new(OutboxRecoveryStatus.SnapshotCleanupFailed, databasePath + ".snapshot-admission"), transitionCancellationToken).ConfigureAwait(false);
-            }
+                try
+                {
+                    claim.Complete();
+                }
+                catch (Exception)
+                {
+                    throw await FailWithRecoveryMarkerAsync(
+                        new(OutboxRecoveryStatus.SnapshotCleanupFailed, databasePath + ".snapshot-admission"), transitionCancellationToken).ConfigureAwait(false);
+                }
 
-            initialized = true;
+                initialized = true;
             }
         }
         finally

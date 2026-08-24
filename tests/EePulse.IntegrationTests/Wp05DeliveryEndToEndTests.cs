@@ -115,9 +115,9 @@ public sealed class Wp05DeliveryEndToEndTests
             using var forwardingClient = factory.CreateClient();
             using var responseLossHandler = new LoseFirstSuccessfulResultBatchResponseHandler(forwardingClient);
             using (var faultedDeliveryClient = new HttpClient(responseLossHandler, disposeHandler: false)
-                   {
-                       BaseAddress = forwardingClient.BaseAddress,
-                   })
+            {
+                BaseAddress = forwardingClient.BaseAddress,
+            })
             await using (var outbox = new SqliteProbeResultOutbox(databasePath))
             await using (var apiClient = new AgentApiClient(faultedDeliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
                              new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false)))
