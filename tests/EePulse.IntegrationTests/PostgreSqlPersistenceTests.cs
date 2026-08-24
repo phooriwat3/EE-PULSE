@@ -115,7 +115,7 @@ public sealed class PostgreSqlPersistenceTests
             var violation = await Assert.ThrowsAsync<PostgresException>(() => digestContext.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO agent_enrollment_tokens (id,agent_group_id,digest,label,expires_at,created_by,created_at,row_version) VALUES ({tokenId},{group.Id},{invalidDigest},{"invalid-digest"},{now.AddMinutes(15)},{Guid.NewGuid()},{now},{1L})", cancellationToken)); Assert.Equal(PostgresErrorCodes.CheckViolation, violation.SqlState);
         }
 
-        var indexAgent = new Agent(Guid.NewGuid(), group.Id, Guid.NewGuid(), "index-agent", "1.2.3", 20, now);
+        var indexAgent = new EePulse.Domain.Agents.Agent(Guid.NewGuid(), group.Id, Guid.NewGuid(), "index-agent", "1.2.3", 20, now);
         await using (var credentialSeed = new EePulseDbContext(options)) { credentialSeed.Add(indexAgent); credentialSeed.Add(new AgentCredential(Guid.NewGuid(), indexAgent.Id, new byte[32], AgentCredentialState.Active, now.AddDays(90), now.AddDays(75), now)); await credentialSeed.SaveChangesAsync(cancellationToken); }
         await using (var duplicateActive = new EePulseDbContext(options)) { duplicateActive.Add(new AgentCredential(Guid.NewGuid(), indexAgent.Id, new byte[32], AgentCredentialState.Active, now.AddDays(90), now.AddDays(75), now)); await Assert.ThrowsAsync<DbUpdateException>(() => duplicateActive.SaveChangesAsync(cancellationToken)); }
         await using (var pendingSeed = new EePulseDbContext(options)) { pendingSeed.Add(new AgentCredential(Guid.NewGuid(), indexAgent.Id, new byte[32], AgentCredentialState.Pending, now.AddDays(90), now.AddDays(75), now)); await pendingSeed.SaveChangesAsync(cancellationToken); }

@@ -83,3 +83,25 @@ internal sealed class AgentHeartbeatReceiptConfiguration : IEntityTypeConfigurat
 {
     public void Configure(EntityTypeBuilder<AgentHeartbeatReceipt> b) { b.ToTable("agent_heartbeat_receipts"); b.HasKey(x => new { x.AgentId, x.HeartbeatId }); b.Property(x => x.AgentId).HasColumnName("agent_id"); b.Property(x => x.HeartbeatId).HasColumnName("heartbeat_id"); b.Property(x => x.ReceivedAt).HasColumnName("received_at"); b.Property(x => x.ResponseJson).HasColumnName("response_json").HasColumnType("jsonb"); b.HasIndex(x => x.ReceivedAt).HasDatabaseName("ix_agent_heartbeat_receipts_received"); b.HasOne<Agent>().WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Restrict); }
 }
+
+internal sealed class ProbeResultLedgerEntryConfiguration : IEntityTypeConfiguration<ProbeResultLedgerEntry>
+{
+    public void Configure(EntityTypeBuilder<ProbeResultLedgerEntry> b)
+    {
+        b.ToTable("probe_result_ledger", t => t.HasCheckConstraint("ck_probe_result_ledger_payload_digest", "octet_length(immutable_payload_digest) = 32"));
+        b.HasKey(x => new { x.AgentId, x.ResultId });
+        b.Property(x => x.AgentId).HasColumnName("agent_id"); b.Property(x => x.ResultId).HasColumnName("result_id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id"); b.Property(x => x.ConfigurationVersion).HasColumnName("configuration_version");
+        b.Property(x => x.StartedAt).HasColumnName("started_at"); b.Property(x => x.EndedAt).HasColumnName("ended_at");
+        b.Property(x => x.AttemptCount).HasColumnName("attempt_count"); b.Property(x => x.SuccessfulAttemptCount).HasColumnName("successful_attempt_count");
+        b.Property(x => x.PacketLossRatio).HasColumnName("packet_loss_ratio").HasPrecision(18, 9);
+        b.Property(x => x.MinRttMilliseconds).HasColumnName("min_rtt_milliseconds").HasPrecision(18, 6);
+        b.Property(x => x.AverageRttMilliseconds).HasColumnName("average_rtt_milliseconds").HasPrecision(18, 6);
+        b.Property(x => x.MaxRttMilliseconds).HasColumnName("max_rtt_milliseconds").HasPrecision(18, 6);
+        b.Property(x => x.ErrorCategory).HasColumnName("error_category").HasMaxLength(32);
+        b.Property(x => x.ImmutablePayloadDigest).HasColumnName("immutable_payload_digest").HasColumnType("bytea"); b.Property(x => x.ReceivedAt).HasColumnName("received_at");
+        b.HasIndex(x => x.ReceivedAt).HasDatabaseName("ix_probe_result_ledger_received");
+        b.HasOne<Agent>().WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
+    }
+}

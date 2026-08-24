@@ -7,12 +7,13 @@ using System.Text.Json.Serialization;
 using EePulse.Agent.Core.Configuration;
 using EePulse.Agent.Core.Identity;
 using EePulse.Agent.Core.Networking;
+using EePulse.Agent.Core.Outbox;
 using EePulse.Agent.Core.Runtime;
 using EePulse.Contracts.Agents;
 
 namespace EePulse.Agent.Core.Transport;
 
-public sealed class AgentApiClient
+public sealed class AgentApiClient : IAsyncDisposable
 {
     private const int MaximumConfigurationBytes = 2 * 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
@@ -33,6 +34,8 @@ public sealed class AgentApiClient
     private readonly IAgentRevocationHandler revocationHandler;
     private readonly IAgentRetryDelay retryDelay;
     private readonly bool allowDevelopmentNetworks;
+    private readonly SemaphoreSlim authenticationRecovery = new(1, 1);
+    private int disposing;
 
     public AgentApiClient(
         HttpClient httpClient,
@@ -103,6 +106,71 @@ public sealed class AgentApiClient
             payload.DesiredConfigurationVersion);
         await identityStore.SaveAsync(identity, cancellationToken).ConfigureAwait(false);
         return identity;
+    }
+
+    public async ValueTask<ProbeResultIngestionBatchResponse> SendProbeResultBatchAsync(
+        AgentIdentity identity,
+        Guid batchId,
+        IReadOnlyList<ProbeResultEnvelope> results,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        if (batchId == Guid.Empty || results.Count is < 1 or > 1000 || results.Any(result => result.AgentId != identity.AgentId))
+        {
+            throw new ArgumentException("Probe-result batch is invalid.", nameof(results));
+        }
+
+        var body = new ProbeResultIngestionBatchRequest(
+            batchId,
+            results.Select(result => new ProbeResultIngestionEnvelope(
+                result.ResultSchemaVersion, result.ResultId, result.AgentId, result.ProbeId, result.ConfigurationVersion,
+                result.StartedAt, result.EndedAt, result.AttemptCount, result.SuccessfulAttemptCount, result.PacketLossRatio,
+                result.MinRttMilliseconds, result.AverageRttMilliseconds, result.MaxRttMilliseconds, result.ErrorCategory?.ToString())).ToArray());
+        using var request = CreateAuthenticatedRequest(
+            HttpMethod.Post,
+            $"api/v1/agents/{identity.AgentId:D}/result-batches",
+            identity.AuthenticationCredential.Secret,
+            body);
+        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (await HandleRevocationAsync(response, cancellationToken).ConfigureAwait(false))
+        {
+            throw new AgentApiException(HttpStatusCode.Gone, AgentProblemCodes.AgentRevoked);
+        }
+
+        var payload = await ReadSuccessAsync<ProbeResultIngestionBatchResponse>(response, cancellationToken).ConfigureAwait(false);
+        await PromotePendingAfterSuccessfulUseAsync(identity, cancellationToken).ConfigureAwait(false);
+        return payload;
+    }
+
+    /// <summary>Coordinates the existing pending-credential fallback after an authenticated operation is rejected.</summary>
+    public async ValueTask<AgentIdentity> RecoverAuthenticationAsync(CancellationToken cancellationToken)
+    {
+        ThrowIfDisposing();
+        await authenticationRecovery.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposing();
+            var current = await identityStore.LoadAsync(cancellationToken).ConfigureAwait(false) ??
+                          throw new InvalidOperationException("Agent identity was removed.");
+            return current.PendingCredential is null
+                ? current
+                : await DiscardPendingCredentialAsync(current, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            authenticationRecovery.Release();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref disposing, 1) != 0)
+        {
+            return;
+        }
+
+        await authenticationRecovery.WaitAsync().ConfigureAwait(false);
+        authenticationRecovery.Dispose();
     }
 
     public async ValueTask<AgentHeartbeatResponse> SendHeartbeatAsync(
@@ -373,6 +441,11 @@ public sealed class AgentApiClient
         var request = new HttpRequestMessage(method, relativeUri);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential);
         return request;
+    }
+
+    private void ThrowIfDisposing()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposing) != 0, this);
     }
 
     private static HttpRequestMessage CreateAuthenticatedRequest<T>(

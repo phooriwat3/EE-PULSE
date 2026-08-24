@@ -1,5 +1,34 @@
 namespace EePulse.Contracts.Agents;
 
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+public sealed record ProbeResultIngestionBatchRequest(
+    Guid BatchId,
+    IReadOnlyList<ProbeResultIngestionEnvelope> Results);
+
+[System.Text.Json.Serialization.JsonUnmappedMemberHandling(System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+public sealed record ProbeResultIngestionEnvelope(
+    int ResultSchemaVersion,
+    Guid ResultId,
+    Guid AgentId,
+    Guid ProbeId,
+    long ConfigurationVersion,
+    DateTimeOffset StartedAt,
+    DateTimeOffset EndedAt,
+    int AttemptCount,
+    int SuccessfulAttemptCount,
+    decimal PacketLossRatio,
+    decimal? MinRttMilliseconds,
+    decimal? AverageRttMilliseconds,
+    decimal? MaxRttMilliseconds,
+    string? ErrorCategory);
+
+public sealed record ProbeResultIngestionBatchResponse(
+    Guid BatchId,
+    IReadOnlyList<Guid> AcceptedResultIds,
+    IReadOnlyList<RejectedProbeResultIngestion> Rejections);
+
+public sealed record RejectedProbeResultIngestion(Guid ResultId, string Code);
+
 public sealed record ProbeResultBatchRequest(
     int SchemaVersion,
     Guid AgentId,

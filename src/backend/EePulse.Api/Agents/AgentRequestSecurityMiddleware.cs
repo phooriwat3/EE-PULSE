@@ -15,21 +15,22 @@ public sealed class AgentRequestSecurityMiddleware(RequestDelegate next, IWebHos
         { await WriteProblem(context, 403, AgentProblemCodes.AgentAuthenticationRequired, "HTTPS is required for Agent operations."); return; }
         if (IsLimitedBody(context.Request.Method, path))
         {
-            const long maximum = 32 * 1024;
-            if (context.Request.ContentLength > maximum) { await WriteProblem(context, 413, AgentProblemCodes.RequestInvalid, "Request body exceeds 32 KiB."); return; }
+            var maximum = IsResultBatch(path) ? 1024 * 1024 : 32 * 1024;
+            if (context.Request.ContentLength > maximum) { await WriteProblem(context, 413, AgentProblemCodes.RequestInvalid, $"Request body exceeds {maximum / 1024} KiB."); return; }
             var feature = context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
             if (feature is { IsReadOnly: false }) feature.MaxRequestBodySize = maximum;
             context.Request.EnableBuffering((int)maximum, maximum);
             var buffer = new byte[8192]; long total = 0;
             try
             {
-                while (true) { var read = await context.Request.Body.ReadAsync(buffer, context.RequestAborted); if (read == 0) break; total += read; if (total > maximum) { context.Request.Body.Position = 0; await WriteProblem(context, 413, AgentProblemCodes.RequestInvalid, "Request body exceeds 32 KiB."); return; } }
+                while (true) { var read = await context.Request.Body.ReadAsync(buffer, context.RequestAborted); if (read == 0) break; total += read; if (total > maximum) { context.Request.Body.Position = 0; await WriteProblem(context, 413, AgentProblemCodes.RequestInvalid, $"Request body exceeds {maximum / 1024} KiB."); return; } }
                 context.Request.Body.Position = 0;
                 try
                 {
                     using var json = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
                     context.Request.Body.Position = 0;
-                    if (HasNonZuluTimestamp(json.RootElement, "sentAt") || HasNonZuluTimestamp(json.RootElement, "appliedAt"))
+                    if (HasNonZuluTimestamp(json.RootElement, "sentAt") || HasNonZuluTimestamp(json.RootElement, "appliedAt") ||
+                        (IsResultBatch(path) && HasNonZuluResultTimestamp(json.RootElement)))
                     { await WriteProblem(context, 400, AgentProblemCodes.TimestampNotUtc, "Timestamps must use RFC 3339 UTC Z form."); return; }
                     if (json.RootElement.ValueKind == JsonValueKind.Object &&
                         (json.RootElement.TryGetProperty("command", out _) || json.RootElement.TryGetProperty("url", out _)))
@@ -42,7 +43,7 @@ public sealed class AgentRequestSecurityMiddleware(RequestDelegate next, IWebHos
                     return;
                 }
             }
-            catch (Exception exception) when (exception is BadHttpRequestException or IOException) { await WriteProblem(context, 413, AgentProblemCodes.RequestInvalid, "Request body exceeds 32 KiB."); return; }
+            catch (Exception exception) when (exception is BadHttpRequestException or IOException) { await WriteProblem(context, 413, AgentProblemCodes.RequestInvalid, $"Request body exceeds {maximum / 1024} KiB."); return; }
             finally { CryptographicOperations.ZeroMemory(buffer); }
         }
         try { await next(context); }
@@ -50,7 +51,8 @@ public sealed class AgentRequestSecurityMiddleware(RequestDelegate next, IWebHos
         { await WriteProblem(context, 400, AgentProblemCodes.RequestInvalid, "Request body is malformed or contains unsupported members."); }
     }
     private static bool IsLimitedBody(string method, PathString path) => method == HttpMethods.Post &&
-        (path == "/api/v1/agents/enroll" || path.Value?.EndsWith("/heartbeat", StringComparison.Ordinal) == true || path.Value?.EndsWith("/configuration/acknowledgements", StringComparison.Ordinal) == true);
+        (path == "/api/v1/agents/enroll" || path.Value?.EndsWith("/heartbeat", StringComparison.Ordinal) == true || path.Value?.EndsWith("/configuration/acknowledgements", StringComparison.Ordinal) == true || IsResultBatch(path));
+    private static bool IsResultBatch(PathString path) => path.Value?.EndsWith("/result-batches", StringComparison.Ordinal) == true;
     private static async Task WriteProblem(HttpContext context, int status, string code, string detail)
     { context.Response.StatusCode = status; context.Response.ContentType = "application/problem+json"; await context.Response.WriteAsync(JsonSerializer.Serialize(new { type = $"https://ee-pulse.invalid/problems/{code}", title = code, status, detail, instance = context.Request.Path.Value, code, retryable = false, correlationId = context.TraceIdentifier })); }
     private static bool HasNonZuluTimestamp(JsonElement root, string name)
@@ -61,5 +63,11 @@ public sealed class AgentRequestSecurityMiddleware(RequestDelegate next, IWebHos
         return timestamp is null || !timestamp.EndsWith('Z') ||
             !DateTimeOffset.TryParse(timestamp, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed) ||
             parsed.Offset != TimeSpan.Zero;
+    }
+    private static bool HasNonZuluResultTimestamp(JsonElement root)
+    {
+        if (!root.TryGetProperty("results", out var results) || results.ValueKind != JsonValueKind.Array) return false;
+        return results.EnumerateArray().Any(result => result.ValueKind == JsonValueKind.Object &&
+            (HasNonZuluTimestamp(result, "startedAt") || HasNonZuluTimestamp(result, "endedAt")));
     }
 }

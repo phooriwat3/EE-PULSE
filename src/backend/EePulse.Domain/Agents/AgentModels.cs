@@ -211,3 +211,35 @@ public sealed class AgentHeartbeatReceipt
     public DateTimeOffset ReceivedAt { get; private set; }
     public string ResponseJson { get; private set; } = string.Empty;
 }
+
+public sealed class ProbeResultLedgerEntry
+{
+    private ProbeResultLedgerEntry() { }
+
+    public ProbeResultLedgerEntry(Guid agentId, Guid resultId, Guid probeId, long configurationVersion,
+        DateTimeOffset startedAt, DateTimeOffset endedAt, int attemptCount, int successfulAttemptCount,
+        decimal packetLossRatio, decimal? minRttMilliseconds, decimal? averageRttMilliseconds,
+        decimal? maxRttMilliseconds, string? errorCategory, byte[] immutablePayloadDigest, DateTimeOffset receivedAt)
+    {
+        AgentId = agentId; ResultId = resultId; ProbeId = probeId; ConfigurationVersion = configurationVersion;
+        StartedAt = startedAt; EndedAt = endedAt; AttemptCount = attemptCount; SuccessfulAttemptCount = successfulAttemptCount;
+        PacketLossRatio = packetLossRatio; MinRttMilliseconds = minRttMilliseconds; AverageRttMilliseconds = averageRttMilliseconds;
+        MaxRttMilliseconds = maxRttMilliseconds; ErrorCategory = errorCategory; ImmutablePayloadDigest = immutablePayloadDigest; ReceivedAt = receivedAt;
+    }
+
+    public Guid AgentId { get; private set; }
+    public Guid ResultId { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public long ConfigurationVersion { get; private set; }
+    public DateTimeOffset StartedAt { get; private set; }
+    public DateTimeOffset EndedAt { get; private set; }
+    public int AttemptCount { get; private set; }
+    public int SuccessfulAttemptCount { get; private set; }
+    public decimal PacketLossRatio { get; private set; }
+    public decimal? MinRttMilliseconds { get; private set; }
+    public decimal? AverageRttMilliseconds { get; private set; }
+    public decimal? MaxRttMilliseconds { get; private set; }
+    public string? ErrorCategory { get; private set; }
+    public byte[] ImmutablePayloadDigest { get; private set; } = [];
+    public DateTimeOffset ReceivedAt { get; private set; }
+}
