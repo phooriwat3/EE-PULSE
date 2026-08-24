@@ -42,13 +42,14 @@ public sealed class Wp05DeliveryEndToEndTests
                 new(enrolled.CredentialId, enrolled.Credential, DateTimeOffset.MaxValue, DateTimeOffset.MaxValue), null, 20, 60, enrolled.ConfigurationVersion);
             var identities = new FixedIdentityStore(identity);
             Guid resultId;
+            var expectedResult = new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                new DateTimeOffset(2026, 8, 24, 9, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 8, 24, 9, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null);
 
             await using (var outbox = new SqliteProbeResultOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
-                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
-                    new DateTimeOffset(2026, 8, 24, 9, 0, 0, TimeSpan.Zero),
-                    new DateTimeOffset(2026, 8, 24, 9, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null));
+                sink.Publish(expectedResult);
                 resultId = Assert.Single(await outbox.ReadPendingAsync(new(10, 1_000_000), ct)).Envelope.ResultId;
             }
 
@@ -62,11 +63,7 @@ public sealed class Wp05DeliveryEndToEndTests
                 Assert.True(cycle.Delivered);
                 Assert.Empty(await outbox.ReadPendingAsync(new(10, 1_000_000), ct));
 
-                await using var scope = factory.Services.CreateAsyncScope();
-                var ledger = await scope.ServiceProvider.GetRequiredService<EePulseDbContext>().ProbeResultLedgerEntries
-                    .SingleAsync(entry => entry.AgentId == enrolled.AgentId && entry.ResultId == resultId, ct);
-                Assert.Equal(enrolled.ProbeId, ledger.ProbeId);
-                Assert.Equal(enrolled.ConfigurationVersion, ledger.ConfigurationVersion);
+                await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultId, expectedResult, ct);
             }
 
             await using (var reopened = new SqliteProbeResultOutbox(databasePath))
@@ -104,13 +101,14 @@ public sealed class Wp05DeliveryEndToEndTests
                 new(enrolled.CredentialId, enrolled.Credential, DateTimeOffset.MaxValue, DateTimeOffset.MaxValue), null, 20, 60, enrolled.ConfigurationVersion);
             var identities = new FixedIdentityStore(identity);
             Guid resultId;
+            var expectedResult = new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                new DateTimeOffset(2026, 8, 24, 9, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 8, 24, 9, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null);
 
             await using (var outbox = new SqliteProbeResultOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
-                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
-                    new DateTimeOffset(2026, 8, 24, 9, 0, 0, TimeSpan.Zero),
-                    new DateTimeOffset(2026, 8, 24, 9, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null));
+                sink.Publish(expectedResult);
                 resultId = Assert.Single(await outbox.ReadPendingAsync(new(10, 1_000_000), ct)).Envelope.ResultId;
             }
 
@@ -143,6 +141,7 @@ public sealed class Wp05DeliveryEndToEndTests
                 var ledger = scope.ServiceProvider.GetRequiredService<EePulseDbContext>().ProbeResultLedgerEntries;
                 Assert.Equal(1, await ledger.CountAsync(entry => entry.AgentId == enrolled.AgentId && entry.ResultId == resultId, ct));
             }
+            await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultId, expectedResult, ct);
 
             await using (var reopenedOutbox = new SqliteProbeResultOutbox(databasePath))
             {
@@ -195,16 +194,21 @@ public sealed class Wp05DeliveryEndToEndTests
                 new(enrolled.CredentialId, enrolled.Credential, DateTimeOffset.MaxValue, DateTimeOffset.MaxValue), null, 20, 60, enrolled.ConfigurationVersion);
             var identities = new FixedIdentityStore(identity);
             Guid[] resultIds;
+            var expectedResults = new[]
+            {
+                new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                    new DateTimeOffset(2026, 8, 24, 11, 0, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 24, 11, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null),
+                new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                    new DateTimeOffset(2026, 8, 24, 11, 1, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 24, 11, 1, 1, TimeSpan.Zero), 1, 1, 0m, 2m, 2m, 2m, null),
+            };
 
             await using (var outbox = new SqliteProbeResultOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
-                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
-                    new DateTimeOffset(2026, 8, 24, 11, 0, 0, TimeSpan.Zero),
-                    new DateTimeOffset(2026, 8, 24, 11, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null));
-                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
-                    new DateTimeOffset(2026, 8, 24, 11, 1, 0, TimeSpan.Zero),
-                    new DateTimeOffset(2026, 8, 24, 11, 1, 1, TimeSpan.Zero), 1, 1, 0m, 2m, 2m, 2m, null));
+                sink.Publish(expectedResults[0]);
+                sink.Publish(expectedResults[1]);
 
                 var initial = await outbox.ReadPendingAsync(new(10, 1_000_000), ct);
                 Assert.Equal([1L, 2L], initial.Select(record => record.Sequence));
@@ -265,6 +269,8 @@ public sealed class Wp05DeliveryEndToEndTests
                 Assert.Equal(resultIds, ledgerResultIds);
                 Assert.Equal(2, ledgerResultIds.Distinct().Count());
             }
+            await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultIds[0], expectedResults[0], ct);
+            await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultIds[1], expectedResults[1], ct);
         }
         finally
         {
@@ -292,20 +298,26 @@ public sealed class Wp05DeliveryEndToEndTests
                 new(enrolled.CredentialId, enrolled.Credential, DateTimeOffset.MaxValue, DateTimeOffset.MaxValue), null, 20, 60, enrolled.ConfigurationVersion);
             var identities = new FixedIdentityStore(identity);
             Guid[] resultIds;
+            var expectedResults = new[]
+            {
+                new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                    new DateTimeOffset(2026, 8, 24, 10, 0, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 24, 10, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null),
+                new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                    new DateTimeOffset(2026, 8, 24, 10, 1, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 24, 10, 1, 1, TimeSpan.Zero), 1, 1, 0m, 0.0000001m, 0.0000001m, 0.0000001m, null),
+                new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                    new DateTimeOffset(2026, 8, 24, 10, 2, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 24, 10, 2, 1, TimeSpan.Zero), 1, 1, 0m, 2m, 2m, 2m, null),
+            };
 
             await using (var outbox = new SqliteProbeResultOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
-                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
-                    new DateTimeOffset(2026, 8, 24, 10, 0, 0, TimeSpan.Zero),
-                    new DateTimeOffset(2026, 8, 24, 10, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null));
+                sink.Publish(expectedResults[0]);
                 // The real Backend rejects sub-microsecond RTT precision as a per-result "result-invalid" outcome.
-                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
-                    new DateTimeOffset(2026, 8, 24, 10, 1, 0, TimeSpan.Zero),
-                    new DateTimeOffset(2026, 8, 24, 10, 1, 1, TimeSpan.Zero), 1, 1, 0m, 0.0000001m, 0.0000001m, 0.0000001m, null));
-                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
-                    new DateTimeOffset(2026, 8, 24, 10, 2, 0, TimeSpan.Zero),
-                    new DateTimeOffset(2026, 8, 24, 10, 2, 1, TimeSpan.Zero), 1, 1, 0m, 2m, 2m, 2m, null));
+                sink.Publish(expectedResults[1]);
+                sink.Publish(expectedResults[2]);
 
                 var initial = await outbox.ReadPendingAsync(new(10, 1_000_000), ct);
                 Assert.Equal([1L, 2L, 3L], initial.Select(record => record.Sequence));
@@ -379,6 +391,174 @@ public sealed class Wp05DeliveryEndToEndTests
                     .ToArrayAsync(ct);
                 Assert.Equal([resultIds[0], resultIds[2]], ledgerResultIds);
             }
+            await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultIds[0], expectedResults[0], ct);
+            await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultIds[2], expectedResults[2], ct);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UnauthorizedResultDeliveryDiscardsSupersededPendingCredentialAndDurablyDeliversLater()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), $"ee-pulse-wp05-unauthorized-recovery-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(directory, "probe-results.db");
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+                builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+            using var backendClient = factory.CreateClient();
+            var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
+            var supersededPending = await RotateCredentialAsync(backendClient, enrolled.AgentId, enrolled.Credential, ct);
+            _ = await RotateCredentialAsync(backendClient, enrolled.AgentId, enrolled.Credential, ct);
+            var identity = new AgentIdentity(
+                enrolled.AgentId, enrolled.AgentGroupId, Guid.NewGuid(), "wp05-unauthorized-recovery-agent", "1.2.3", ["192.0.2.0/24"],
+                new(enrolled.CredentialId, enrolled.Credential, DateTimeOffset.MaxValue, DateTimeOffset.MaxValue),
+                new(supersededPending.CredentialId, supersededPending.AgentCredential, supersededPending.ExpiresAt, supersededPending.RotateAfter),
+                20, 60, enrolled.ConfigurationVersion);
+            var identities = new MutableIdentityStore(identity);
+            Guid resultId;
+            var expectedResult = new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 8, 24, 12, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null);
+
+            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            {
+                var sink = new DurableLocalProbeResultSink(outbox, identities);
+                sink.Publish(expectedResult);
+                resultId = Assert.Single(await outbox.ReadPendingAsync(new(10, 1_000_000), ct)).Envelope.ResultId;
+            }
+
+            using var forwardingClient = factory.CreateClient();
+            using var observer = new ObservingResultBatchHandler(forwardingClient);
+            using var deliveryClient = new HttpClient(observer, disposeHandler: false) { BaseAddress = forwardingClient.BaseAddress };
+            await using var apiClient = new AgentApiClient(deliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
+                new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false));
+            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            {
+                var delivery = new ProbeResultDeliveryCoordinator(outbox, apiClient, TimeProvider.System, new FixedRandom());
+
+                var rejected = await delivery.DeliverOnceAsync(identity, ct);
+
+                Assert.False(rejected.Delivered);
+                Assert.True(rejected.HasPendingResults);
+                Assert.Equal(TimeSpan.FromMilliseconds(500), rejected.NextDelay);
+                Assert.Equal([System.Net.HttpStatusCode.Unauthorized], observer.ResultBatchStatusCodes);
+                var pending = Assert.Single(await outbox.ReadPendingAsync(new(10, 1_000_000), ct));
+                Assert.Equal(resultId, pending.Envelope.ResultId);
+                Assert.Equal(ProbeResultOutboxState.Pending, pending.State);
+                Assert.Empty(await ReadQuarantinedOutboxRowsAsync(databasePath, ct));
+                Assert.Equal(1, identities.SaveCount);
+                Assert.Null(identities.Value!.PendingCredential);
+
+                var recoveredIdentity = identities.Value!;
+                // Configuration pull observes availability after credential recovery; delivery below uses the configured active credential.
+                var configuration = await apiClient.PullConfigurationAsync(recoveredIdentity, null, ct);
+                Assert.Equal(enrolled.ConfigurationVersion, configuration!.Value.Configuration.ConfigurationVersion);
+
+                var recovered = await delivery.DeliverOnceAsync(recoveredIdentity, ct);
+
+                Assert.True(recovered.Delivered);
+                Assert.Equal(TimeSpan.Zero, recovered.NextDelay);
+                Assert.Equal([System.Net.HttpStatusCode.Unauthorized, System.Net.HttpStatusCode.OK], observer.ResultBatchStatusCodes);
+                Assert.Empty(await outbox.ReadPendingAsync(new(10, 1_000_000), ct));
+            }
+
+            var durableRows = await ReadDurableOutboxRowsAsync(databasePath, ct);
+            var durable = Assert.Single(durableRows);
+            Assert.Equal((resultId, 1), (durable.ResultId, durable.State));
+            Assert.NotNull(durable.AcknowledgedAtTicks);
+            await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultId, expectedResult, ct);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ForbiddenResultDeliveryRecoversForeignPersistedPendingCredentialIntegrityFailureAndDurablyDeliversLater()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), $"ee-pulse-wp05-forbidden-recovery-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(directory, "probe-results.db");
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+                builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+            using var backendClient = factory.CreateClient();
+            var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
+            var otherEnrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
+            var mismatchedPending = await RotateCredentialAsync(backendClient, otherEnrolled.AgentId, otherEnrolled.Credential, ct);
+            // This is a foreign persisted-pending-credential integrity-recovery case, not a same-agent rotation flow.
+            // The Backend authenticates this credential as the other agent and returns its real route-identity-mismatch 403.
+            var identity = new AgentIdentity(
+                enrolled.AgentId, enrolled.AgentGroupId, Guid.NewGuid(), "wp05-forbidden-recovery-agent", "1.2.3", ["192.0.2.0/24"],
+                new(enrolled.CredentialId, enrolled.Credential, DateTimeOffset.MaxValue, DateTimeOffset.MaxValue),
+                new(mismatchedPending.CredentialId, mismatchedPending.AgentCredential, mismatchedPending.ExpiresAt, mismatchedPending.RotateAfter),
+                20, 60, enrolled.ConfigurationVersion);
+            var identities = new MutableIdentityStore(identity);
+            Guid resultId;
+            var expectedResult = new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                new DateTimeOffset(2026, 8, 24, 13, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 8, 24, 13, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null);
+
+            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            {
+                var sink = new DurableLocalProbeResultSink(outbox, identities);
+                sink.Publish(expectedResult);
+                resultId = Assert.Single(await outbox.ReadPendingAsync(new(10, 1_000_000), ct)).Envelope.ResultId;
+            }
+
+            using var forwardingClient = factory.CreateClient();
+            using var observer = new ObservingResultBatchHandler(forwardingClient);
+            using var deliveryClient = new HttpClient(observer, disposeHandler: false) { BaseAddress = forwardingClient.BaseAddress };
+            await using var apiClient = new AgentApiClient(deliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
+                new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false));
+            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            {
+                var delivery = new ProbeResultDeliveryCoordinator(outbox, apiClient, TimeProvider.System, new FixedRandom());
+
+                var rejected = await delivery.DeliverOnceAsync(identity, ct);
+
+                Assert.False(rejected.Delivered);
+                Assert.True(rejected.HasPendingResults);
+                Assert.Equal(TimeSpan.FromMilliseconds(500), rejected.NextDelay);
+                Assert.Equal([System.Net.HttpStatusCode.Forbidden], observer.ResultBatchStatusCodes);
+                var pending = Assert.Single(await outbox.ReadPendingAsync(new(10, 1_000_000), ct));
+                Assert.Equal(resultId, pending.Envelope.ResultId);
+                Assert.Equal(ProbeResultOutboxState.Pending, pending.State);
+                Assert.Empty(await ReadQuarantinedOutboxRowsAsync(databasePath, ct));
+                Assert.Equal(1, identities.SaveCount);
+                Assert.Null(identities.Value!.PendingCredential);
+
+                var recoveredIdentity = identities.Value!;
+                // Configuration pull observes availability after credential recovery; delivery below uses the configured active credential.
+                var configuration = await apiClient.PullConfigurationAsync(recoveredIdentity, null, ct);
+                Assert.Equal(enrolled.ConfigurationVersion, configuration!.Value.Configuration.ConfigurationVersion);
+
+                var recovered = await delivery.DeliverOnceAsync(recoveredIdentity, ct);
+
+                Assert.True(recovered.Delivered);
+                Assert.Equal(TimeSpan.Zero, recovered.NextDelay);
+                Assert.Equal([System.Net.HttpStatusCode.Forbidden, System.Net.HttpStatusCode.OK], observer.ResultBatchStatusCodes);
+                Assert.Empty(await outbox.ReadPendingAsync(new(10, 1_000_000), ct));
+            }
+
+            var durableRows = await ReadDurableOutboxRowsAsync(databasePath, ct);
+            var durable = Assert.Single(durableRows);
+            Assert.Equal((resultId, 1), (durable.ResultId, durable.State));
+            Assert.NotNull(durable.AcknowledgedAtTicks);
+            await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultId, expectedResult, ct);
         }
         finally
         {
@@ -400,6 +580,38 @@ public sealed class Wp05DeliveryEndToEndTests
             new AgentConfigurationAcknowledgementRequest(1, Guid.NewGuid(), configuration.ConfigurationVersion, "Applied", DateTimeOffset.UtcNow, null, DateTimeOffset.UtcNow));
         Assert.True((await client.SendAsync(acknowledgement, ct)).IsSuccessStatusCode);
         return (enrollment.AgentId, Guid.Parse(group.Id), enrollment.CredentialId, enrollment.AgentCredential, Guid.Parse(probe.Id), configuration.ConfigurationVersion);
+    }
+
+    private static async Task<RotateAgentCredentialResponse> RotateCredentialAsync(HttpClient client, Guid agentId, string credential, CancellationToken ct)
+    {
+        using var request = AgentRequest(HttpMethod.Post, $"/api/v1/agents/{agentId}/credentials/rotate", credential,
+            new RotateAgentCredentialRequest(1));
+        using var response = await client.SendAsync(request, ct);
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(ct));
+        return (await response.Content.ReadFromJsonAsync<RotateAgentCredentialResponse>(AgentJson, ct))!;
+    }
+
+    private static async Task AssertImmutableLedgerEntryAsync(WebApplicationFactory<Program> factory, Guid agentId, Guid resultId,
+        LocalProbeResult expected, CancellationToken ct)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+        var ledger = Assert.Single(await db.ProbeResultLedgerEntries
+            .Where(entry => entry.AgentId == agentId && entry.ResultId == resultId).ToArrayAsync(ct));
+        Assert.Equal(agentId, ledger.AgentId);
+        Assert.Equal(resultId, ledger.ResultId);
+        Assert.Equal(expected.ProbeId, ledger.ProbeId);
+        Assert.Equal(expected.ConfigurationVersion, ledger.ConfigurationVersion);
+        Assert.Equal(expected.StartedAt, ledger.StartedAt);
+        Assert.Equal(expected.EndedAt, ledger.EndedAt);
+        Assert.Equal(expected.EndedAt - expected.StartedAt, ledger.EndedAt - ledger.StartedAt);
+        Assert.Equal(expected.AttemptCount, ledger.AttemptCount);
+        Assert.Equal(expected.SuccessfulAttemptCount, ledger.SuccessfulAttemptCount);
+        Assert.Equal(expected.PacketLossRatio, ledger.PacketLossRatio);
+        Assert.Equal(expected.MinRttMilliseconds, ledger.MinRttMilliseconds);
+        Assert.Equal(expected.AverageRttMilliseconds, ledger.AverageRttMilliseconds);
+        Assert.Equal(expected.MaxRttMilliseconds, ledger.MaxRttMilliseconds);
+        Assert.Equal(expected.ErrorCategory?.ToString(), ledger.ErrorCategory);
     }
 
     private static async Task<T> AdminAsync<T>(HttpClient client, HttpMethod method, string path, object body, CancellationToken ct)
@@ -440,6 +652,27 @@ public sealed class Wp05DeliveryEndToEndTests
         public ValueTask<AgentIdentity?> LoadAsync(CancellationToken cancellationToken) => new((AgentIdentity?)identity);
         public ValueTask SaveAsync(AgentIdentity value, CancellationToken cancellationToken) => ValueTask.CompletedTask;
         public ValueTask DeleteAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    }
+
+    private sealed class MutableIdentityStore(AgentIdentity identity) : IAgentIdentityStore
+    {
+        public AgentIdentity? Value { get; private set; } = identity;
+        public int SaveCount { get; private set; }
+
+        public ValueTask<AgentIdentity?> LoadAsync(CancellationToken cancellationToken) => new(Value);
+
+        public ValueTask SaveAsync(AgentIdentity value, CancellationToken cancellationToken)
+        {
+            Value = value;
+            SaveCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask DeleteAsync(CancellationToken cancellationToken)
+        {
+            Value = null;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class NullRevocationHandler : IAgentRevocationHandler
@@ -514,6 +747,7 @@ public sealed class Wp05DeliveryEndToEndTests
     private sealed class ObservingResultBatchHandler(HttpClient forwardingClient) : DelegatingHandler
     {
         public List<IReadOnlyList<Guid>> ResultBatchResultIds { get; } = [];
+        public List<System.Net.HttpStatusCode> ResultBatchStatusCodes { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -526,7 +760,13 @@ public sealed class Wp05DeliveryEndToEndTests
             }
 
             using var forwardedRequest = CloneRequest(request, contentBytes);
-            return await forwardingClient.SendAsync(forwardedRequest, cancellationToken);
+            var response = await forwardingClient.SendAsync(forwardedRequest, cancellationToken);
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/result-batches", StringComparison.Ordinal))
+            {
+                ResultBatchStatusCodes.Add(response.StatusCode);
+            }
+
+            return response;
         }
 
         private static HttpRequestMessage CloneRequest(HttpRequestMessage request, byte[]? contentBytes)
