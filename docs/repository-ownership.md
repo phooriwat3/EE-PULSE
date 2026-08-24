@@ -19,7 +19,7 @@ The initial project set, project-reference graph, shared contract version, and A
 | `src/agent/**` | Probe Agent | Lead review for shared contracts, security boundaries, or host topology. |
 | `src/web/**` | Frontend | Lead review for generated-client contract changes; QA reviews critical-path testability. |
 | `tests/EePulse.UnitTests/**` | Backend | QA may add cross-cutting fixtures through Backend review. |
-| `tests/EePulse.IntegrationTests/**` | Backend | QA reviews integration coverage; Lead reviews shared-contract assertions. |
+| `tests/EePulse.IntegrationTests/**` | Backend | QA reviews integration coverage; Lead reviews shared-contract assertions. WP-05 permits this test project, and only this test project, to reference Agent Core and Agent Infrastructure for one deterministic SQLite-to-Backend delivery fixture; it creates no production dependency. |
 | `tests/EePulse.Agent.Tests/**` | Probe Agent | QA reviews queue, restart, and network-safety coverage. |
 | `tests/EePulse.SecurityTests/**` | QA/Security | Backend reviews API and security-test behavior; Lead reviews shared-contract and mandatory-gate changes. |
 | `tests/e2e/**` | QA | Frontend reviews selectors, fixtures, and UI behavior. |
