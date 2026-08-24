@@ -83,6 +83,97 @@ public sealed class Wp05DeliveryEndToEndTests
         }
     }
 
+    [Fact]
+    public async Task LostResponseThenAgentRestartReplaysImmutableResultWithoutDuplicatingLedgerEntry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), $"ee-pulse-wp05-lost-response-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(directory, "probe-results.db");
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+                builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+            using var backendClient = factory.CreateClient();
+            var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
+            var identity = new AgentIdentity(
+                enrolled.AgentId, enrolled.AgentGroupId, Guid.NewGuid(), "wp05-lost-response-agent", "1.2.3", ["192.0.2.0/24"],
+                new(enrolled.CredentialId, enrolled.Credential, DateTimeOffset.MaxValue, DateTimeOffset.MaxValue), null, 20, 60, enrolled.ConfigurationVersion);
+            var identities = new FixedIdentityStore(identity);
+            Guid resultId;
+
+            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            {
+                var sink = new DurableLocalProbeResultSink(outbox, identities);
+                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                    new DateTimeOffset(2026, 8, 24, 9, 0, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 24, 9, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null));
+                resultId = Assert.Single(await outbox.ReadPendingAsync(new(10, 1_000_000), ct)).Envelope.ResultId;
+            }
+
+            using var forwardingClient = factory.CreateClient();
+            using var responseLossHandler = new LoseFirstSuccessfulResultBatchResponseHandler(forwardingClient);
+            using (var faultedDeliveryClient = new HttpClient(responseLossHandler, disposeHandler: false)
+                   {
+                       BaseAddress = forwardingClient.BaseAddress,
+                   })
+            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var apiClient = new AgentApiClient(faultedDeliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
+                             new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false)))
+            {
+                var delivery = new ProbeResultDeliveryCoordinator(outbox, apiClient, TimeProvider.System, new FixedRandom());
+
+                var cycle = await delivery.DeliverOnceAsync(identity, ct);
+
+                Assert.False(cycle.Delivered);
+                Assert.True(cycle.HasPendingResults);
+                Assert.Equal(TimeSpan.FromMilliseconds(500), cycle.NextDelay);
+                Assert.Equal(1, responseLossHandler.ForwardedResultBatchCount);
+                Assert.True(responseLossHandler.SuccessfulResponseLost);
+                var pending = Assert.Single(await outbox.ReadPendingAsync(new(10, 1_000_000), ct));
+                Assert.Equal(resultId, pending.Envelope.ResultId);
+                Assert.Equal(ProbeResultOutboxState.Pending, pending.State);
+            }
+
+            await using (var scope = factory.Services.CreateAsyncScope())
+            {
+                var ledger = scope.ServiceProvider.GetRequiredService<EePulseDbContext>().ProbeResultLedgerEntries;
+                Assert.Equal(1, await ledger.CountAsync(entry => entry.AgentId == enrolled.AgentId && entry.ResultId == resultId, ct));
+            }
+
+            await using (var reopenedOutbox = new SqliteProbeResultOutbox(databasePath))
+            {
+                using var replayDeliveryClient = factory.CreateClient();
+                await using var replayApiClient = new AgentApiClient(replayDeliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
+                    new AgentClientOptions(replayDeliveryClient.BaseAddress!, IsProduction: false));
+                var replayDelivery = new ProbeResultDeliveryCoordinator(reopenedOutbox, replayApiClient, TimeProvider.System, new FixedRandom());
+
+                var replayCycle = await replayDelivery.DeliverOnceAsync(identity, ct);
+
+                Assert.True(replayCycle.Delivered);
+                Assert.True(replayCycle.HasPendingResults);
+                Assert.Equal(TimeSpan.Zero, replayCycle.NextDelay);
+                Assert.Empty(await reopenedOutbox.ReadPendingAsync(new(10, 1_000_000), ct));
+                Assert.Equal(1, await reopenedOutbox.CleanupAcknowledgedAsync(DateTimeOffset.MaxValue, 10, ct));
+            }
+
+            await using (var scope = factory.Services.CreateAsyncScope())
+            {
+                var ledger = scope.ServiceProvider.GetRequiredService<EePulseDbContext>().ProbeResultLedgerEntries;
+                Assert.Equal(1, await ledger.CountAsync(entry => entry.AgentId == enrolled.AgentId && entry.ResultId == resultId, ct));
+            }
+
+            await using var afterCleanup = new SqliteProbeResultOutbox(databasePath);
+            Assert.Empty(await afterCleanup.ReadPendingAsync(new(10, 1_000_000), ct));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static async Task<(Guid AgentId, Guid AgentGroupId, Guid CredentialId, string Credential, Guid ProbeId, long ConfigurationVersion)> EnrollConfiguredAgentAsync(HttpClient client, CancellationToken ct)
     {
         var group = await AdminAsync<AgentGroupResponse>(client, HttpMethod.Post, "/api/v1/agent-groups", new CreateAgentGroupRequest($"wp05-{Guid.NewGuid():N}", null), ct);
@@ -152,6 +243,55 @@ public sealed class Wp05DeliveryEndToEndTests
     private sealed class FixedRandom : IProbeResultDeliveryRandom
     {
         public double NextDouble() => 0.5;
+    }
+
+    private sealed class LoseFirstSuccessfulResultBatchResponseHandler(HttpClient forwardingClient) : DelegatingHandler
+    {
+        public int ForwardedResultBatchCount { get; private set; }
+        public bool SuccessfulResponseLost { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            using var forwardedRequest = await CloneRequestAsync(request, cancellationToken);
+            var response = await forwardingClient.SendAsync(forwardedRequest, cancellationToken);
+            if (request.Method != HttpMethod.Post || !request.RequestUri!.AbsolutePath.EndsWith("/result-batches", StringComparison.Ordinal))
+            {
+                return response;
+            }
+
+            ForwardedResultBatchCount++;
+            if (ForwardedResultBatchCount != 1)
+            {
+                return response;
+            }
+
+            response.EnsureSuccessStatusCode();
+            SuccessfulResponseLost = true;
+            response.Dispose();
+            throw new HttpRequestException("Synthetic loss after the Backend accepted the result batch response.");
+        }
+
+        private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var clone = new HttpRequestMessage(request.Method, request.RequestUri ?? throw new InvalidOperationException("Request URI is required."));
+            foreach (var header in request.Headers)
+            {
+                clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+
+            if (request.Content is not null)
+            {
+                var content = new ByteArrayContent(await request.Content.ReadAsByteArrayAsync(cancellationToken));
+                foreach (var header in request.Content.Headers)
+                {
+                    content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+
+                clone.Content = content;
+            }
+
+            return clone;
+        }
     }
 
     private static JsonSerializerOptions CreateAgentJson()
