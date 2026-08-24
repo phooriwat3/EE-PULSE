@@ -6,9 +6,11 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="xunit.v3" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\agent\EePulse.Agent\EePulse.Agent.csproj" />
     <ProjectReference Include="..\..\src\agent\EePulse.Agent.Core\EePulse.Agent.Core.csproj" />
     <ProjectReference Include="..\..\src\agent\EePulse.Agent.Infrastructure\EePulse.Agent.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\backend\EePulse.Contracts\EePulse.Contracts.csproj" />

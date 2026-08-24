@@ -51,6 +51,8 @@ public enum ProbeResultOutboxState
     Acknowledged,
 }
 
+public sealed record ProbeResultPermanentRejection(Guid ResultId, string ReasonCode);
+
 public sealed record ProbeResultOutboxRecord(
     long Sequence,
     ProbeResultEnvelope Envelope,
@@ -79,6 +81,12 @@ public interface IProbeResultOutbox : IAsyncDisposable
         CancellationToken cancellationToken);
 
     ValueTask AcknowledgeAsync(IReadOnlyCollection<Guid> resultIds, DateTimeOffset acknowledgedAt, CancellationToken cancellationToken);
+
+    ValueTask ApplyDeliveryOutcomeAsync(
+        IReadOnlyCollection<Guid> acceptedResultIds,
+        IReadOnlyCollection<ProbeResultPermanentRejection> permanentRejections,
+        DateTimeOffset processedAt,
+        CancellationToken cancellationToken);
 
     ValueTask<int> CleanupAcknowledgedAsync(DateTimeOffset cleanupThrough, int maximumCount, CancellationToken cancellationToken);
 }

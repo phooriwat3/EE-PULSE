@@ -237,6 +237,68 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
         }
     }
 
+    public async ValueTask ApplyDeliveryOutcomeAsync(
+        IReadOnlyCollection<Guid> acceptedResultIds,
+        IReadOnlyCollection<ProbeResultPermanentRejection> permanentRejections,
+        DateTimeOffset processedAt,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(acceptedResultIds);
+        ArgumentNullException.ThrowIfNull(permanentRejections);
+        var accepted = acceptedResultIds.ToHashSet();
+        var rejected = permanentRejections.ToDictionary(rejection => rejection.ResultId);
+        if (accepted.Any(id => id == Guid.Empty) || rejected.Keys.Any(id => id == Guid.Empty) || accepted.Overlaps(rejected.Keys) ||
+            permanentRejections.Count != rejected.Count || permanentRejections.Any(rejection => string.IsNullOrWhiteSpace(rejection.ReasonCode)))
+        {
+            throw new ArgumentException("Delivery outcomes must name distinct non-empty result IDs with fixed reason codes.");
+        }
+
+        await writes.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            await EnsureStoredSchemasAreSupportedAsync(connection, cancellationToken).ConfigureAwait(false);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var resultId in accepted)
+            {
+                await MarkAcknowledgedAsync(connection, transaction, resultId, processedAt, cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (var rejection in rejected.Values)
+            {
+                await using var quarantine = connection.CreateCommand();
+                quarantine.Transaction = transaction;
+                quarantine.CommandText = """
+                    INSERT INTO probe_result_outbox_quarantine (result_id, reason_code, payload, quarantined_at_ticks)
+                    SELECT result_id, $reasonCode, payload, $processedAt
+                    FROM probe_result_outbox WHERE result_id = $resultId AND state = 0;
+                    """;
+                quarantine.Parameters.AddWithValue("$reasonCode", rejection.ReasonCode);
+                quarantine.Parameters.AddWithValue("$processedAt", processedAt.UtcTicks);
+                quarantine.Parameters.AddWithValue("$resultId", rejection.ResultId.ToString("D"));
+                if (await quarantine.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                {
+                    throw new InvalidOperationException("A permanent rejection named an unknown or non-pending result.");
+                }
+
+                await using var remove = connection.CreateCommand();
+                remove.Transaction = transaction;
+                remove.CommandText = "DELETE FROM probe_result_outbox WHERE result_id = $resultId AND state = 0;";
+                remove.Parameters.AddWithValue("$resultId", rejection.ResultId.ToString("D"));
+                if (await remove.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                {
+                    throw new InvalidOperationException("A permanent rejection could not be quarantined safely.");
+                }
+            }
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            writes.Release();
+        }
+    }
+
     public async ValueTask<int> CleanupAcknowledgedAsync(DateTimeOffset cleanupThrough, int maximumCount, CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumCount, 1);
@@ -261,6 +323,33 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
         finally
         {
             writes.Release();
+        }
+    }
+
+    private static async ValueTask MarkAcknowledgedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid resultId,
+        DateTimeOffset acknowledgedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE probe_result_outbox
+            SET state = 1,
+                acknowledged_at_ticks = CASE WHEN state = 0 THEN $acknowledgedAt ELSE acknowledged_at_ticks END,
+                cleanup_eligible_at_ticks = CASE WHEN state = 0 THEN $cleanupEligibleAt ELSE cleanup_eligible_at_ticks END,
+                cleanup_deadline_at_ticks = CASE WHEN state = 0 THEN $cleanupDeadlineAt ELSE cleanup_deadline_at_ticks END
+            WHERE result_id = $resultId AND state IN (0, 1);
+            """;
+        command.Parameters.AddWithValue("$resultId", resultId.ToString("D"));
+        command.Parameters.AddWithValue("$acknowledgedAt", acknowledgedAt.UtcTicks);
+        command.Parameters.AddWithValue("$cleanupEligibleAt", acknowledgedAt.UtcTicks);
+        command.Parameters.AddWithValue("$cleanupDeadlineAt", acknowledgedAt.AddHours(CleanupWindowHours).UtcTicks);
+        if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+        {
+            throw new InvalidOperationException("An acknowledgement named an unknown result.");
         }
     }
 
@@ -466,6 +555,12 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
                     );
                     CREATE INDEX IF NOT EXISTS ix_probe_result_outbox_pending
                         ON probe_result_outbox (state, sequence);
+                    CREATE TABLE IF NOT EXISTS probe_result_outbox_quarantine (
+                        result_id TEXT PRIMARY KEY,
+                        reason_code TEXT NOT NULL,
+                        payload TEXT NOT NULL,
+                        quarantined_at_ticks INTEGER NOT NULL
+                    );
                     """, transitionCancellationToken).ConfigureAwait(false);
             }
 
