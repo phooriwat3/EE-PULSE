@@ -176,6 +176,103 @@ public sealed class Wp05DeliveryEndToEndTests
     }
 
     [Fact]
+    public async Task BackendUnavailableThenRecoveredDrainsDurableOutboxInFifoOrder()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), $"ee-pulse-wp05-backend-recovery-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(directory, "probe-results.db");
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+                builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+            using var backendClient = factory.CreateClient();
+            var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
+            var identity = new AgentIdentity(
+                enrolled.AgentId, enrolled.AgentGroupId, Guid.NewGuid(), "wp05-backend-recovery-agent", "1.2.3", ["192.0.2.0/24"],
+                new(enrolled.CredentialId, enrolled.Credential, DateTimeOffset.MaxValue, DateTimeOffset.MaxValue), null, 20, 60, enrolled.ConfigurationVersion);
+            var identities = new FixedIdentityStore(identity);
+            Guid[] resultIds;
+
+            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            {
+                var sink = new DurableLocalProbeResultSink(outbox, identities);
+                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                    new DateTimeOffset(2026, 8, 24, 11, 0, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 24, 11, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null));
+                sink.Publish(new LocalProbeResult(enrolled.ConfigurationVersion, enrolled.ProbeId,
+                    new DateTimeOffset(2026, 8, 24, 11, 1, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 8, 24, 11, 1, 1, TimeSpan.Zero), 1, 1, 0m, 2m, 2m, 2m, null));
+
+                var initial = await outbox.ReadPendingAsync(new(10, 1_000_000), ct);
+                Assert.Equal([1L, 2L], initial.Select(record => record.Sequence));
+                resultIds = initial.Select(record => record.Envelope.ResultId).ToArray();
+            }
+
+            using var forwardingClient = factory.CreateClient();
+            using var transientFailure = new FailFirstResultBatchTransportHandler(forwardingClient);
+            using var deliveryClient = new HttpClient(transientFailure, disposeHandler: false) { BaseAddress = forwardingClient.BaseAddress };
+            await using var apiClient = new AgentApiClient(deliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
+                new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false));
+            var retryDelay = new DeterministicDeliveryDelay();
+
+            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            {
+                var delivery = new ProbeResultDeliveryCoordinator(outbox, apiClient, TimeProvider.System, new FixedRandom());
+                var unavailable = await delivery.DeliverOnceAsync(identity, ct);
+
+                Assert.False(unavailable.Delivered);
+                Assert.True(unavailable.HasPendingResults);
+                Assert.Equal(TimeSpan.FromMilliseconds(500), unavailable.NextDelay);
+                Assert.Equal(1, transientFailure.FailedResultBatchCount);
+                Assert.Equal(0, transientFailure.ForwardedResultBatchCount);
+                var pendingAfterFailure = await outbox.ReadPendingAsync(new(10, 1_000_000), ct);
+                Assert.Equal(resultIds, pendingAfterFailure.Select(record => record.Envelope.ResultId));
+                Assert.All(pendingAfterFailure, record => Assert.Equal(ProbeResultOutboxState.Pending, record.State));
+
+                await using (var scope = factory.Services.CreateAsyncScope())
+                {
+                    var ledger = scope.ServiceProvider.GetRequiredService<EePulseDbContext>().ProbeResultLedgerEntries;
+                    Assert.Equal(0, await ledger.CountAsync(ct));
+                }
+
+                await retryDelay.DelayAsync(unavailable.NextDelay, ct);
+                Assert.Equal(unavailable.NextDelay, retryDelay.Elapsed);
+
+                var recovered = await delivery.DeliverOnceAsync(identity, ct);
+
+                Assert.True(recovered.Delivered);
+                Assert.True(recovered.HasPendingResults);
+                Assert.Equal(TimeSpan.Zero, recovered.NextDelay);
+                Assert.Equal(1, transientFailure.ForwardedResultBatchCount);
+                Assert.Collection(transientFailure.ForwardedResultBatchIds, batch => Assert.Equal(resultIds, batch));
+                Assert.Empty(await outbox.ReadPendingAsync(new(10, 1_000_000), ct));
+            }
+
+            var durableRows = await ReadDurableOutboxRowsAsync(databasePath, ct);
+            Assert.Equal([(resultIds[0], 1), (resultIds[1], 1)], durableRows.Select(row => (row.ResultId, row.State)));
+            Assert.All(durableRows, row => Assert.NotNull(row.AcknowledgedAtTicks));
+
+            await using (var scope = factory.Services.CreateAsyncScope())
+            {
+                var ledgerResultIds = await scope.ServiceProvider.GetRequiredService<EePulseDbContext>().ProbeResultLedgerEntries
+                    .Where(entry => entry.AgentId == enrolled.AgentId)
+                    .OrderBy(entry => entry.StartedAt)
+                    .Select(entry => entry.ResultId)
+                    .ToArrayAsync(ct);
+                Assert.Equal(resultIds, ledgerResultIds);
+                Assert.Equal(2, ledgerResultIds.Distinct().Count());
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task PartialAcknowledgementDurablyQuarantinesRejectedResultAndContinuesFifoDelivery()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -355,6 +452,17 @@ public sealed class Wp05DeliveryEndToEndTests
         public ValueTask DelayAsync(TimeSpan delay, CancellationToken cancellationToken) => ValueTask.CompletedTask;
     }
 
+    private sealed class DeterministicDeliveryDelay : IProbeResultDeliveryDelay
+    {
+        public TimeSpan Elapsed { get; private set; }
+
+        public ValueTask DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+        {
+            Elapsed += delay;
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class FixedRandom : IProbeResultDeliveryRandom
     {
         public double NextDouble() => 0.5;
@@ -481,6 +589,56 @@ public sealed class Wp05DeliveryEndToEndTests
             if (request.Content is not null)
             {
                 var content = new ByteArrayContent(await request.Content.ReadAsByteArrayAsync(cancellationToken));
+                foreach (var header in request.Content.Headers)
+                {
+                    content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+
+                clone.Content = content;
+            }
+
+            return clone;
+        }
+    }
+
+    private sealed class FailFirstResultBatchTransportHandler(HttpClient forwardingClient) : DelegatingHandler
+    {
+        public int FailedResultBatchCount { get; private set; }
+        public int ForwardedResultBatchCount { get; private set; }
+        public List<IReadOnlyList<Guid>> ForwardedResultBatchIds { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var contentBytes = request.Content is null ? null : await request.Content.ReadAsByteArrayAsync(cancellationToken);
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/result-batches", StringComparison.Ordinal))
+            {
+                if (FailedResultBatchCount == 0)
+                {
+                    FailedResultBatchCount++;
+                    throw new HttpRequestException("Synthetic transient transport failure before forwarding the result batch.");
+                }
+
+                var batch = JsonSerializer.Deserialize<ProbeResultIngestionBatchRequest>(contentBytes!, AgentJson)
+                    ?? throw new InvalidDataException("Result batch body is required.");
+                ForwardedResultBatchCount++;
+                ForwardedResultBatchIds.Add(batch.Results.Select(result => result.ResultId).ToArray());
+            }
+
+            using var forwardedRequest = CloneRequest(request, contentBytes);
+            return await forwardingClient.SendAsync(forwardedRequest, cancellationToken);
+        }
+
+        private static HttpRequestMessage CloneRequest(HttpRequestMessage request, byte[]? contentBytes)
+        {
+            var clone = new HttpRequestMessage(request.Method, request.RequestUri ?? throw new InvalidOperationException("Request URI is required."));
+            foreach (var header in request.Headers)
+            {
+                clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+
+            if (request.Content is not null)
+            {
+                var content = new ByteArrayContent(contentBytes!);
                 foreach (var header in request.Content.Headers)
                 {
                     content.Headers.TryAddWithoutValidation(header.Key, header.Value);
