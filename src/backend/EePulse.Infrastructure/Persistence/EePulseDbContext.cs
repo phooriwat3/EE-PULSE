@@ -23,6 +23,7 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
     public DbSet<AgentConfigurationSnapshot> AgentConfigurationSnapshots => Set<AgentConfigurationSnapshot>();
     public DbSet<AgentConfigurationAcknowledgement> AgentConfigurationAcknowledgements => Set<AgentConfigurationAcknowledgement>();
     public DbSet<AgentHeartbeatReceipt> AgentHeartbeatReceipts => Set<AgentHeartbeatReceipt>();
+    public DbSet<ProbeResultLedgerEntry> ProbeResultLedgerEntries => Set<ProbeResultLedgerEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -54,6 +55,7 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         }
         RejectChanges(ChangeTracker.Entries<AgentConfigurationSnapshot>(), "Configuration snapshots are immutable.");
         RejectChanges(ChangeTracker.Entries<AgentConfigurationAcknowledgement>(), "Configuration acknowledgements are append-only.");
+        RejectChanges(ChangeTracker.Entries<ProbeResultLedgerEntry>(), "Probe result ledger entries are immutable.");
 
         IncrementVersion(ChangeTracker.Entries<Site>());
         IncrementVersion(ChangeTracker.Entries<Device>());

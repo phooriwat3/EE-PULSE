@@ -40,6 +40,7 @@ public static partial class AgentEndpoints
         Problems(MapAgentOperation(api.MapGet("/agents/{agentId:guid}/configuration", GetConfiguration)), 401, 403, 404, 409, 410, 503).Produces<AgentConfigurationResponse>().Produces(304);
         Problems(MapAgentOperation(api.MapPost("/agents/{agentId:guid}/configuration/acknowledgements", Acknowledge)), 400, 401, 403, 404, 409, 410, 429, 503).Produces<AgentConfigurationAcknowledgementResponse>();
         Problems(MapAgentOperation(api.MapPost("/agents/{agentId:guid}/credentials/rotate", Rotate)), 400, 401, 403, 404, 410, 429, 503).Produces<RotateAgentCredentialResponse>(201);
+        Problems(MapAgentOperation(api.MapPost("/agents/{agentId:guid}/result-batches", IngestResults)), 400, 401, 403, 409, 410, 413, 429, 503).Produces<ProbeResultIngestionBatchResponse>();
         return app;
     }
     private static RouteHandlerBuilder MapAgentOperation(RouteHandlerBuilder route) => route.RequireAuthorization(new AuthorizeAttribute { AuthenticationSchemes = AgentContract.CredentialAuthenticationScheme });
@@ -118,6 +119,94 @@ public static partial class AgentEndpoints
         catch (DbUpdateException) { await tx.RollbackAsync(ct); return Problem(http, 409, AgentProblemCodes.ConfigurationConflict, "Credential rotation conflicted with another request."); }
     }
 
+    private static async Task<IResult> IngestResults(Guid agentId, ProbeResultIngestionBatchRequest request, EePulseDbContext db, IUtcClock clock, HttpContext http, CancellationToken ct)
+    {
+        var auth = AgentAccess(http, agentId); if (auth is not null) return auth;
+        if (request.BatchId == Guid.Empty || request.Results is null || request.Results.Count > 1000)
+            return Problem(http, 400, AgentProblemCodes.RequestInvalid, "Result batch values are outside allowed bounds.");
+        if (request.Results.Any(x => x is null))
+            return Results.Ok(new ProbeResultIngestionBatchResponse(request.BatchId, [], request.Results.Where(x => x is null).Select(_ => new RejectedProbeResultIngestion(Guid.Empty, "result-invalid")).ToArray()));
+        if (request.Results.Any(x => x.AgentId != agentId))
+            return Problem(http, 403, AgentProblemCodes.AgentIdentityMismatch, "Agent identity does not match authenticated credential.");
+
+        var agent = await db.Agents.AsNoTracking().SingleOrDefaultAsync(x => x.Id == agentId, ct);
+        if (agent is null) return Problem(http, 404, AgentProblemCodes.AgentNotFound, "Agent not found.");
+        var rejected = new List<RejectedProbeResultIngestion>();
+        var candidates = new Dictionary<Guid, IngestionCandidate>();
+        var conflictingResultIds = new HashSet<Guid>();
+        var snapshots = new Dictionary<long, SnapshotPayload?>();
+        foreach (var result in request.Results)
+        {
+            var rejection = await ValidateIngestionResult(result, agent, db, snapshots, ct);
+            if (rejection is not null) { rejected.Add(new RejectedProbeResultIngestion(result.ResultId, rejection)); continue; }
+            var immutable = ToImmutablePayload(result);
+            var digest = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(immutable, CanonicalJson));
+            if (conflictingResultIds.Contains(result.ResultId)) { CryptographicOperations.ZeroMemory(digest); continue; }
+            if (candidates.TryGetValue(result.ResultId, out var prior))
+            {
+                if (CryptographicOperations.FixedTimeEquals(prior.Digest, digest)) { CryptographicOperations.ZeroMemory(digest); continue; }
+                CryptographicOperations.ZeroMemory(prior.Digest); CryptographicOperations.ZeroMemory(digest); candidates.Remove(result.ResultId); conflictingResultIds.Add(result.ResultId);
+                rejected.Add(new RejectedProbeResultIngestion(result.ResultId, "result-identity-conflict"));
+                continue;
+            }
+            candidates.Add(result.ResultId, new IngestionCandidate(result, digest));
+        }
+
+        var accepted = new List<Guid>();
+        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        foreach (var resultId in conflictingResultIds.OrderBy(x => x))
+            AuditResultIdentityConflict(db, http, clock, agentId, resultId);
+        foreach (var candidate in candidates.Values.OrderBy(x => x.Result.ResultId))
+        {
+            var result = candidate.Result; var key = $"{agentId:D}/{result.ResultId:D}";
+            await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({key}, 0))", ct);
+            var existing = await db.ProbeResultLedgerEntries.SingleOrDefaultAsync(x => x.AgentId == agentId && x.ResultId == result.ResultId, ct);
+            if (existing is not null)
+            {
+                if (CryptographicOperations.FixedTimeEquals(existing.ImmutablePayloadDigest, candidate.Digest)) accepted.Add(result.ResultId);
+                else
+                {
+                    rejected.Add(new RejectedProbeResultIngestion(result.ResultId, "result-identity-conflict"));
+                    AuditResultIdentityConflict(db, http, clock, agentId, result.ResultId);
+                }
+                CryptographicOperations.ZeroMemory(candidate.Digest);
+                continue;
+            }
+            db.Add(new ProbeResultLedgerEntry(agentId, result.ResultId, result.ProbeId, result.ConfigurationVersion,
+                PostgresTimestamp(result.StartedAt), PostgresTimestamp(result.EndedAt), result.AttemptCount, result.SuccessfulAttemptCount, result.PacketLossRatio,
+                result.MinRttMilliseconds, result.AverageRttMilliseconds, result.MaxRttMilliseconds, result.ErrorCategory, candidate.Digest, PostgresTimestamp(clock.UtcNow)));
+            accepted.Add(result.ResultId);
+        }
+        await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+        return Results.Ok(new ProbeResultIngestionBatchResponse(request.BatchId, accepted.OrderBy(x => x).ToArray(), rejected.OrderBy(x => x.ResultId).ToArray()));
+    }
+
+    private static async Task<string?> ValidateIngestionResult(ProbeResultIngestionEnvelope result, Agent agent, EePulseDbContext db, Dictionary<long, SnapshotPayload?> snapshots, CancellationToken ct)
+    {
+        if (result.ResultSchemaVersion != 1) return AgentProblemCodes.SchemaUnsupported;
+        if (result.ResultId == Guid.Empty || result.AgentId == Guid.Empty || result.ProbeId == Guid.Empty || result.ConfigurationVersion < 1 || result.AttemptCount < 1 || result.SuccessfulAttemptCount < 0 || result.SuccessfulAttemptCount > result.AttemptCount) return "result-invalid";
+        if (!Utc(result.StartedAt) || !Utc(result.EndedAt)) return AgentProblemCodes.TimestampNotUtc;
+        if (result.EndedAt < result.StartedAt || result.PacketLossRatio is < 0 or > 1 || !ValidRtts(result)) return "result-invalid";
+        if (result.ErrorCategory is not null && !ResultErrorCategories.Contains(result.ErrorCategory)) return "error-category-invalid";
+        if (agent.LastAppliedConfigurationVersion < result.ConfigurationVersion) return "configuration-lineage-invalid";
+        if (!snapshots.TryGetValue(result.ConfigurationVersion, out var snapshot))
+        {
+            var stored = await db.AgentConfigurationSnapshots.AsNoTracking().SingleOrDefaultAsync(x => x.AgentGroupId == agent.AgentGroupId && x.Version == result.ConfigurationVersion, ct);
+            snapshot = stored is not null && ValidSnapshotDigest(stored) ? JsonSerializer.Deserialize<SnapshotPayload>(stored.Payload, CanonicalJson) : null;
+            snapshots[result.ConfigurationVersion] = snapshot;
+        }
+        return snapshot is null || !snapshot.Probes.Any(x => x.ProbeId == result.ProbeId) ? "target-identity-invalid" : null;
+    }
+
+    private static bool ValidRtts(ProbeResultIngestionEnvelope result) =>
+        ValidRtt(result.MinRttMilliseconds) && ValidRtt(result.AverageRttMilliseconds) && ValidRtt(result.MaxRttMilliseconds) &&
+        (!result.MinRttMilliseconds.HasValue || !result.AverageRttMilliseconds.HasValue || result.MinRttMilliseconds <= result.AverageRttMilliseconds) &&
+        (!result.AverageRttMilliseconds.HasValue || !result.MaxRttMilliseconds.HasValue || result.AverageRttMilliseconds <= result.MaxRttMilliseconds);
+    private static bool ValidRtt(decimal? value) => !value.HasValue || value.Value >= 0 && value.Value <= 999999999999.999999m && decimal.Round(value.Value, 6, MidpointRounding.ToZero) == value.Value;
+    private static ImmutableResultPayload ToImmutablePayload(ProbeResultIngestionEnvelope result) => new(result.ResultSchemaVersion, result.ResultId, result.AgentId, result.ProbeId, result.ConfigurationVersion, result.StartedAt, result.EndedAt, result.AttemptCount, result.SuccessfulAttemptCount, result.PacketLossRatio, result.MinRttMilliseconds, result.AverageRttMilliseconds, result.MaxRttMilliseconds, result.ErrorCategory);
+    private static readonly HashSet<string> ResultErrorCategories = new(StringComparer.Ordinal) { "Timeout", "Unreachable", "PermissionDenied", "InvalidTarget", "NetworkUnavailable", "Cancelled", "TransportError" };
+
     private static async Task ReplaceGroupNetworks(EePulseDbContext db, Guid id, IReadOnlyList<string> n, CancellationToken ct) { db.RemoveRange(await db.AgentGroupAllowedNetworks.Where(x => x.AgentGroupId == id).ToListAsync(ct)); db.AddRange(n.Select(x => new AgentGroupAllowedNetwork(id, x))); }
     internal static async Task<AgentConfigurationSnapshot> Publish(EePulseDbContext db, EePulse.Domain.Inventory.AgentGroup g, DateTimeOffset now, long? rollback, CancellationToken ct, IReadOnlyList<string>? candidateNetworks = null, HttpContext? http = null) { var version = g.PublishConfiguration(); var networks = (candidateNetworks ?? await db.AgentGroupAllowedNetworks.Where(x => x.AgentGroupId == g.Id).Select(x => x.Network).ToListAsync(ct)).OrderBy(x => x, StringComparer.Ordinal).ToArray(); var probes = await BuildProbes(db, g.Id, networks, ct) ?? throw new AgentConfigurationPublicationException(http?.TraceIdentifier, http?.Request.Path.Value); var content = new SnapshotPayload(1, g.Id, version, now, rollback, networks, probes); var payload = JsonSerializer.Serialize(content, CanonicalJson); var s = new AgentConfigurationSnapshot(g.Id, version, payload, SnapshotDigest(payload), now, rollback); db.Add(s); Guid? actor = http is not null && Guid.TryParse(http.User.FindFirstValue(ClaimTypes.NameIdentifier), out var actorId) ? actorId : null; db.Add(new AuditEvent(Guid.NewGuid(), actor, "agent.configuration.published", "AgentGroup", g.Id, null, JsonSerializer.Serialize(new { agentGroupId = g.Id, version, rollbackOfVersion = rollback }), http?.TraceIdentifier ?? "system-configuration-publication", now, http?.Connection.RemoteIpAddress?.ToString())); foreach (var a in await db.Agents.Where(x => x.AgentGroupId == g.Id && x.RevokedAt == null).ToListAsync(ct)) a.SetDesiredConfiguration(version); return s; }
     internal static async Task<IReadOnlyList<AgentProbeConfiguration>?> BuildProbes(EePulseDbContext db, Guid groupId, IReadOnlyList<string> networks, CancellationToken ct) { if (!await db.AgentGroups.Where(g => g.Id == groupId).Select(g => g.Enabled).SingleAsync(ct)) return []; var rows = await db.Probes.Where(p => p.AgentGroupId == groupId && p.Enabled).Join(db.Devices.Where(d => d.Enabled), p => p.DeviceId, d => d.Id, (p, d) => new { p, d }).OrderBy(x => x.p.Id).Take(2001).ToListAsync(ct); if (rows.Count > 2000) return null; if (rows.Any(x => !Ipv4NetworkPolicy.ContainsAddress(networks, x.d.Address))) return null; return rows.Select(x => new AgentProbeConfiguration(x.p.Id, x.d.Id, x.p.ConfigVersion, "icmp", x.d.Address, x.p.IntervalSeconds, x.p.TimeoutMilliseconds, x.p.AttemptCount, x.p.WarningRttMilliseconds, x.p.CriticalRttMilliseconds, x.p.FailureThreshold, x.p.RecoveryThreshold)).ToArray(); }
@@ -131,12 +220,15 @@ public static partial class AgentEndpoints
     private static Guid Actor(HttpContext h) => Guid.TryParse(h.User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) && id != Guid.Empty ? id : throw new UnauthorizedAccessException();
     private static void Audit(EePulseDbContext db, HttpContext h, IUtcClock clock, string action, string type, Guid id, object metadata) => db.Add(new AuditEvent(Guid.NewGuid(), h.User.Identity?.AuthenticationType == AgentContract.CredentialAuthenticationScheme ? null : Actor(h), action, type, id, null, JsonSerializer.Serialize(metadata), h.TraceIdentifier, clock.UtcNow, h.Connection.RemoteIpAddress?.ToString()));
     private static void AuditAgent(EePulseDbContext db, HttpContext h, IUtcClock clock, string action, Guid id, object metadata) => db.Add(new AuditEvent(Guid.NewGuid(), null, action, "Agent", id, null, JsonSerializer.Serialize(metadata), h.TraceIdentifier, clock.UtcNow, h.Connection.RemoteIpAddress?.ToString()));
+    private static void AuditResultIdentityConflict(EePulseDbContext db, HttpContext h, IUtcClock clock, Guid agentId, Guid resultId) => db.Add(new AuditEvent(Guid.NewGuid(), null, "agent.result.identity-conflict", "Agent", agentId, null, JsonSerializer.Serialize(new { agentId, resultId, reasonCode = "immutable-payload-digest-mismatch" }), h.TraceIdentifier, clock.UtcNow, null));
     private static bool ValidSnapshotDigest(AgentConfigurationSnapshot snapshot) => CryptographicOperations.FixedTimeEquals(SnapshotDigest(snapshot.Payload), snapshot.PayloadDigest);
     private static byte[] SnapshotDigest(string payload) { using var document = JsonDocument.Parse(payload); var buffer = new System.Buffers.ArrayBufferWriter<byte>(); using (var writer = new Utf8JsonWriter(buffer)) WriteCanonical(document.RootElement, writer); return SHA256.HashData(buffer.WrittenSpan); }
     private static void WriteCanonical(JsonElement value, Utf8JsonWriter writer)
     { switch (value.ValueKind) { case JsonValueKind.Object: writer.WriteStartObject(); foreach (var property in value.EnumerateObject().OrderBy(x => x.Name, StringComparer.Ordinal)) { writer.WritePropertyName(property.Name); WriteCanonical(property.Value, writer); } writer.WriteEndObject(); break; case JsonValueKind.Array: writer.WriteStartArray(); foreach (var item in value.EnumerateArray()) WriteCanonical(item, writer); writer.WriteEndArray(); break; case JsonValueKind.String: writer.WriteStringValue(value.GetString()); break; case JsonValueKind.Number: writer.WriteRawValue(value.GetRawText()); break; case JsonValueKind.True: writer.WriteBooleanValue(true); break; case JsonValueKind.False: writer.WriteBooleanValue(false); break; default: writer.WriteNullValue(); break; } }
     private static JsonSerializerOptions CreateCanonicalJson() { var options = new JsonSerializerOptions(JsonSerializerDefaults.Web); AgentJsonContract.AddConverters(options); return options; }
     private sealed record SnapshotPayload(int SchemaVersion, Guid AgentGroupId, long ConfigurationVersion, DateTimeOffset GeneratedAt, long? RollbackOfVersion, IReadOnlyList<string> AllowedNetworks, IReadOnlyList<AgentProbeConfiguration> Probes);
+    private sealed record ImmutableResultPayload(int ResultSchemaVersion, Guid ResultId, Guid AgentId, Guid ProbeId, long ConfigurationVersion, DateTimeOffset StartedAt, DateTimeOffset EndedAt, int AttemptCount, int SuccessfulAttemptCount, decimal PacketLossRatio, decimal? MinRttMilliseconds, decimal? AverageRttMilliseconds, decimal? MaxRttMilliseconds, string? ErrorCategory);
+    private sealed record IngestionCandidate(ProbeResultIngestionEnvelope Result, byte[] Digest);
     internal sealed class AgentConfigurationPublicationException(string? correlationId, string? instance) : Exception
     { public string CorrelationId { get; } = correlationId ?? Guid.NewGuid().ToString("N"); public string Instance { get; } = instance ?? "/api/v1"; }
     [GeneratedRegex("^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$")]
