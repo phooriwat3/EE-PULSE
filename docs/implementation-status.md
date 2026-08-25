@@ -1,8 +1,8 @@
 # EE Pulse implementation status
 
-Last updated: 2026-08-20 (Asia/Bangkok)
+Last updated: 2026-08-25 (Asia/Bangkok)
 Owner: Lead/Integration Agent
-Current checkpoint: WP-04 deterministic probe-runtime foundation implemented and integration-verified locally
+Current checkpoint: WP-06 UA-01 policy approved; implementation not started
 
 ## Outcome
 
@@ -14,17 +14,17 @@ WP-00 and WP-01 remain verified. The user approved WP-02 after the backend basel
 - Lead reviewed the changes, returned in-scope defects to their owners, rebuilt the final stack, and generated/reviewed `docs/api/openapi-v1.json`.
 - Agent C delivered the Site, Device, Probe-configuration, and CSV inventory UI plus Vitest and Playwright coverage. Lead returned production-authentication, OpenAPI-filter, and conflict-recovery defects; the corrected implementation passes the full integration gate.
 
-The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13727d8e84e5f56b61e854cbbabc5adab`. WP-03 now implements the approved additive enrollment, identity, heartbeat, configuration, revocation, credential-rotation, and AllowedNetworks contract plus ADR-007 through ADR-009. Agent C remained deferred. WP-04 now provides the deterministic, fake-transport-tested probe-runtime foundation only; final integration review passed.
+The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13727d8e84e5f56b61e854cbbabc5adab`. WP-03 now implements the approved additive enrollment, identity, heartbeat, configuration, revocation, credential-rotation, and AllowedNetworks contract plus ADR-007 through ADR-009. Agent C remained deferred. WP-04 provides the deterministic, fake-transport-tested probe-runtime foundation only. WP-05 durable result outbox and idempotent ingestion are now implemented and merged in `2c22766` (PR #5); ADR-012 approves the WP-06 operating policy without claiming implementation.
 
 ## Current repository
 
 | Area | State |
 | --- | --- |
 | Specifications | Six authoritative files under `docs/spec`; no `AGENTS.md` or additional repository instruction file is present. |
-| Git | Local `main` and `origin/main` were synchronized at `8ca821d` before this design gate; only Lead-owned WP-03 proposal/control documents are now modified or untracked. |
+| Git | WP-05 implementation was merged in `2c22766` (PR #5). This ADR-012/WP-06 documentation checkpoint does not claim a new commit or verification run. |
 | Backend | PostgreSQL-backed Site, Device, AgentGroup, Probe, MaintenanceWindow, AuditEvent, CSV import, authorization policies, migration, seed gate, and dependency-aware readiness. |
 | Contracts/OpenAPI | Compatible v1 inventory DTOs; checked-in OpenAPI 3.1.1 artifact with 14 paths, 19 protected operations, Bearer/OIDC-ready metadata, and explicit Development-header note. |
-| Probe Agent | WP-04 deterministic probe-runtime foundation: stable jitter, monotonic scheduling, per-Probe non-overlap, bounded admission, immutable local results, fixed outcome categories, and fake transport/time tests. No real ICMP evidence or persistence/delivery behavior is claimed. |
+| Probe Agent | WP-04 deterministic runtime foundation plus WP-05 durable SQLite outbox and at-least-once result delivery. Real ICMP and Windows-Service operational evidence remain unclaimed. |
 | Web | Responsive inventory console for Sites, server-filtered/paged Devices, create/edit/soft-disable, Probe fields, CSV preview/commit, row errors, stale/partial/retry states, and actionable concurrency conflicts. Development synthetic identity is absent from the production bundle, which fails closed pending OIDC. |
 | QA | WP-04 final integration review passed: Agent tests 112/112, formatting, Agent host and Agent Tests Release builds (0 warnings/errors), quality/security gate, and `git diff --check`. Earlier WP-02/03 evidence remains recorded below. |
 | Compose | PostgreSQL 18.4, VictoriaMetrics 1.148.0, and API healthy; only API publishes a host port. |
@@ -38,8 +38,9 @@ The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13
 | WP-02 | Approved | Backend/PostgreSQL plus inventory frontend pass together: metadata, migration, APIs, validation, authorization, audit, CSV, OpenAPI, enabled-only Device uniqueness, accessible UI, component tests, and critical-flow browser tests. |
 | WP-03 | Implemented and integration-verified | Additive v1 Agent endpoints/DTOs, separate Agent credentials, one additive PostgreSQL migration, enrollment/revocation/rotation, heartbeat/offline processing, immutable configuration snapshots/acknowledgements/rollback, dual AllowedNetworks enforcement, DPAPI/ACL-backed Agent storage, and generated OpenAPI are verified. |
 | WP-04 | Implemented and integration-verified locally | Deterministic probe-runtime foundation verified with fake time/transport: IPv4-literal scope validation, stable jitter/monotonic cadence, bounded admission/non-overlap, coalesced missed slots, sequential attempts, immutable local results, fixed outcome categories, cancellation, and cardinality-safe observability. No real ICMP, persistence, delivery, ingestion, UI, deployment, or Windows Service evidence is included. |
-| WP-05 | Design proposed | Durable local SQLite outbox and idempotent Backend ingestion are specified in ADR-011 and the proposed WP-05 contract. UA-11 approves the 5 GB quota, reserve, pressure thresholds, suspension/resumption, cleanup, and no-silent-loss policy; implementation is not started. |
-| WP-06 through WP-11 | Not started | Continue in dependency order after the next approved checkpoint. |
+| WP-05 | Implemented and merged | Durable SQLite outbox, at-least-once delivery, idempotent PostgreSQL ledger/ingestion, and delivery-recovery coverage were merged in `2c22766` (PR #5). UA-11 policy remains binding. No WP-06 status/incident behavior is included. |
+| WP-06 | Policy approved; implementation not started | [WP-06 Status and Incident Engine design](api/wp06-status-incident-engine-design.md) and ADR-012 define state, watermark, transaction, lifecycle, and acceptance policy. Implementation remains unclaimed. |
+| WP-07 through WP-11 | Not started | Continue in dependency order after WP-06 approval/implementation. |
 
 ## Stable contract decision
 
@@ -97,7 +98,7 @@ This checkpoint verifies a deterministic local runtime using fake time and fake 
 
 ## Accepted follow-on risks
 
-- The duplicate-device portion of UA-01 is confirmed and fully enforced. Remaining UA-01 Site/VLAN/role/operational-threshold details do not block this rule or the technical gate.
+- UA-01 is approved and binding for WP-06 through ADR-012. The duplicate-device rule remains confirmed and enforced; separate Site/VLAN/role discovery does not reopen the WP-06 status/incident policy.
 - Production OIDC remains pending under UA-06; Agent enrollment/configuration and complete role-matrix breadth remain later work.
 - The checked-in OpenAPI models the Device-list `criticality` query as an integer enum without published names; the frontend uses contract values 0-3 while presenting Low/Normal/High/Critical labels. Clarifying enum metadata is a future compatible-contract task.
 - CSV preview state is intentionally node-local, bounded, and retained for 15 minutes; restart discards it.
@@ -113,4 +114,4 @@ This checkpoint verifies a deterministic local runtime using fake time and fake 
 
 ## Next checkpoint
 
-WP-04 is a deterministic probe-runtime foundation, not an operational probe release. WP-05 design now assigns durable result persistence, at-least-once delivery, idempotent ingestion, and the UA-11-approved 5 GB/reserve pressure policy to a bounded SQLite/PostgreSQL boundary; implementation remains unstarted. UA-03 remains mandatory before any real ICMP validation; UA-04 remains mandatory before Windows Service operational evidence. Do not treat documentation CIDRs or local Compose credentials as production authorization.
+WP-05 is merged, but it does not implement status, incidents, notification delivery, UI, real ICMP, or deployment. ADR-012 closes the WP-06 UA-01 policy blocker; WP-06 implementation and deterministic acceptance evidence remain next. UA-03 remains mandatory before real ICMP validation; UA-04 remains mandatory before Windows Service operational evidence. Do not treat documentation CIDRs or local Compose credentials as production authorization.
