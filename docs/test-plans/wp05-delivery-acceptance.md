@@ -1,6 +1,6 @@
 # WP-05 delivery acceptance plan
 
-Status: Proposed - design only
+Status: Implemented acceptance plan (merged `2c22766`, PR #5)
 Date: 2026-08-20 (Asia/Bangkok)
 
 ## Test method

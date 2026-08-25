@@ -1,6 +1,6 @@
 # WP-05 Probe-result ingestion contract
 
-Status: Proposed - design only
+Status: Implemented v1 contract (merged `2c22766`, PR #5)
 Date: 2026-08-20 (Asia/Bangkok)
 Owner: Lead/Integration Agent
 

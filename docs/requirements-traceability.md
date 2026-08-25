@@ -1,9 +1,9 @@
 # EE Pulse requirements traceability
 
-Last updated: 2026-08-20
+Last updated: 2026-08-25
 Status legend: Not started, In progress, Implemented, Verified, Blocked.
 
-WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. Status remains partial where operational, persistence, delivery, ingestion, UI, deployment, or broader release evidence is required.
+WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. WP-05 durable outbox/delivery/ingestion was merged in `2c22766` (PR #5). Status remains partial where status/incident behavior, operational evidence, UI, deployment, or broader release evidence is required.
 
 ## Functional requirements
 
@@ -11,9 +11,9 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | --- | --- | --- | --- |
 | FR-01 Device inventory | WP-02, WP-07 | Verified | Backend CRUD, server filtering/pagination, IPv4/hostname validation, enabled-only Site/address uniqueness, disabled/cross-Site IP reuse, hostname reuse, re-enable/concurrent conflicts, CSV row errors, history-preserving disable, Administrator audited delete, PostgreSQL migration, and responsive inventory UI pass component/browser/integration tests. |
 | FR-02 Probe configuration | WP-02, WP-04 | In progress | WP-04 locally verifies the deterministic runtime foundation with fake time/transport: IPv4-literal dual-scope validation, stable jitter, bounded scheduling/non-overlap, sequential attempts, immutable local result/error semantics, cancellation, and observability. Real ICMP and all later persistence/delivery/ingestion evidence remain. |
-| FR-03 Agent | WP-03-05, WP-10 | In progress | WP-03 verified enrollment, per-Agent credential auth/rotation/revocation, heartbeat/offline state, conditional immutable configuration pull/LKG, acknowledgement/rollback, DPAPI/ACL-backed local state, and dual non-expandable AllowedNetworks enforcement. SQLite queue, result batching/ingestion, installer, and real Windows operational evidence remain. |
-| FR-04 Status engine | WP-06 | Not started | Require the full state matrix, thresholds, Agent-expiry UNKNOWN, maintenance, transition history, watermark, and flapping. |
-| FR-05 Incident management | WP-06, WP-07 | Not started | Require atomic uniqueness, lifecycle, comments, attribution, resolution, downtime, and occurrence evidence. |
+| FR-03 Agent | WP-03-05, WP-10 | In progress | WP-03 verified enrollment/identity/liveness/configuration; WP-05 merged durable SQLite queue, result batching, and idempotent backend ingestion. Installer and real Windows operational evidence remain. |
+| FR-04 Status engine | WP-06 | Policy approved; implementation not started | [WP-06 design](api/wp06-status-incident-engine-design.md) and ADR-012 specify the approved matrix, heartbeat/freshness UNKNOWN, maintenance/disabled precedence, watermark/skew, flapping, and required deterministic acceptance coverage. |
+| FR-05 Incident management | WP-06, WP-07 | Policy approved; implementation not started | ADR-012 approves atomic lifecycle, attribution, resolution, occurrence, suppression-context policy; implementation and UI/comments evidence remain. |
 | FR-06 Dashboard | WP-07 | Not started | Health shell only. Require summary/filter/live/NOC/recent-down/offline-Agent/open-incident behavior. |
 | FR-07 Device details | WP-07, WP-09 | Not started | Require configuration, metrics ranges, timeline, incidents, Agent, and result-freshness UI/API. |
 | FR-08 Notifications | WP-08 | Not started | Require fake SMTP/webhook open/reminder/recovery, dedupe, suppression, retry, and redacted logs. |
@@ -25,7 +25,7 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | Requirement | Delivery WP | Status | Current evidence / remaining acceptance |
 | --- | --- | --- | --- |
 | NFR-01 Performance | WP-05, WP-07, WP-11 | Not started | No ingest/load/dashboard workload. Require 500 targets/30 s for 60 min, 50 average and 250 burst results/s, overview p95 <=1 s, dashboard <=3 s. |
-| NFR-02 Reliability | WP-02, WP-05, WP-06, WP-11 | In progress | Verified PostgreSQL migration/model/rollback behavior, concurrent enrollment/heartbeat/ack/rotation handling, immutable snapshots, retries/LKG restoration, and schema-aware readiness. Agent queue, result ingest/status idempotency, and load evidence remain. |
+| NFR-02 Reliability | WP-02, WP-05, WP-06, WP-11 | In progress | WP-05 merged durable queue/delivery and immutable result-ingestion idempotency. WP-06 status/incident idempotency and load evidence remain. |
 | NFR-03 Security | WP-01, WP-03, WP-08, WP-10, WP-11 | In progress | Verified digest-only credentials/tokens, separated auth schemes, secret canaries, UTC-Z/body/rate limits, non-expandable CIDRs, no command/URL configuration, DPAPI/ACL seams, source/history checks, and Compose exposure. Real Windows proof, OIDC/TLS deployment, and `gitleaks`/`trivy` scans remain. |
 | NFR-04 Observability | WP-01, WP-04-08 | In progress | Verified live/readiness, PostgreSQL/schema-aware readiness, structured JSON/request logs, correlation IDs, and WP-04 fake-only runtime observability behavior. Production metrics/alerts and operational evidence remain. |
 | NFR-05 Maintainability | WP-01 onward | In progress | WP-04 final integration review passed: Agent tests 112/112, formatting, Agent host and Agent Tests Release builds with 0 warnings/errors, quality/security, and `git diff --check`. Coverage expands with later behavior. |
@@ -39,11 +39,11 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | Freshness uses `max(2 x interval, heartbeat grace)` | WP-06 | Not started | Fake-clock boundaries. |
 | Failure/recovery thresholds and Scenarios B-D | WP-06 | Not started | Table-driven state matrix. |
 | Config effective only after acknowledgement | WP-03 | Verified | Atomic Agent apply/LKG and durable same-ID acknowledgement are verified; central effective version advances only on valid `Applied`. |
-| Late data cannot move current state backward | WP-05/06 | Not started | Duplicate/out-of-order/watermark tests. |
+| Late data cannot move current state backward | WP-05/06 | Policy approved; implementation not started | ADR-012 makes cursor-lower, future-dated, and results received more than five minutes after `eventAt` historical-only; deterministic boundary tests remain. |
 | Availability exposes monitoring coverage | WP-09 | Not started | Report fixture cross-check. |
-| Scenario A normal operation/latest RTT | WP-05-07 | Not started | E2E flow. |
+| Scenario A normal operation/latest RTT | WP-05-07 | In progress | WP-05 ingestion is merged; status projection/UI E2E remains. |
 | Scenario E Agent outage becomes UNKNOWN | WP-03/06 | In progress | WP-03 server-side per-Agent heartbeat expiry/offline processing is verified; WP-06 UNKNOWN/no-DOWN-storm state behavior remains. |
-| Scenario F 30-minute outage drains without duplicates | WP-05/11 | Not started | Resilience E2E/load evidence. |
+| Scenario F 30-minute outage drains without duplicates | WP-05/11 | In progress | WP-05 delivery/recovery coverage is merged; 30-minute resilience/load evidence remains. |
 
 ## Work-package traceability
 
@@ -54,8 +54,8 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | WP-02 Database/inventory | Verified | User-approved PostgreSQL schema/migration, CRUD/filter/pagination, validation, confirmed enabled-only duplicate policy, concurrency, audit, CSV, policies, readiness, frozen OpenAPI, responsive inventory UI, 7 component tests, and 2 critical-flow Playwright tests. |
 | WP-03 Enrollment/config | Verified local integration checkpoint | Implemented frozen additive endpoints/DTOs, AgentCredential separation, transactional enrollment, heartbeat expiry, immutable snapshots/ETag/ack/rollback, dual AllowedNetworks, credential rotation/revocation, one additive migration, Agent protected storage, and tests. 103/103 .NET tests, Compose/runtime, quality/security, generated OpenAPI, WP-02 comparison, and proposal comparison pass. Windows operational evidence and release scanners remain WP-10/11. |
 | WP-04 Scheduler/ICMP | Implemented and integration-verified locally | Deterministic probe-runtime foundation verified through fake time/transport tests. Final integration review PASS; Agent tests 112/112; formatting; Agent host and Agent Tests Release builds (0 warnings/errors); quality/security; and `git diff --check` passed. This is not real ICMP, host/DI wiring, Windows Service, persistence, delivery, ingestion, UI, deployment, or IP-discovery evidence. |
-| WP-05 Queue/ingestion | Design proposed | ADR-011 and the proposed ingestion contract define SQLite durability, immutable result identity/versioning, bounded FIFO batches, at-least-once acknowledgement, PostgreSQL dedupe, VictoriaMetrics projection ownership, and the UA-11-approved 5 GB/reserve pressure policy. Implementation remains. |
-| WP-06 Status/incidents | Not started | Depends on durable idempotent ingestion. |
+| WP-05 Queue/ingestion | Implemented and merged | PR #5 / `2c22766` implements the durable SQLite outbox, at-least-once delivery, idempotent PostgreSQL ledger, and recovery coverage under the binding UA-11 pressure policy. |
+| WP-06 Status/incidents | Policy approved; implementation not started | Depends on merged WP-05 ingestion; [design](api/wp06-status-incident-engine-design.md) and ADR-012 define the approved policy; implementation and deterministic acceptance evidence remain. |
 | WP-07 Dashboard | Not started | Depends on stable application APIs/events. |
 | WP-08 Notifications | Not started | Depends on incident outbox. |
 | WP-09 Reports/retention | Not started | Depends on transitions and time-series data. |
@@ -69,7 +69,8 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | ADR-001 modular monolith | Verified | Accepted ADR; project graph gate; clean 12-project build. |
 | ADR-002 PostgreSQL + VictoriaMetrics | In progress | Accepted ADR and healthy pinned Compose services; adapters and failure semantics remain WP-02/05. |
 | ADR-003 Agent-pull configuration | In progress | Accepted ADR; implementation/contracts remain WP-03. |
-| ADR-004 transactional outbox | In progress | Accepted ADR; implementation remains WP-06/08. |
-| ADR-005 event watermark | In progress | Accepted ADR; policy/tests remain WP-06. |
+| ADR-004 transactional outbox | In progress | Accepted ADR; lifecycle-outbox implementation remains WP-06/08. |
+| ADR-005 event watermark | In progress | Accepted ADR; ADR-012 approves WP-06 lateness/skew policy; implementation/tests remain. |
+| ADR-012 WP-06 UA-01 policy | Accepted; implementation not started | Binding MVP policy for WP-06 status/incidents and WP-09 availability semantics. |
 | ADR-006 Windows Service + SQLite | In progress | Accepted ADR and Windows-Service-capable host; queue/installer evidence remains WP-05/10. |
 | Versioned HTTP/OpenAPI baseline | Verified | Package 1.0.0/schema v1; checked-in OpenAPI 3.1.1 has 14 paths, inventory schemas, 19 protected operations, Bearer/401/403 metadata, and unauthenticated health. |

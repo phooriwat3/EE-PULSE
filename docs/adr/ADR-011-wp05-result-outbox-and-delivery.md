@@ -1,6 +1,6 @@
 # ADR-011: Durable Probe-result outbox and idempotent delivery
 
-Status: Proposed for WP-05 design checkpoint
+Status: Accepted and implemented in WP-05 (merged `2c22766`, PR #5)
 Date: 2026-08-20 (Asia/Bangkok)
 
 ## Context

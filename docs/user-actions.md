@@ -1,12 +1,12 @@
 # EE Pulse user and IT actions
 
-Last updated: 2026-08-20
+Last updated: 2026-08-25
 
 Never place real credentials, keys, tokens, SMTP passwords, or certificates in this file, chat, source control, or sample configuration. Use the organization's approved secret-delivery mechanism.
 
 | Sequence | ID | Owner | Required action/values | Verification | Blocks | Safe local placeholder |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | UA-01 | Product owner / EE | Duplicate policy confirmed: normalized IP is unique among enabled Devices within a Site; disabled and cross-Site reuse are allowed; hostname is non-unique. Still confirm Sites/VLANs, target count/types, role owners, thresholds, recovery/flapping, and availability rules. | Approved scope and acceptance note; automated duplicate-rule tests. | Remaining operational decisions affect later acceptance, not the WP-02 duplicate rule. | Confirmed duplicate rule is implemented; PRD probe defaults remain 30 s interval, 2 s timeout, 3 attempts, 3 failures, 2 recoveries. |
+| 1 | UA-01 | Product owner / EE | Approved 2026-08-25: the complete nine-decision WP-06 MVP status/incident policy, including thresholds/quality, recovery, `RECOVERING`, `UNKNOWN`, flapping, lateness/skew, configuration-effective boundary, availability, and maintenance. Binding record: ADR-012. The duplicate policy remains: normalized IP is unique among enabled Devices within a Site; disabled and cross-Site reuse are allowed; hostname is non-unique. | ADR-012 and approved WP-06 policy record. | Closed for WP-06 policy; implementation and deterministic acceptance coverage remain. | No placeholder; implement only ADR-012 policy snapshots. |
 | 2 | UA-02 | Repository owner | Confirm branch/PR policy, CI runner/artifact destination, and reviewers for the configured `origin`. | Clean clone, protected workflow, successful CI run. | Shared collaboration evidence and release; local work continues. | Local `main` and `origin/main` synchronized at `8ca821d`; non-deploying GitHub Actions workflow. |
 | 3 | UA-02A | Workstation owner | Optionally install .NET SDK 10.0.x; keep Docker available if using the verified container fallback. | `dotnet --info` lists 10.0.x or pinned container gate passes. | Host-only workflows; WP-01 is satisfied through Docker. | `mcr.microsoft.com/dotnet/sdk:10.0.302`. |
 | 4 | UA-03 | Network / IT security | Approve explicit Agent `AllowedNetworks`, routing, ICMP/firewall policy, and controlled IPv4-literal test targets. | Approved CIDRs and a controlled reachability test. | Real ICMP validation after the WP-04 fake-only runtime checkpoint. | Fake transport and documentation-only examples; no real probe. |
@@ -21,7 +21,7 @@ Never place real credentials, keys, tokens, SMTP passwords, or certificates in t
 
 ## Actions approaching the next checkpoint
 
-- The duplicate-device portion of UA-01 is confirmed and verified. Remaining Site/VLAN, scale, role-owner, and operational-threshold details approach later acceptance but do not block this WP-02 rule.
+- UA-01 is closed for the WP-06 status/incident policy. ADR-012 is binding; WP-06 implementation must add the approved deterministic acceptance coverage. Separate Site/VLAN, scale, and role-owner scope confirmation remains a product-discovery concern but does not reopen the approved WP-06 policy.
 - UA-02 is partially satisfied because `origin` is configured. Branch/PR policy, CI runner/artifact destination, and reviewers still need confirmation before external collaboration or release evidence.
 - WP-04 is locally integration-verified as a deterministic probe-runtime foundation: final review PASS, Agent tests 112/112, formatting, Agent host and Agent Tests Release builds with 0 warnings/errors, quality/security, and `git diff --check` passed. This is fake time/transport evidence only.
 - UA-03 is required before any real ICMP environment test. WP-04 accepts IPv4 literals only; no network scanning, DNS resolution, IP discovery, or unapproved probing is authorized.
