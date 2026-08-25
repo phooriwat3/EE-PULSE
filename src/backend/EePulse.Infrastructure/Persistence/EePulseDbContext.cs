@@ -1,6 +1,7 @@
 using EePulse.Domain.Auditing;
 using EePulse.Domain.Agents;
 using EePulse.Domain.Inventory;
+using EePulse.Domain.Status;
 using Microsoft.EntityFrameworkCore;
 
 namespace EePulse.Infrastructure.Persistence;
@@ -24,6 +25,11 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
     public DbSet<AgentConfigurationAcknowledgement> AgentConfigurationAcknowledgements => Set<AgentConfigurationAcknowledgement>();
     public DbSet<AgentHeartbeatReceipt> AgentHeartbeatReceipts => Set<AgentHeartbeatReceipt>();
     public DbSet<ProbeResultLedgerEntry> ProbeResultLedgerEntries => Set<ProbeResultLedgerEntry>();
+    public DbSet<ProbeStatusProjection> ProbeStatusProjections => Set<ProbeStatusProjection>();
+    public DbSet<ProbeStatusPolicySnapshot> ProbeStatusPolicySnapshots => Set<ProbeStatusPolicySnapshot>();
+    public DbSet<ProbeStatusPolicyBinding> ProbeStatusPolicyBindings => Set<ProbeStatusPolicyBinding>();
+    public DbSet<AgentConfigurationEffectiveBoundary> AgentConfigurationEffectiveBoundaries => Set<AgentConfigurationEffectiveBoundary>();
+    public DbSet<ProbeResultProcessingDisposition> ProbeResultProcessingDispositions => Set<ProbeResultProcessingDisposition>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -56,6 +62,10 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         RejectChanges(ChangeTracker.Entries<AgentConfigurationSnapshot>(), "Configuration snapshots are immutable.");
         RejectChanges(ChangeTracker.Entries<AgentConfigurationAcknowledgement>(), "Configuration acknowledgements are append-only.");
         RejectChanges(ChangeTracker.Entries<ProbeResultLedgerEntry>(), "Probe result ledger entries are immutable.");
+        RejectChanges(ChangeTracker.Entries<ProbeStatusPolicySnapshot>(), "Status policy snapshots are immutable.");
+        RejectChanges(ChangeTracker.Entries<ProbeStatusPolicyBinding>(), "Status policy bindings are immutable.");
+        RejectChanges(ChangeTracker.Entries<AgentConfigurationEffectiveBoundary>(), "Configuration effective boundaries are immutable.");
+        RejectChanges(ChangeTracker.Entries<ProbeResultProcessingDisposition>(), "Probe result processing dispositions are immutable.");
 
         IncrementVersion(ChangeTracker.Entries<Site>());
         IncrementVersion(ChangeTracker.Entries<Device>());
@@ -64,6 +74,7 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         IncrementVersion(ChangeTracker.Entries<MaintenanceWindow>());
         IncrementVersion(ChangeTracker.Entries<Agent>());
         IncrementVersion(ChangeTracker.Entries<AgentEnrollmentToken>());
+        IncrementStateVersion(ChangeTracker.Entries<ProbeStatusProjection>());
     }
 
     private static void RejectChanges<TEntity>(IEnumerable<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<TEntity>> entries, string message) where TEntity : class
@@ -76,6 +87,15 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         {
             var version = entry.Property<long>("RowVersion");
             version.CurrentValue = entry.State == EntityState.Added ? 1 : version.OriginalValue + 1;
+        }
+    }
+
+    private static void IncrementStateVersion(IEnumerable<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<ProbeStatusProjection>> entries)
+    {
+        foreach (var entry in entries.Where(candidate => candidate.State is EntityState.Added or EntityState.Modified))
+        {
+            var version = entry.Property<long>(nameof(ProbeStatusProjection.StateVersion));
+            version.CurrentValue = entry.State == EntityState.Added ? 0 : version.OriginalValue + 1;
         }
     }
 }
