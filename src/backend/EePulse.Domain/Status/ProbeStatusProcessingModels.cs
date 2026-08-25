@@ -49,6 +49,20 @@ public sealed class ProbeStatusProjection
     public Guid? WatermarkResultId { get; private set; }
     public long StateVersion { get; private set; }
 
+    public void ApplyResult(ProbeStatusState state, DateTimeOffset eventAt, Guid agentId, Guid resultId)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        UnderlyingStatus = state.Status;
+        ConsecutiveFailureCount = state.ConsecutiveFailureCount;
+        ConsecutiveSuccessCount = state.ConsecutiveSuccessCount;
+        LastFreshEventAt = Guard.Utc(eventAt, nameof(eventAt));
+        WatermarkEventAt = Guard.Utc(eventAt, nameof(eventAt));
+        WatermarkAgentId = Required(agentId, nameof(agentId));
+        WatermarkResultId = Required(resultId, nameof(resultId));
+        ValidateStructure();
+    }
+
     private void ValidateStructure()
     {
         if (!Enum.IsDefined(UnderlyingStatus)) throw new DomainValidationException(nameof(UnderlyingStatus), "Probe status is invalid.");

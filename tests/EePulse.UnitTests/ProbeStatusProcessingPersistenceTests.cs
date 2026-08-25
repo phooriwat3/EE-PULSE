@@ -26,6 +26,26 @@ public sealed class ProbeStatusProcessingPersistenceTests
         Assert.Equal(0, valid.StateVersion);
     }
 
+    [Fact]
+    public void ProjectionAppliesResultStateAndCursorWithoutViolatingInvariants()
+    {
+        var projection = new ProbeStatusProjection(Guid.NewGuid(), ProbeStatus.Unknown, 0, 0, null, null, null, null);
+        var eventAt = Now.AddSeconds(1);
+        var agentId = Guid.NewGuid();
+        var resultId = Guid.NewGuid();
+
+        projection.ApplyResult(new ProbeStatusState(ProbeStatus.Recovering, 0, 1), eventAt, agentId, resultId);
+
+        Assert.Equal(ProbeStatus.Recovering, projection.UnderlyingStatus);
+        Assert.Equal(0, projection.ConsecutiveFailureCount);
+        Assert.Equal(1, projection.ConsecutiveSuccessCount);
+        Assert.Equal(eventAt, projection.LastFreshEventAt);
+        Assert.Equal(eventAt, projection.WatermarkEventAt);
+        Assert.Equal(agentId, projection.WatermarkAgentId);
+        Assert.Equal(resultId, projection.WatermarkResultId);
+        Assert.Equal(0, projection.StateVersion);
+    }
+
     [Theory]
     [InlineData(0, 2, null, null)]
     [InlineData(3, 101, null, null)]
