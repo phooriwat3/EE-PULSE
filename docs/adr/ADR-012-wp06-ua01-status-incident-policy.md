@@ -13,14 +13,28 @@ probe values were proposals until this decision.
 
 The following MVP policy is binding.
 
-1. Per-Probe defaults/ranges are: interval 30 seconds (10-300), timeout 2 seconds
-   (1-10), attempts 3 (1-5), failure threshold 3 (1-10), and recovery threshold 2
-   (1-10). Default configurable warning thresholds are `warningAverageRttMs = 500 ms`
-   and `warningPacketLossRatio = 5%`; permitted values are 1-60,000 ms and 0-100%,
-   respectively. Compare result measurements `averageRttMs` and `packetLossRatio`
-   only with their configured warning thresholds. An unconfigured dimension is
-   ignored; a success with no configured quality thresholds is `UP`. Critical-quality
-   incidents are disabled for MVP.
+1. Per-Probe defaults/ranges preserve the frozen v1 configuration: interval 30 seconds
+   (5-3,600), timeout 2,000 milliseconds (100-60,000), attempts 3 (1-10), failure
+   threshold 3 (1-100), and recovery threshold 2 (1-100). The existing v1
+   `WarningRttMilliseconds` field remains the configurable RTT warning threshold;
+   newly configured Probes default it to 500 ms, it retains its existing positive-value
+   validation, and it is compared with result `AverageRttMilliseconds` without
+   renaming the public contract. `warningPacketLossRatio` is an internal nullable
+   policy input in the same decimal-ratio representation as the frozen result
+   contract: 5% is `0.05m`, a configured value is greater than 0 and at most 1, and
+   `null` means packet loss is not evaluated. Any future additive configuration
+   contract field for it requires Lead compatibility review in a later wave. Compare
+   result measurements only with their configured warning thresholds. An
+   unconfigured dimension is ignored; a success with no configured quality
+   thresholds is `UP`. Comparison is inclusive: `AverageRttMilliseconds >=
+   WarningRttMilliseconds` and `PacketLossRatio >= warningPacketLossRatio` are
+   `DEGRADED`. A null `AverageRttMilliseconds` cannot breach the RTT threshold but
+   does not prevent normal evaluation of a configured packet-loss threshold. If no
+   available measurement breaches a configured threshold, the successful result is
+   `UP`. Critical-quality incidents are disabled for MVP. Result-driven transition
+   reasons are fixed, bounded codes: `bootstrap-success`, `quality-degraded`,
+   `quality-restored`, `failure-threshold-met`, `recovery-pending`,
+   `recovery-threshold-met`, and `recovery-failed`.
 2. The first confirmed DOWN that opens an availability incident emits an `opened`
    IncidentLifecycleEvent with NotificationSuppressionContext
    `eligible/availability-down`. Outside maintenance and active flapping, confirmed
@@ -30,10 +44,20 @@ The following MVP policy is binding.
    Disable resolves an active incident with reason `probe-disabled`, producing a
    `resolved` IncidentLifecycleEvent with a suppressed
    NotificationSuppressionContext (`probe-disabled`).
-3. A failure during `RECOVERING` returns immediately to `DOWN`, resets recovery
-   success to zero, retains the active incident, and increments occurrence exactly
-   once. It emits one `occurrence` IncidentLifecycleEvent with a suppressed
-   NotificationSuppressionContext (`recovery-failed`).
+3. Counters are bounded: consecutive failures saturate at `failureThreshold` and
+   consecutive recovery/successes saturate at `recoveryThreshold`; a failure resets
+   success to zero and a success resets failure to zero, so counters never overflow.
+   Any `Failure` during `RECOVERING` returns immediately to `DOWN`, sets success to
+   zero and failure to one, retains the active incident, and increments occurrence
+   exactly once. Its transition reason is `recovery-failed`; it emits one
+   `occurrence` IncidentLifecycleEvent with a suppressed
+   NotificationSuppressionContext (`recovery-failed`). A failure while already
+   `DOWN` remains `DOWN` and only updates the bounded failure counter. A success
+   while `UP` or `DEGRADED` applies quality classification and transitions only when
+   the quality-derived state changes: `UP` to `DEGRADED` is `quality-degraded` and
+   `DEGRADED` to `UP` is `quality-restored`. A `recoveryThreshold` of one allows
+   `DOWN` to transition directly to quality-derived `UP`/`DEGRADED` with
+   `recovery-threshold-met`.
 4. Heartbeat/freshness `UNKNOWN` leaves an active incident unchanged and produces
    no IncidentLifecycleEvent or NotificationSuppressionContext.
 5. Flapping activates on the third confirmed `DOWN` in a rolling 15-minute window,
@@ -52,14 +76,18 @@ The following MVP policy is binding.
    `beyond-approved-lateness`; future results are `future-or-skew-suspect`; both
    remain auditable historical-only data. A cursor-lower result is always
    `late-order`.
-7. A configuration version becomes effective at the database timestamp when the
-   Server durably persists its `Applied` acknowledgement. Compare PostgreSQL
-   `ledger.receivedAt` to that timestamp; Agent-reported time does not determine the
-   boundary. Results received earlier are `config-not-effective` historical-only;
-   later results use the immutable snapshot mapped to their configuration version.
-   Configuration causes use that boundary; maintenance, disable, and expiry causes
-   retain the snapshot at their persisted database source boundary. Policy changes
-   are not retroactive.
+7. Policy lineage has two durable concepts. Immutable policy content is mapped as
+   `(probeId, configurationVersion) -> policySnapshotId`. Separately, each Agent's
+   effective boundary is mapped as `(agentId, configurationVersion) ->
+   appliedAcknowledgementReceivedAt`, the database timestamp at which the Server
+   durably persists that Agent's `Applied` acknowledgement. A ledger result resolves
+   content by its Probe/version and eligibility by its Agent/version; do not assume
+   one Agent per Agent Group. Compare PostgreSQL `ledger.receivedAt` to the per-Agent
+   boundary; Agent-reported time does not determine it. Results received earlier are
+   `config-not-effective` historical-only; later results use the immutable mapped
+   snapshot. Configuration causes use their persisted source boundary; maintenance,
+   disable, and expiry causes retain the snapshot at their persisted database source
+   boundary. Policy changes are not retroactive.
 8. Eligible availability time is enabled, scheduled time outside maintenance.
    Maintenance and disabled time are excluded and reported separately. Coverage is
    `(UP + DEGRADED + DOWN + RECOVERING) / eligible`; availability is
