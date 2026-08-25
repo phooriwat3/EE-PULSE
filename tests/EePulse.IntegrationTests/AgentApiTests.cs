@@ -8,8 +8,14 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.TestHost;
 using EePulse.Api.Agents;
+using EePulse.Application.Time;
+using EePulse.Domain.Agents;
+using EePulse.Domain.Status;
+using EePulse.Infrastructure.Persistence.ProbeProcessing;
+using Npgsql;
 
 namespace EePulse.IntegrationTests;
 
@@ -197,6 +203,210 @@ public sealed class AgentApiTests
         var responses = await Task.WhenAll(requests); Assert.Single(responses, x => x.StatusCode == HttpStatusCode.Created); Assert.Equal(9, responses.Count(x => x.StatusCode == HttpStatusCode.Gone));
         await using var scope = factory.Services.CreateAsyncScope(); Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<EePulseDbContext>().Agents.CountAsync(ct));
     }
+
+    [Fact]
+    public async Task ConfigurationPublicationMaterializesFrozenPolicyLineageAndAppliedAcknowledgementsCreateStableBoundaries()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var applicationNow = new DateTimeOffset(1900, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString);
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IUtcClock>();
+                services.AddSingleton<IUtcClock>(new FixedClock(applicationNow));
+            });
+        });
+        using var client = factory.CreateClient();
+        var group = await CreateGroup(client, ct);
+        _ = await SendAdmin<AgentNetworkPolicyResponse>(client, HttpMethod.Put, $"/api/v1/agent-groups/{group.Id}/allowed-networks", new UpdateAgentGroupAllowedNetworksRequest(1, ["192.0.2.0/24"], group.RowVersion), ct);
+        var site = await SendAdmin<SiteResponse>(client, HttpMethod.Post, "/api/v1/sites", new CreateSiteRequest("LIN", "Lineage", "UTC"), ct);
+        var device = await SendAdmin<DeviceResponse>(client, HttpMethod.Post, "/api/v1/devices", new CreateDeviceRequest(site.Id, "lineage", "192.0.2.80", null, "server", null, null, "Normal", []), ct);
+        var firstProbe = await SendAdmin<ProbeResponse>(client, HttpMethod.Post, "/api/v1/probes", new CreateProbeRequest(device.Id, group.Id, 30, 2_000, 3, 500, null, 1, 1), ct);
+        var secondProbe = await SendAdmin<ProbeResponse>(client, HttpMethod.Post, "/api/v1/probes", new CreateProbeRequest(device.Id, group.Id, 30, 2_000, 3, 500, null, 1, 1), ct);
+        var groupId = Guid.Parse(group.Id);
+        var firstProbeId = Guid.Parse(firstProbe.Id);
+        var secondProbeId = Guid.Parse(secondProbe.Id);
+
+        Guid firstPolicyId;
+        await using (var firstScope = factory.Services.CreateAsyncScope())
+        {
+            var db = firstScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            var bindings = await db.ProbeStatusPolicyBindings.AsNoTracking().Where(x => x.AgentGroupId == groupId && x.ConfigurationVersion == 3).OrderBy(x => x.ProbeId).ToListAsync(ct);
+            Assert.Equal(2, bindings.Count);
+            Assert.All(bindings, binding => Assert.Contains(binding.ProbeId, new[] { firstProbeId, secondProbeId }));
+            Assert.Single(bindings.Select(x => x.PolicySnapshotId).Distinct());
+            firstPolicyId = bindings[0].PolicySnapshotId;
+            Assert.Single(await db.ProbeStatusPolicySnapshots.AsNoTracking().ToListAsync(ct));
+            var firstPolicy = await db.ProbeStatusPolicySnapshots.AsNoTracking().SingleAsync(x => x.Id == firstPolicyId, ct);
+            Assert.Equal(1, firstPolicy.PolicyVersion);
+            Assert.Equal(1, firstPolicy.FailureThreshold);
+            Assert.Equal(1, firstPolicy.RecoveryThreshold);
+            Assert.Equal(500, firstPolicy.WarningRttMilliseconds);
+            Assert.Equal(0.05m, firstPolicy.WarningPacketLossRatio);
+            Assert.Equal(300, firstPolicy.ApprovedLatenessSeconds);
+            Assert.Equal(60, firstPolicy.ApprovedFutureSkewSeconds);
+            foreach (var binding in bindings)
+                Assert.True(await db.AgentConfigurationSnapshots.AsNoTracking().AnyAsync(snapshot => snapshot.AgentGroupId == binding.AgentGroupId && snapshot.Version == binding.ConfigurationVersion, ct));
+        }
+
+        var issued = await Issue(client, group.Id, ct);
+        var enrolled = await Enroll(client, issued, Guid.NewGuid(), "lineage-agent", ct);
+        var unchanged = await SendAdmin<AgentNetworkPolicyResponse>(
+    client,
+    HttpMethod.Put,
+    $"/api/v1/agents/{enrolled.AgentId}/allowed-networks",
+    new UpdateAgentAllowedNetworksRequest(
+        1,
+        ["192.0.2.0/24"],
+        1),
+    ct);
+        Assert.Equal(4, unchanged.ConfigurationVersion);
+        await using (var unchangedScope = factory.Services.CreateAsyncScope())
+        {
+            var db = unchangedScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            var bindings = await db.ProbeStatusPolicyBindings.AsNoTracking().Where(x => x.AgentGroupId == groupId && x.ConfigurationVersion == unchanged.ConfigurationVersion).ToListAsync(ct);
+            Assert.Equal(2, bindings.Count);
+            Assert.All(bindings, binding => Assert.Equal(firstPolicyId, binding.PolicySnapshotId));
+        }
+
+        var failureChanged = await SendAdmin<ProbeResponse>(client, HttpMethod.Put, $"/api/v1/probes/{firstProbe.Id}", new UpdateProbeRequest(group.Id, 30, 2_000, 3, 500, null, 4, 1, true, firstProbe.RowVersion), ct);
+        Guid failurePolicyId;
+        await using (var failureChangedScope = factory.Services.CreateAsyncScope())
+        {
+            var db = failureChangedScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            var bindings = await db.ProbeStatusPolicyBindings.AsNoTracking().Where(x => x.AgentGroupId == groupId && x.ConfigurationVersion == 5).ToDictionaryAsync(x => x.ProbeId, ct);
+            failurePolicyId = bindings[firstProbeId].PolicySnapshotId;
+            Assert.NotEqual(firstPolicyId, failurePolicyId);
+            Assert.Equal(firstPolicyId, bindings[secondProbeId].PolicySnapshotId);
+            var failurePolicy = await db.ProbeStatusPolicySnapshots.AsNoTracking().SingleAsync(x => x.Id == failurePolicyId, ct);
+            Assert.Equal(4, failurePolicy.FailureThreshold);
+            Assert.Equal(1, failurePolicy.RecoveryThreshold);
+            Assert.Equal(500, failurePolicy.WarningRttMilliseconds);
+        }
+
+        _ = await SendAdmin<ProbeResponse>(client, HttpMethod.Put, $"/api/v1/probes/{firstProbe.Id}", new UpdateProbeRequest(group.Id, 30, 2_000, 3, 500, null, 4, 2, true, failureChanged.RowVersion), ct);
+        await using (var recoveryChangedScope = factory.Services.CreateAsyncScope())
+        {
+            var db = recoveryChangedScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            var bindings = await db.ProbeStatusPolicyBindings.AsNoTracking().Where(x => x.AgentGroupId == groupId && x.ConfigurationVersion == 6).ToDictionaryAsync(x => x.ProbeId, ct);
+            var recoveryPolicyId = bindings[firstProbeId].PolicySnapshotId;
+            Assert.NotEqual(firstPolicyId, recoveryPolicyId);
+            Assert.NotEqual(failurePolicyId, recoveryPolicyId);
+            Assert.Equal(firstPolicyId, bindings[secondProbeId].PolicySnapshotId);
+            var recoveryPolicy = await db.ProbeStatusPolicySnapshots.AsNoTracking().SingleAsync(x => x.Id == recoveryPolicyId, ct);
+            Assert.Equal(4, recoveryPolicy.FailureThreshold);
+            Assert.Equal(2, recoveryPolicy.RecoveryThreshold);
+            Assert.Equal(500, recoveryPolicy.WarningRttMilliseconds);
+        }
+
+        long groupRowVersion;
+        await using (var rollbackScope = factory.Services.CreateAsyncScope()) groupRowVersion = await rollbackScope.ServiceProvider.GetRequiredService<EePulseDbContext>().AgentGroups.AsNoTracking().Where(x => x.Id == groupId).Select(x => x.RowVersion).SingleAsync(ct);
+        var rollback = await SendAdmin<AgentConfigurationPublicationResponse>(client, HttpMethod.Post, $"/api/v1/agent-groups/{group.Id}/configuration/rollback", new RollbackAgentConfigurationRequest(1, 3, groupRowVersion), ct);
+        await using (var rollbackScope = factory.Services.CreateAsyncScope())
+        {
+            var db = rollbackScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            var bindings = await db.ProbeStatusPolicyBindings.AsNoTracking().Where(x => x.AgentGroupId == groupId && x.ConfigurationVersion == rollback.ConfigurationVersion).ToDictionaryAsync(x => x.ProbeId, ct);
+            Assert.Equal(firstPolicyId, bindings[firstProbeId].PolicySnapshotId);
+            Assert.Equal(firstPolicyId, bindings[secondProbeId].PolicySnapshotId);
+            await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_policy_bindings SET policy_snapshot_id = {Guid.NewGuid()} WHERE probe_id = {firstProbeId} AND configuration_version = {rollback.ConfigurationVersion}", ct));
+        }
+
+        await using (var beforeAppliedScope = factory.Services.CreateAsyncScope())
+        {
+            var db = beforeAppliedScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            Assert.True(await db.ProbeStatusPolicyBindings.AnyAsync(x => x.ProbeId == firstProbeId && x.ConfigurationVersion == rollback.ConfigurationVersion, ct));
+            Assert.False(await db.AgentConfigurationEffectiveBoundaries.AnyAsync(x => x.AgentId == enrolled.AgentId && x.ConfigurationVersion == rollback.ConfigurationVersion, ct));
+            var unresolvedResultId = Guid.NewGuid();
+            var unresolvedAt = DateTimeOffset.UtcNow;
+            db.Add(new ProbeResultLedgerEntry(enrolled.AgentId, unresolvedResultId, firstProbeId, rollback.ConfigurationVersion, unresolvedAt.AddSeconds(-1), unresolvedAt, 3, 3, 0m, 1m, 1m, 1m, null, new byte[32], unresolvedAt));
+            await db.SaveChangesAsync(ct);
+            var unresolved = await new ProbeResultStatusProcessor(db, new FixedClock(unresolvedAt)).ProcessNextAsync(firstProbeId, ct);
+            Assert.Equal(ProbeResultProcessingDispositionKind.HistoricalOther, unresolved.Disposition);
+            Assert.Empty(await db.ProbeStatusProjections.AsNoTracking().ToListAsync(ct));
+        }
+
+        var rejectedId = Guid.NewGuid();
+        _ = await SendAgent<AgentConfigurationAcknowledgementResponse>(client, HttpMethod.Post, $"/api/v1/agents/{enrolled.AgentId}/configuration/acknowledgements", enrolled.AgentCredential, new AgentConfigurationAcknowledgementRequest(1, rejectedId, rollback.ConfigurationVersion, "Rejected", null, AgentConfigurationRejectionCodes.ConfigurationInvalid, DateTimeOffset.UtcNow), HttpStatusCode.OK, ct);
+        await using (var rejectedScope = factory.Services.CreateAsyncScope()) Assert.False(await rejectedScope.ServiceProvider.GetRequiredService<EePulseDbContext>().AgentConfigurationEffectiveBoundaries.AnyAsync(x => x.AgentId == enrolled.AgentId && x.ConfigurationVersion == rollback.ConfigurationVersion, ct));
+
+        var appliedId = Guid.NewGuid();
+        var agentAppliedAt = new DateTimeOffset(2001, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var appliedRequest = new AgentConfigurationAcknowledgementRequest(1, appliedId, rollback.ConfigurationVersion, "Applied", agentAppliedAt, null, DateTimeOffset.UtcNow);
+        var appliedResponses = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => SendAgent<AgentConfigurationAcknowledgementResponse>(client, HttpMethod.Post, $"/api/v1/agents/{enrolled.AgentId}/configuration/acknowledgements", enrolled.AgentCredential, appliedRequest, HttpStatusCode.OK, ct)));
+        Assert.Equal(appliedResponses[0], appliedResponses[1]);
+        await using (var appliedScope = factory.Services.CreateAsyncScope())
+        {
+            var db = appliedScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            var acknowledgement = await db.AgentConfigurationAcknowledgements.AsNoTracking().SingleAsync(x => x.AgentId == enrolled.AgentId && x.Id == appliedId, ct);
+            var boundary = await db.AgentConfigurationEffectiveBoundaries.AsNoTracking().SingleAsync(x => x.AgentId == enrolled.AgentId && x.ConfigurationVersion == rollback.ConfigurationVersion, ct);
+            Assert.Equal(acknowledgement.ReceivedAt, boundary.AppliedAcknowledgementReceivedAt);
+            Assert.NotEqual(applicationNow, acknowledgement.ReceivedAt);
+            Assert.NotEqual(applicationNow, boundary.AppliedAcknowledgementReceivedAt);
+            Assert.NotEqual(agentAppliedAt, acknowledgement.ReceivedAt);
+            Assert.NotEqual(agentAppliedAt, boundary.AppliedAcknowledgementReceivedAt);
+            Assert.Equal(appliedId, boundary.SourceAcknowledgementId);
+        }
+
+        var laterApplied = await SendAgent<AgentConfigurationAcknowledgementResponse>(client, HttpMethod.Post, $"/api/v1/agents/{enrolled.AgentId}/configuration/acknowledgements", enrolled.AgentCredential, new AgentConfigurationAcknowledgementRequest(1, Guid.NewGuid(), rollback.ConfigurationVersion, "Applied", agentAppliedAt.AddDays(1), null, DateTimeOffset.UtcNow), HttpStatusCode.OK, ct);
+        Assert.Equal(rollback.ConfigurationVersion, laterApplied.ConfigurationVersion);
+        await using var stableScope = factory.Services.CreateAsyncScope();
+        var stableDb = stableScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+        var stableBoundary = await stableDb.AgentConfigurationEffectiveBoundaries.AsNoTracking().SingleAsync(x => x.AgentId == enrolled.AgentId && x.ConfigurationVersion == rollback.ConfigurationVersion, ct);
+        Assert.Equal(appliedId, stableBoundary.SourceAcknowledgementId);
+
+        var beforeBoundaryResultId = Guid.NewGuid();
+        var equalBoundaryResultId = Guid.NewGuid();
+        var afterBoundaryResultId = Guid.NewGuid();
+        await using (var resultScope = factory.Services.CreateAsyncScope())
+        {
+            var db = resultScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            foreach (var (resultId, receivedAt) in new[]
+            {
+                (beforeBoundaryResultId, stableBoundary.AppliedAcknowledgementReceivedAt.Add(TimeSpan.FromMicroseconds(-1))),
+                (equalBoundaryResultId, stableBoundary.AppliedAcknowledgementReceivedAt),
+                (afterBoundaryResultId, stableBoundary.AppliedAcknowledgementReceivedAt.Add(TimeSpan.FromMicroseconds(1)))
+            })
+                db.Add(new ProbeResultLedgerEntry(enrolled.AgentId, resultId, firstProbeId, rollback.ConfigurationVersion, receivedAt.AddSeconds(-1), receivedAt, 3, 3, 0m, 1m, 1m, 1m, null, new byte[32], receivedAt));
+            await db.SaveChangesAsync(ct);
+            var processor = new ProbeResultStatusProcessor(db, new FixedClock(stableBoundary.AppliedAcknowledgementReceivedAt));
+            for (var index = 0; index < 3; index++) await processor.ProcessNextAsync(firstProbeId, ct);
+        }
+        await using (var processorScope = factory.Services.CreateAsyncScope())
+        {
+            var db = processorScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            var dispositions = await db.ProbeResultProcessingDispositions.AsNoTracking().Where(x => x.AgentId == enrolled.AgentId).ToDictionaryAsync(x => x.ResultId, ct);
+            Assert.Equal("config-not-effective", dispositions[beforeBoundaryResultId].ReasonCode);
+            Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, dispositions[equalBoundaryResultId].Disposition);
+            Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, dispositions[afterBoundaryResultId].Disposition);
+            Assert.Equal(firstPolicyId, dispositions[equalBoundaryResultId].ResolvedPolicySnapshotId);
+            Assert.Equal(firstPolicyId, dispositions[afterBoundaryResultId].ResolvedPolicySnapshotId);
+        }
+
+        var currentAgent = await SendAdmin<AgentResponse>(client, HttpMethod.Get, $"/api/v1/agents/{enrolled.AgentId}", null, ct);
+        var concurrentVersion = await SendAdmin<AgentNetworkPolicyResponse>(
+    client,
+    HttpMethod.Put,
+    $"/api/v1/agents/{enrolled.AgentId}/allowed-networks",
+    new UpdateAgentAllowedNetworksRequest(
+        1,
+        ["192.0.2.0/24"],
+        currentAgent.RowVersion),
+    ct);
+        var distinctAppliedIds = new[] { Guid.NewGuid(), Guid.NewGuid() };
+        var distinctResponses = await Task.WhenAll(distinctAppliedIds.Select(id => SendAgent<AgentConfigurationAcknowledgementResponse>(client, HttpMethod.Post, $"/api/v1/agents/{enrolled.AgentId}/configuration/acknowledgements", enrolled.AgentCredential, new AgentConfigurationAcknowledgementRequest(1, id, concurrentVersion.ConfigurationVersion, "Applied", agentAppliedAt, null, DateTimeOffset.UtcNow), HttpStatusCode.OK, ct)));
+        Assert.All(distinctResponses, response => Assert.Equal(concurrentVersion.ConfigurationVersion, response.ConfigurationVersion));
+        await using var concurrentScope = factory.Services.CreateAsyncScope();
+        var concurrentDb = concurrentScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+        var concurrentBoundary = await concurrentDb.AgentConfigurationEffectiveBoundaries.AsNoTracking().SingleAsync(x => x.AgentId == enrolled.AgentId && x.ConfigurationVersion == concurrentVersion.ConfigurationVersion, ct);
+        Assert.Contains(concurrentBoundary.SourceAcknowledgementId, distinctAppliedIds);
+        var sourceAcknowledgement = await concurrentDb.AgentConfigurationAcknowledgements.AsNoTracking().SingleAsync(x => x.AgentId == enrolled.AgentId && x.Id == concurrentBoundary.SourceAcknowledgementId, ct);
+        Assert.Equal(sourceAcknowledgement.ReceivedAt, concurrentBoundary.AppliedAcknowledgementReceivedAt);
+    }
+
+    private sealed class FixedClock(DateTimeOffset now) : IUtcClock { public DateTimeOffset UtcNow => now; }
 
     private static AgentHeartbeatRequest Heartbeat(Guid id) => new(1, id, "1.2.3", "probe-a", 1, 0, "Healthy", DateTimeOffset.UtcNow);
     private static System.Text.Json.JsonSerializerOptions CreateAgentJson() { var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web); AgentJsonContract.AddConverters(options); return options; }
