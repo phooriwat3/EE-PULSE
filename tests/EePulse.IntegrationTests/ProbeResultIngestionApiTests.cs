@@ -7,9 +7,11 @@ using EePulse.Api.Agents;
 using EePulse.Contracts.Agents;
 using EePulse.Contracts.Inventory;
 using EePulse.Infrastructure.Persistence;
+using EePulse.Infrastructure.Persistence.ProbeProcessing;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 
 namespace EePulse.IntegrationTests;
 
@@ -120,28 +122,246 @@ public sealed class ProbeResultIngestionApiTests
         { var response = await client.SendAsync(badCredential, ct); Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode); Assert.DoesNotContain("malformed-secret-canary", await response.Content.ReadAsStringAsync(ct), StringComparison.Ordinal); }
     }
 
+    [Fact]
+    public async Task ResultIngestionWaitsForHeldProbeLockThenCommitsAndAcknowledges()
+    {
+        await AssertResultIngestionWaitsForHeldProbeLockAsync(
+            static (transaction, cancellationToken) => transaction.CommitAsync(cancellationToken));
+    }
+
+    [Fact]
+    public async Task ResultIngestionWaitsForHeldProbeLockUntilRollbackReleasesIt()
+    {
+        await AssertResultIngestionWaitsForHeldProbeLockAsync(
+            static (transaction, cancellationToken) => transaction.RollbackAsync(cancellationToken));
+    }
+
+    [Fact]
+    public async Task ReversedOverlappingProbeBatchesCompleteAndPersistEachIdentityOnce()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var ct = timeout.Token;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+        using var client = factory.CreateClient();
+        var enrolled = await EnrollConfiguredAgentWithProbes(client, 2, ct);
+        var orderedProbeIds = enrolled.ProbeIds.OrderBy(probeId => probeId.ToString("D"), StringComparer.Ordinal).ToArray();
+        var lowProbeId = orderedProbeIds[0];
+        var highProbeId = orderedProbeIds[1];
+        var first = Result(enrolled.AgentId, lowProbeId, enrolled.ConfigurationVersion);
+        var second = Result(enrolled.AgentId, highProbeId, enrolled.ConfigurationVersion);
+        var third = Result(enrolled.AgentId, lowProbeId, enrolled.ConfigurationVersion);
+        var fourth = Result(enrolled.AgentId, highProbeId, enrolled.ConfigurationVersion);
+
+        await using var held = new EePulseDbContext(CreateOptions(postgres.ConnectionString));
+        await using var heldTransaction = await held.Database.BeginTransactionAsync(ct);
+        await ProbeTransactionLock.AcquireAsync(held, highProbeId, ct);
+
+        using var firstRequest = Request($"/api/v1/agents/{enrolled.AgentId}/result-batches", enrolled.Credential, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [first, second]));
+        var firstResponse = client.SendAsync(firstRequest, ct);
+        Task<HttpResponseMessage>? secondResponse = null;
+        var heldReleased = false;
+        try
+        {
+            await using var observer = new NpgsqlConnection(postgres.ConnectionString);
+            await observer.OpenAsync(ct);
+            await WaitForProbeLockAsync(observer, lowProbeId, granted: true, [firstResponse], ct);
+            await WaitForProbeLockAsync(observer, highProbeId, granted: false, [firstResponse], ct);
+
+            using var secondRequest = Request($"/api/v1/agents/{enrolled.AgentId}/result-batches", enrolled.Credential, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [fourth, third]));
+            secondResponse = client.SendAsync(secondRequest, ct);
+            await WaitForProbeLockAsync(observer, lowProbeId, granted: false, [firstResponse, secondResponse], ct);
+
+            await heldTransaction.RollbackAsync(ct);
+            heldReleased = true;
+
+            using var firstCompletedResponse = await firstResponse.WaitAsync(ct);
+            using var secondCompletedResponse = await secondResponse.WaitAsync(ct);
+            Assert.Equal(HttpStatusCode.OK, firstCompletedResponse.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, secondCompletedResponse.StatusCode);
+            var firstBody = (await firstCompletedResponse.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, ct))!;
+            var secondBody = (await secondCompletedResponse.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, ct))!;
+            Assert.Equal(new[] { first.ResultId, second.ResultId }.OrderBy(x => x), firstBody.AcceptedResultIds);
+            Assert.Equal(new[] { third.ResultId, fourth.ResultId }.OrderBy(x => x), secondBody.AcceptedResultIds);
+            await AssertLedgerCount(factory, 4, ct);
+        }
+        finally
+        {
+            if (!heldReleased && held.Database.CurrentTransaction is not null && held.Database.GetDbConnection().State == System.Data.ConnectionState.Open)
+            {
+                await heldTransaction.RollbackAsync(CancellationToken.None);
+            }
+
+            await firstResponse;
+            if (secondResponse is not null) await secondResponse;
+        }
+    }
+
+    [Fact]
+    public async Task ResultIngestionForDifferentProbeProceedsWhileAnotherProbeLockIsHeld()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var ct = timeout.Token;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+        using var client = factory.CreateClient();
+        var enrolled = await EnrollConfiguredAgentWithProbes(client, 2, ct);
+
+        await using var held = new EePulseDbContext(CreateOptions(postgres.ConnectionString));
+        await using var heldTransaction = await held.Database.BeginTransactionAsync(ct);
+        await ProbeTransactionLock.AcquireAsync(held, enrolled.ProbeIds[0], ct);
+
+        var result = Result(enrolled.AgentId, enrolled.ProbeIds[1], enrolled.ConfigurationVersion);
+        var response = await Send(client, enrolled, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [result]), HttpStatusCode.OK, ct);
+        Assert.Equal([result.ResultId], response.AcceptedResultIds);
+        await AssertLedgerCount(factory, 1, ct);
+
+        await heldTransaction.RollbackAsync(ct);
+    }
+
+    private static async Task AssertResultIngestionWaitsForHeldProbeLockAsync(
+        Func<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction, CancellationToken, Task> releaseHeldTransaction)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var ct = timeout.Token;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+        using var client = factory.CreateClient();
+        var enrolled = await EnrollConfiguredAgent(client, ct);
+        var result = Result(enrolled.AgentId, enrolled.ProbeId, enrolled.ConfigurationVersion);
+
+        await using var held = new EePulseDbContext(CreateOptions(postgres.ConnectionString));
+        await using var heldTransaction = await held.Database.BeginTransactionAsync(ct);
+        await ProbeTransactionLock.AcquireAsync(held, enrolled.ProbeId, ct);
+
+        using var request = Request($"/api/v1/agents/{enrolled.AgentId}/result-batches", enrolled.Credential, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [result]));
+        var pendingResponse = client.SendAsync(request, ct);
+        var released = false;
+        try
+        {
+            await using var observer = new NpgsqlConnection(postgres.ConnectionString);
+            await observer.OpenAsync(ct);
+            await WaitForUngrantedProbeLockAsync(observer, enrolled.ProbeId, pendingResponse, ct);
+            await AssertLedgerCount(factory, 0, ct);
+
+            await releaseHeldTransaction(heldTransaction, ct);
+            released = true;
+
+            using var response = await pendingResponse;
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = (await response.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, ct))!;
+            Assert.Equal([result.ResultId], body.AcceptedResultIds);
+            await AssertLedgerCount(factory, 1, ct);
+        }
+        finally
+        {
+            if (!released)
+            {
+                await heldTransaction.RollbackAsync(CancellationToken.None);
+                await pendingResponse;
+            }
+        }
+    }
+
+    private static async Task WaitForUngrantedProbeLockAsync(
+        NpgsqlConnection observer,
+        Guid probeId,
+        Task pendingRequest,
+        CancellationToken cancellationToken)
+    {
+        var canonicalProbeId = probeId.ToString("D");
+        while (true)
+        {
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_locks
+                    WHERE locktype = 'advisory'
+                      AND NOT granted
+                      AND (lpad(to_hex(classid::bigint), 8, '0') || lpad(to_hex(objid::bigint), 8, '0')) = lpad(to_hex(hashtextextended(@probeId, 0)), 16, '0')
+                )
+                """, observer);
+            command.Parameters.AddWithValue("probeId", canonicalProbeId);
+
+            if ((bool)(await command.ExecuteScalarAsync(cancellationToken))!) return;
+            if (pendingRequest.IsCompleted)
+            {
+                await pendingRequest;
+                throw new Xunit.Sdk.XunitException("The ingestion request completed before waiting for its Probe transaction lock.");
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+        }
+    }
+
+    private static async Task WaitForProbeLockAsync(
+        NpgsqlConnection observer,
+        Guid probeId,
+        bool granted,
+        IReadOnlyCollection<Task<HttpResponseMessage>> pendingResponses,
+        CancellationToken cancellationToken)
+    {
+        var canonicalProbeId = probeId.ToString("D");
+        while (true)
+        {
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_locks
+                    WHERE locktype = 'advisory'
+                      AND granted = @granted
+                      AND (lpad(to_hex(classid::bigint), 8, '0') || lpad(to_hex(objid::bigint), 8, '0')) = lpad(to_hex(hashtextextended(@probeId, 0)), 16, '0')
+                )
+                """, observer);
+            command.Parameters.AddWithValue("granted", granted);
+            command.Parameters.AddWithValue("probeId", canonicalProbeId);
+
+            if ((bool)(await command.ExecuteScalarAsync(cancellationToken))!) return;
+            if (pendingResponses.Any(response => response.IsCompleted))
+            {
+                await Task.WhenAll(pendingResponses);
+                throw new Xunit.Sdk.XunitException("An ingestion request completed before the expected Probe advisory-lock state was observed.");
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+        }
+    }
+
     private static async Task<(Guid AgentId, Guid ProbeId, long ConfigurationVersion, string Credential)> EnrollConfiguredAgent(HttpClient client, CancellationToken ct)
+    {
+        var enrolled = await EnrollConfiguredAgentWithProbes(client, 1, ct);
+        return (enrolled.AgentId, enrolled.ProbeIds[0], enrolled.ConfigurationVersion, enrolled.Credential);
+    }
+
+    private static async Task<(Guid AgentId, IReadOnlyList<Guid> ProbeIds, long ConfigurationVersion, string Credential)> EnrollConfiguredAgentWithProbes(HttpClient client, int probeCount, CancellationToken ct)
     {
         var group = await Admin<AgentGroupResponse>(client, HttpMethod.Post, "/api/v1/agent-groups", new CreateAgentGroupRequest($"ingestion-{Guid.NewGuid():N}", null), ct);
         _ = await Admin<AgentNetworkPolicyResponse>(client, HttpMethod.Put, $"/api/v1/agent-groups/{group.Id}/allowed-networks", new UpdateAgentGroupAllowedNetworksRequest(1, ["192.0.2.0/24"], group.RowVersion), ct);
         var site = await Admin<SiteResponse>(client, HttpMethod.Post, "/api/v1/sites", new CreateSiteRequest("ING" + Guid.NewGuid().ToString("N")[..6], "Ingestion", "UTC"), ct);
-        var device = await Admin<DeviceResponse>(client, HttpMethod.Post, "/api/v1/devices", new CreateDeviceRequest(site.Id, "target", "192.0.2.10", null, "server", null, null, "Normal", []), ct);
-        var probe = await Admin<ProbeResponse>(client, HttpMethod.Post, "/api/v1/probes", new CreateProbeRequest(device.Id, group.Id, 20, 1000, 1, null, null, 1, 1), ct);
+        var probeIds = new List<Guid>();
+        for (var index = 0; index < probeCount; index++)
+        {
+            var device = await Admin<DeviceResponse>(client, HttpMethod.Post, "/api/v1/devices", new CreateDeviceRequest(site.Id, $"target-{index}", $"192.0.2.{10 + index}", null, "server", null, null, "Normal", []), ct);
+            var probe = await Admin<ProbeResponse>(client, HttpMethod.Post, "/api/v1/probes", new CreateProbeRequest(device.Id, group.Id, 20, 1000, 1, null, null, 1, 1), ct);
+            probeIds.Add(Guid.Parse(probe.Id));
+        }
         var token = await Admin<CreateAgentEnrollmentTokenResponse>(client, HttpMethod.Post, "/api/v1/agent-enrollment-tokens", new CreateAgentEnrollmentTokenRequest(1, Guid.Parse(group.Id), "ingestion", null, ["192.0.2.0/24"]), ct);
         var enrollment = await Post<AgentEnrollmentResponse>(client, "/api/v1/agents/enroll", new AgentEnrollmentRequest(1, token.EnrollmentToken, Guid.NewGuid(), "ingestion-agent", "1.2.3", token.AllowedNetworks, DateTimeOffset.UtcNow), ct);
         var configuration = await Get<AgentConfigurationResponse>(client, $"/api/v1/agents/{enrollment.AgentId}/configuration", enrollment.AgentCredential, ct);
         _ = await SendAck(client, enrollment, configuration.ConfigurationVersion, ct);
-        return (enrollment.AgentId, Guid.Parse(probe.Id), configuration.ConfigurationVersion, enrollment.AgentCredential);
+        return (enrollment.AgentId, probeIds, configuration.ConfigurationVersion, enrollment.AgentCredential);
     }
 
     private static ProbeResultIngestionEnvelope Result(Guid agentId, Guid probeId, long version) => new(1, Guid.NewGuid(), agentId, probeId, version, new DateTimeOffset(2026, 8, 23, 13, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 8, 23, 13, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null);
     private static async Task<ProbeResultIngestionBatchResponse> Send(HttpClient client, (Guid AgentId, Guid ProbeId, long ConfigurationVersion, string Credential) agent, ProbeResultIngestionBatchRequest request, HttpStatusCode expected, CancellationToken ct) { using var message = Request($"/api/v1/agents/{agent.AgentId}/result-batches", agent.Credential, request); var response = await client.SendAsync(message, ct); Assert.Equal(expected, response.StatusCode); return (await response.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, ct))!; }
+    private static async Task<ProbeResultIngestionBatchResponse> Send(HttpClient client, (Guid AgentId, IReadOnlyList<Guid> ProbeIds, long ConfigurationVersion, string Credential) agent, ProbeResultIngestionBatchRequest request, HttpStatusCode expected, CancellationToken ct) { using var message = Request($"/api/v1/agents/{agent.AgentId}/result-batches", agent.Credential, request); var response = await client.SendAsync(message, ct); Assert.Equal(expected, response.StatusCode); return (await response.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, ct))!; }
     private static HttpRequestMessage Request(string path, string credential, object body) { var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(body, body.GetType(), new MediaTypeHeaderValue("application/json"), AgentJson) }; request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential); return request; }
     private static async Task<T> Admin<T>(HttpClient client, HttpMethod method, string path, object body, CancellationToken ct) { using var request = new HttpRequestMessage(method, path) { Content = JsonContent.Create(body, body.GetType(), new MediaTypeHeaderValue("application/json"), AgentJson) }; request.Headers.Add("X-EE-Pulse-Role", "Administrator"); request.Headers.Add("X-EE-Pulse-Actor", ActorId.ToString()); var response = await client.SendAsync(request, ct); Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(ct)); return (await response.Content.ReadFromJsonAsync<T>(ct))!; }
     private static async Task<T> Post<T>(HttpClient client, string path, object body, CancellationToken ct) { var response = await client.PostAsync(path, JsonContent.Create(body, body.GetType(), new MediaTypeHeaderValue("application/json"), AgentJson), ct); Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(ct)); return (await response.Content.ReadFromJsonAsync<T>(AgentJson, ct))!; }
     private static async Task<T> Get<T>(HttpClient client, string path, string credential, CancellationToken ct) { using var request = new HttpRequestMessage(HttpMethod.Get, path); request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential); var response = await client.SendAsync(request, ct); Assert.True(response.IsSuccessStatusCode); return (await response.Content.ReadFromJsonAsync<T>(AgentJson, ct))!; }
     private static async Task<AgentConfigurationAcknowledgementResponse> SendAck(HttpClient client, AgentEnrollmentResponse agent, long version, CancellationToken ct) { using var request = Request($"/api/v1/agents/{agent.AgentId}/configuration/acknowledgements", agent.AgentCredential, new AgentConfigurationAcknowledgementRequest(1, Guid.NewGuid(), version, "Applied", DateTimeOffset.UtcNow, null, DateTimeOffset.UtcNow)); var response = await client.SendAsync(request, ct); Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(ct)); return (await response.Content.ReadFromJsonAsync<AgentConfigurationAcknowledgementResponse>(AgentJson, ct))!; }
     private static async Task AssertLedgerCount(WebApplicationFactory<Program> factory, int expected, CancellationToken ct) { await using var scope = factory.Services.CreateAsyncScope(); Assert.Equal(expected, await scope.ServiceProvider.GetRequiredService<EePulseDbContext>().ProbeResultLedgerEntries.CountAsync(ct)); }
+    private static DbContextOptions<EePulseDbContext> CreateOptions(string connectionString) => new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(connectionString).Options;
     private static async Task AssertSafeConflictAudit(WebApplicationFactory<Program> factory, Guid agentId, Guid resultId, string credential, CancellationToken ct)
     {
         await using var scope = factory.Services.CreateAsyncScope();

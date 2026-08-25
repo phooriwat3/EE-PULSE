@@ -11,6 +11,7 @@ using EePulse.Domain.Agents;
 using EePulse.Domain.Auditing;
 using EePulse.Domain.Common;
 using EePulse.Infrastructure.Persistence;
+using EePulse.Infrastructure.Persistence.ProbeProcessing;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
@@ -156,6 +157,7 @@ public static partial class AgentEndpoints
         await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         foreach (var resultId in conflictingResultIds.OrderBy(x => x))
             AuditResultIdentityConflict(db, http, clock, agentId, resultId);
+        await ProbeTransactionLock.AcquireAllAsync(db, candidates.Values.Select(x => x.Result.ProbeId), ct);
         foreach (var candidate in candidates.Values.OrderBy(x => x.Result.ResultId))
         {
             var result = candidate.Result; var key = $"{agentId:D}/{result.ResultId:D}";
