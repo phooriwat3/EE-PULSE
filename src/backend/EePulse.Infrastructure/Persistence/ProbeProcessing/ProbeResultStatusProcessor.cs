@@ -123,8 +123,7 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
                     var incident = new AvailabilityIncident(Guid.NewGuid(), ledger.ProbeId, ledger.EndedAt);
                     var lifecycleEvent = new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, ledger.ProbeId,
                         ledger.AgentId, ledger.ResultId, transition.From, snapshot!.Id, snapshot.PolicyVersion, ledger.EndedAt);
-                    var suppressionContext = new NotificationSuppressionContext(lifecycleEvent.EventId, incident.Id,
-                        lifecycleEvent.LifecycleEventKey, lifecycleEvent.PolicyVersion, ledger.ReceivedAt);
+                    var suppressionContext = NotificationSuppressionContext.ForAvailabilityDownOpened(lifecycleEvent, ledger.ReceivedAt);
 
                     db.AddRange(incident, lifecycleEvent, suppressionContext);
                     db.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = incident.Id;
@@ -148,13 +147,31 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
                     activeIncident.ResolveForConfirmedRecovery(ledger.EndedAt);
                     var lifecycleEvent = IncidentLifecycleEvent.ForConfirmedRecovery(Guid.NewGuid(), activeIncident.Id,
                         ledger.ProbeId, ledger.AgentId, ledger.ResultId, transition.To, snapshot!.Id, snapshot.PolicyVersion, ledger.EndedAt);
-                    var suppressionContext = new NotificationSuppressionContext(lifecycleEvent.EventId, activeIncident.Id,
-                        lifecycleEvent.LifecycleEventKey, lifecycleEvent.PolicyVersion, ledger.ReceivedAt,
-                        AvailabilityIncident.ConfirmedRecoveryReason);
+                    var suppressionContext = NotificationSuppressionContext.ForConfirmedRecovery(lifecycleEvent, ledger.ReceivedAt);
 
                     db.AddRange(lifecycleEvent, suppressionContext);
                     db.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = null;
                 }
+            }
+            else if (IsRecoveryFailedOccurrence(transition))
+            {
+                var activeIncident = await db.AvailabilityIncidents.SingleOrDefaultAsync(incident =>
+                    incident.ProbeId == ledger.ProbeId &&
+                    (incident.Status == AvailabilityIncidentStatus.Open || incident.Status == AvailabilityIncidentStatus.Acknowledged),
+                    cancellationToken);
+                var openIncidentId = projection!.OpenIncidentId;
+
+                if (!openIncidentId.HasValue || activeIncident is null || activeIncident.Id != openIncidentId.Value)
+                {
+                    throw new InvalidOperationException("A recovery-failed transition requires the Probe status projection to reference its active availability incident.");
+                }
+
+                activeIncident.RecordRecoveryFailedOccurrence();
+                var lifecycleEvent = IncidentLifecycleEvent.ForRecoveryFailedOccurrence(Guid.NewGuid(), activeIncident.Id,
+                    ledger.ProbeId, ledger.AgentId, ledger.ResultId, snapshot!.Id, snapshot.PolicyVersion, ledger.EndedAt);
+                var suppressionContext = NotificationSuppressionContext.ForSuppressedRecoveryFailed(lifecycleEvent, ledger.ReceivedAt);
+
+                db.AddRange(lifecycleEvent, suppressionContext);
             }
         }
         await db.SaveChangesAsync(cancellationToken);
@@ -227,6 +244,11 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
         transition.From == ProbeStatus.Recovering &&
         transition.To is ProbeStatus.Up or ProbeStatus.Degraded &&
         transition.Reason == ProbeStatusTransitionReason.RecoveryThresholdMet;
+
+    private static bool IsRecoveryFailedOccurrence(ProbeStatusTransition transition) =>
+        transition.From == ProbeStatus.Recovering &&
+        transition.To == ProbeStatus.Down &&
+        transition.Reason == ProbeStatusTransitionReason.RecoveryFailed;
 
     private sealed record DispositionDecision(ProbeResultProcessingDispositionKind Kind, string ReasonCode);
 }

@@ -114,11 +114,11 @@ public sealed class ProbeStatusProcessingPersistenceTests
         var incident = new AvailabilityIncident(Guid.NewGuid(), Guid.NewGuid(), Now);
         var lifecycleEvent = new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, incident.ProbeId,
             Guid.NewGuid(), Guid.NewGuid(), ProbeStatus.Up, Guid.NewGuid(), 1, Now);
-        var context = new NotificationSuppressionContext(lifecycleEvent.EventId, incident.Id,
-            lifecycleEvent.LifecycleEventKey, lifecycleEvent.PolicyVersion, Now);
+        var context = NotificationSuppressionContext.ForAvailabilityDownOpened(lifecycleEvent, Now);
 
         Assert.Equal(AvailabilityIncident.AvailabilityDownRuleKey, incident.RuleKey);
         Assert.Equal(AvailabilityIncidentStatus.Open, incident.Status);
+        Assert.Equal(1, incident.OccurrenceCount);
         Assert.Equal(IncidentLifecycleEventType.Opened, lifecycleEvent.LifecycleEventType);
         Assert.Equal(IncidentLifecycleEvent.OpenedLifecycleEventKey, lifecycleEvent.LifecycleEventKey);
         Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, lifecycleEvent.ProcessingDisposition);
@@ -133,7 +133,39 @@ public sealed class ProbeStatusProcessingPersistenceTests
             Guid.Empty, Guid.NewGuid(), ProbeStatus.Up, Guid.NewGuid(), 1, Now));
         Assert.Throws<DomainValidationException>(() => new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, incident.ProbeId,
             Guid.NewGuid(), Guid.NewGuid(), ProbeStatus.Down, Guid.NewGuid(), 1, Now));
-        Assert.Throws<DomainValidationException>(() => new NotificationSuppressionContext(Guid.NewGuid(), incident.Id, "", 1, Now));
+        Assert.Empty(typeof(NotificationSuppressionContext).GetConstructors());
+    }
+
+    [Fact]
+    public void St05RecoveryFailedOccurrenceRetainsTheActiveIncidentAndUsesTheDeterministicSuppressedHandoff()
+    {
+        var incident = new AvailabilityIncident(Guid.NewGuid(), Guid.NewGuid(), Now);
+        var resultId = Guid.NewGuid();
+        var lifecycleEvent = IncidentLifecycleEvent.ForRecoveryFailedOccurrence(Guid.NewGuid(), incident.Id, incident.ProbeId,
+            Guid.NewGuid(), resultId, Guid.NewGuid(), 1, Now);
+        var context = NotificationSuppressionContext.ForSuppressedRecoveryFailed(lifecycleEvent, Now);
+
+        incident.RecordRecoveryFailedOccurrence();
+
+        Assert.Equal(2, incident.OccurrenceCount);
+        Assert.Equal(IncidentLifecycleEventType.Occurrence, lifecycleEvent.LifecycleEventType);
+        Assert.Equal($"occurrence:{resultId:D}".ToLowerInvariant(), lifecycleEvent.LifecycleEventKey);
+        Assert.Equal((ProbeStatus.Recovering, ProbeStatus.Down, "recovery-failed"),
+            (lifecycleEvent.SourceFromStatus, lifecycleEvent.SourceToStatus, lifecycleEvent.SourceReasonCode));
+        Assert.Equal((NotificationSuppressionEligibility.Suppressed, "recovery-failed"), (context.Eligibility, context.ReasonCode));
+
+        incident.ResolveForConfirmedRecovery(Now);
+        Assert.Throws<DomainValidationException>(() => incident.RecordRecoveryFailedOccurrence());
+
+        var opening = new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, incident.ProbeId, Guid.NewGuid(), Guid.NewGuid(),
+            ProbeStatus.Up, Guid.NewGuid(), 1, Now);
+        var resolved = IncidentLifecycleEvent.ForConfirmedRecovery(Guid.NewGuid(), incident.Id, incident.ProbeId,
+            Guid.NewGuid(), Guid.NewGuid(), ProbeStatus.Up, Guid.NewGuid(), 1, Now);
+        Assert.Equal((NotificationSuppressionEligibility.Eligible, "availability-down"),
+            (NotificationSuppressionContext.ForAvailabilityDownOpened(opening, Now).Eligibility, NotificationSuppressionContext.ForAvailabilityDownOpened(opening, Now).ReasonCode));
+        Assert.Equal((NotificationSuppressionEligibility.Eligible, "confirmed-recovery"),
+            (NotificationSuppressionContext.ForConfirmedRecovery(resolved, Now).Eligibility, NotificationSuppressionContext.ForConfirmedRecovery(resolved, Now).ReasonCode));
+        Assert.Throws<DomainValidationException>(() => NotificationSuppressionContext.ForConfirmedRecovery(opening, Now));
     }
 
     [Theory]

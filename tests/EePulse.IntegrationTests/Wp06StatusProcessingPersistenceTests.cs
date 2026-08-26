@@ -5,6 +5,7 @@ using EePulse.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 
 namespace EePulse.IntegrationTests;
@@ -115,8 +116,7 @@ public sealed class Wp06StatusProcessingPersistenceTests
         var incident = new AvailabilityIncident(Guid.NewGuid(), seed.ProbeId, seed.SecondEventAt);
         var lifecycleEvent = new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, incident.ProbeId, seed.AgentId,
             seed.SecondResultId, ProbeStatus.Up, policy.Id, policy.PolicyVersion, seed.SecondEventAt);
-        var context = new NotificationSuppressionContext(lifecycleEvent.EventId, incident.Id,
-            lifecycleEvent.LifecycleEventKey, lifecycleEvent.PolicyVersion, seed.Now);
+        var context = NotificationSuppressionContext.ForAvailabilityDownOpened(lifecycleEvent, seed.Now);
         var projection = new ProbeStatusProjection(seed.ProbeId, ProbeStatus.Down, 1, 0, seed.SecondEventAt,
             seed.SecondEventAt, seed.AgentId, seed.SecondResultId, incident.Id);
 
@@ -198,6 +198,119 @@ public sealed class Wp06StatusProcessingPersistenceTests
         await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM notification_suppression_contexts WHERE event_id = {upEventId}", ct), "notification_suppression_contexts");
     }
 
+    [Fact]
+    public async Task St05bPersistenceEnforcesRecoveryFailedOccurrencesWithoutWeakeningExistingHandoffs()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+
+        var seed = await SeedAsync(options, ct);
+        var policy = new ProbeStatusPolicySnapshot(Guid.NewGuid(), 1, 3, 2, 500, null, seed.Now);
+        await using (var write = new EePulseDbContext(options))
+        {
+            write.Add(policy);
+            await write.SaveChangesAsync(ct);
+        }
+
+        var occurrence = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Recovering, ProbeStatus.Down, "recovery-failed", ct);
+        var wrongStatus = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Recovering, ProbeStatus.Up, "recovery-threshold-met", ct);
+        var wrongReason = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Recovering, ProbeStatus.Down, "failure-threshold-met", ct);
+        var opened = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Up, ProbeStatus.Down, "failure-threshold-met", ct);
+        var resolved = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Recovering, ProbeStatus.Up, "recovery-threshold-met", ct);
+        var nonStateDriving = await AddHistoricalLifecycleSourceAsync(options, seed, ct);
+
+        await using var direct = new EePulseDbContext(options);
+        var occurrenceKey = $"occurrence:{occurrence.ResultId:D}".ToLowerInvariant();
+        var occurrenceEventId = Guid.NewGuid();
+        await InsertLifecycleEventAsync(direct, occurrenceEventId, occurrence, policy, "Occurrence", occurrenceKey,
+            ProbeResultProcessingDispositionKind.StateDriving, ct);
+        await InsertSuppressionContextAsync(direct, occurrenceEventId, occurrence.IncidentId, occurrenceKey,
+            policy.PolicyVersion, "Suppressed", "recovery-failed", ct, seed.Now);
+        await InsertLifecycleEventAsync(direct, Guid.NewGuid(), opened, policy, "Opened", "opened",
+            ProbeResultProcessingDispositionKind.StateDriving, ct);
+        await InsertLifecycleEventAsync(direct, Guid.NewGuid(), resolved, policy, "Resolved", "resolved",
+            ProbeResultProcessingDispositionKind.StateDriving, ct);
+
+        var migratedIncident = await direct.AvailabilityIncidents.SingleAsync(row => row.Id == occurrence.IncidentId, ct);
+        Assert.Equal(1, migratedIncident.OccurrenceCount);
+        await using (var read = new EePulseDbContext(options))
+        {
+            var persistedEvent = await read.IncidentLifecycleEvents.AsNoTracking().SingleAsync(row => row.EventId == occurrenceEventId, ct);
+            var persistedContext = await read.NotificationSuppressionContexts.AsNoTracking().SingleAsync(row => row.EventId == occurrenceEventId, ct);
+            var sourceLedger = await read.ProbeResultLedgerEntries.AsNoTracking().SingleAsync(row => row.AgentId == occurrence.AgentId && row.ResultId == occurrence.ResultId, ct);
+            Assert.Equal((occurrence.IncidentId, occurrence.ProbeId, occurrence.AgentId, occurrence.ResultId,
+                    ProbeResultProcessingDispositionKind.StateDriving, policy.Id, policy.PolicyVersion, ProbeStatus.Recovering,
+                    ProbeStatus.Down, "recovery-failed", IncidentLifecycleEventType.Occurrence, occurrenceKey, sourceLedger.EndedAt),
+                (persistedEvent.IncidentId, persistedEvent.ProbeId, persistedEvent.SourceAgentId, persistedEvent.SourceResultId,
+                    persistedEvent.ProcessingDisposition, persistedEvent.PolicySnapshotId, persistedEvent.PolicyVersion,
+                    persistedEvent.SourceFromStatus, persistedEvent.SourceToStatus, persistedEvent.SourceReasonCode,
+                    persistedEvent.LifecycleEventType, persistedEvent.LifecycleEventKey, persistedEvent.OccurredAt));
+            Assert.Equal((occurrenceEventId, occurrence.IncidentId, occurrenceKey, policy.PolicyVersion,
+                    NotificationSuppressionEligibility.Suppressed, "recovery-failed", sourceLedger.ReceivedAt),
+                (persistedContext.EventId, persistedContext.IncidentId, persistedContext.LifecycleEventKey,
+                    persistedContext.PolicyVersion, persistedContext.Eligibility, persistedContext.ReasonCode, persistedContext.EvaluatedAt));
+        }
+        await direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET occurrence_count = {2} WHERE id = {occurrence.IncidentId}", ct);
+        Assert.Equal(2, await direct.AvailabilityIncidents.Where(row => row.Id == occurrence.IncidentId).Select(row => row.OccurrenceCount).SingleAsync(ct));
+        await AssertCheckViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET occurrence_count = {0} WHERE id = {occurrence.IncidentId}", ct), "ck_availability_incidents_occurrence_count");
+
+        var badKeySource = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Recovering, ProbeStatus.Down, "recovery-failed", ct);
+        await AssertCheckViolationAsync(() => InsertLifecycleEventAsync(direct, Guid.NewGuid(), badKeySource, policy, "Occurrence", $"occurrence:{Guid.NewGuid():D}", ProbeResultProcessingDispositionKind.StateDriving, ct), "ck_incident_lifecycle_events_key");
+        await AssertCheckViolationAsync(() => InsertLifecycleEventAsync(direct, Guid.NewGuid(), wrongStatus, policy, "Occurrence", $"occurrence:{wrongStatus.ResultId:D}", ProbeResultProcessingDispositionKind.StateDriving, ct), "ck_incident_lifecycle_events_source");
+        await AssertCheckViolationAsync(() => InsertLifecycleEventAsync(direct, Guid.NewGuid(), wrongReason, policy, "Occurrence", $"occurrence:{wrongReason.ResultId:D}", ProbeResultProcessingDispositionKind.StateDriving, ct), "ck_incident_lifecycle_events_source");
+        // The policy-lineage BEFORE INSERT trigger runs before the defense-in-depth StateDriving check.
+        await AssertPolicyLineageViolationAsync(() => InsertLifecycleEventAsync(direct, Guid.NewGuid(), nonStateDriving, policy, "Occurrence", $"occurrence:{nonStateDriving.ResultId:D}", ProbeResultProcessingDispositionKind.HistoricalOther, ct));
+        var invalidDispositionSource = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Recovering, ProbeStatus.Down, "recovery-failed", ct);
+        await AssertCheckViolationAsync(() => InsertLifecycleEventAsync(direct, Guid.NewGuid(), invalidDispositionSource, policy, "Occurrence", $"occurrence:{invalidDispositionSource.ResultId:D}", ProbeResultProcessingDispositionKind.HistoricalOther, ct), "ck_incident_lifecycle_events_disposition");
+
+        var eligibilitySource = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Recovering, ProbeStatus.Down, "recovery-failed", ct);
+        var eligibilityEventId = Guid.NewGuid();
+        var eligibilityKey = $"occurrence:{eligibilitySource.ResultId:D}".ToLowerInvariant();
+        await InsertLifecycleEventAsync(direct, eligibilityEventId, eligibilitySource, policy, "Occurrence", eligibilityKey, ProbeResultProcessingDispositionKind.StateDriving, ct);
+        await AssertCheckViolationAsync(() => InsertSuppressionContextAsync(direct, eligibilityEventId, eligibilitySource.IncidentId, eligibilityKey, policy.PolicyVersion, "Eligible", "recovery-failed", ct), "ck_notification_suppression_contexts_eligibility");
+
+        var reasonSource = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Recovering, ProbeStatus.Down, "recovery-failed", ct);
+        var reasonEventId = Guid.NewGuid();
+        var reasonKey = $"occurrence:{reasonSource.ResultId:D}".ToLowerInvariant();
+        await InsertLifecycleEventAsync(direct, reasonEventId, reasonSource, policy, "Occurrence", reasonKey, ProbeResultProcessingDispositionKind.StateDriving, ct);
+        await AssertCheckViolationAsync(() => InsertSuppressionContextAsync(direct, reasonEventId, reasonSource.IncidentId, reasonKey, policy.PolicyVersion, "Suppressed", "availability-down", ct), "ck_notification_suppression_contexts_reason");
+
+        var duplicateSourceIncidentId = Guid.NewGuid();
+        await direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({duplicateSourceIncidentId}, {occurrence.ProbeId}, {"availability-down"}, {"Resolved"}, {occurrence.EventAt}, {occurrence.EventAt}, {"system-policy"}, {"confirmed-recovery"})", ct);
+        var duplicateSourceWithDistinctIncident = occurrence with { IncidentId = duplicateSourceIncidentId };
+        // The distinct incident makes the incident/key/policy alternate key valid while retaining the duplicated source identity.
+        await AssertUniqueViolationAsync(() => InsertLifecycleEventAsync(direct, Guid.NewGuid(), duplicateSourceWithDistinctIncident, policy, "Occurrence", occurrenceKey, ProbeResultProcessingDispositionKind.StateDriving, ct), "ux_incident_lifecycle_events_opening_source");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE incident_lifecycle_events SET occurred_at = {seed.Now.AddSeconds(1)} WHERE event_id = {occurrenceEventId}", ct), "incident_lifecycle_events");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM incident_lifecycle_events WHERE event_id = {occurrenceEventId}", ct), "incident_lifecycle_events");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE notification_suppression_contexts SET reason_code = {"tampered"} WHERE event_id = {occurrenceEventId}", ct), "notification_suppression_contexts");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM notification_suppression_contexts WHERE event_id = {occurrenceEventId}", ct), "notification_suppression_contexts");
+    }
+
+    [Fact]
+    public async Task St05bMigrationBackfillsPreExistingIncidentsToOne()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using var migrationContext = new EePulseDbContext(options);
+        var migrator = migrationContext.GetService<IMigrator>();
+        await migrator.MigrateAsync("20260826075019_WP06St04aIncidentResolution", ct);
+
+        var seed = await SeedAsync(options, ct);
+        var incidentId = Guid.NewGuid();
+        await using (var beforeSt05b = new EePulseDbContext(options))
+        {
+            await beforeSt05b.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at) VALUES ({incidentId}, {seed.ProbeId}, {"availability-down"}, {"Open"}, {seed.Now})", ct);
+        }
+
+        await migrator.MigrateAsync("20260826090858_WP06St05bRecoveryFailedOccurrences", ct);
+        await using var afterSt05b = new EePulseDbContext(options);
+        var incident = await afterSt05b.AvailabilityIncidents.AsNoTracking().SingleAsync(row => row.Id == incidentId, ct);
+        Assert.Equal(1, incident.OccurrenceCount);
+    }
+
     private static void AssertSt03aModel(EePulseDbContext db)
     {
         var model = db.GetService<IDesignTimeModel>().Model;
@@ -223,6 +336,13 @@ public sealed class Wp06StatusProcessingPersistenceTests
         Assert.Contains(lifecycleEvent.GetCheckConstraints(), constraint =>
             constraint.Name == "ck_incident_lifecycle_events_disposition" &&
             constraint.Sql == "processing_disposition = 'StateDriving'");
+        Assert.Contains(lifecycleEvent.GetCheckConstraints(), constraint =>
+            constraint.Name == "ck_incident_lifecycle_events_source" &&
+            constraint.Sql!.Contains("lifecycle_event_type = 'Occurrence'", StringComparison.Ordinal));
+
+        var incident = model.FindEntityType(typeof(AvailabilityIncident))!;
+        Assert.Contains(incident.GetCheckConstraints(), constraint =>
+            constraint.Name == "ck_availability_incidents_occurrence_count" && constraint.Sql == "occurrence_count >= 1");
     }
 
     private static async Task<LifecycleSource> AddLifecycleSourceAsync(
@@ -284,6 +404,13 @@ public sealed class Wp06StatusProcessingPersistenceTests
         Assert.Null(exception.ConstraintName);
     }
 
+    private static async Task AssertUniqueViolationAsync(Func<Task> action, string constraintName)
+    {
+        var exception = await Assert.ThrowsAsync<PostgresException>(action);
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, exception.SqlState);
+        Assert.Equal(constraintName, exception.ConstraintName);
+    }
+
     private static async Task AssertAppendOnlyViolationAsync(Func<Task> action, string tableName)
     {
         var exception = await Assert.ThrowsAsync<PostgresException>(action);
@@ -298,8 +425,11 @@ public sealed class Wp06StatusProcessingPersistenceTests
         db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO incident_lifecycle_events (event_id, incident_id, probe_id, source_agent_id, source_result_id, source_from_status, source_to_status, source_reason_code, policy_snapshot_id, policy_version, lifecycle_event_type, lifecycle_event_key, processing_disposition, occurred_at) VALUES ({eventId}, {source.IncidentId}, {source.ProbeId}, {source.AgentId}, {source.ResultId}, {source.FromStatus.ToString()}, {source.ToStatus.ToString()}, {source.ReasonCode}, {policy.Id}, {policy.PolicyVersion}, {lifecycleEventType}, {lifecycleEventKey}, {disposition.ToString()}, {source.EventAt})", ct);
 
     private static Task<int> InsertSuppressionContextAsync(EePulseDbContext db, Guid eventId, Guid incidentId,
-        string lifecycleEventKey, int policyVersion, string eligibility, string reasonCode, CancellationToken ct) =>
-        db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO notification_suppression_contexts (event_id, incident_id, lifecycle_event_key, policy_version, eligibility, reason_code, evaluated_at) VALUES ({eventId}, {incidentId}, {lifecycleEventKey}, {policyVersion}, {eligibility}, {reasonCode}, {DateTimeOffset.UnixEpoch})", ct);
+        string lifecycleEventKey, int policyVersion, string eligibility, string reasonCode, CancellationToken ct, DateTimeOffset? evaluatedAt = null)
+    {
+        var observedAt = evaluatedAt ?? DateTimeOffset.UnixEpoch;
+        return db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO notification_suppression_contexts (event_id, incident_id, lifecycle_event_key, policy_version, eligibility, reason_code, evaluated_at) VALUES ({eventId}, {incidentId}, {lifecycleEventKey}, {policyVersion}, {eligibility}, {reasonCode}, {observedAt})", ct);
+    }
 
     private static async Task AssertProjectionConstraintsAsync(EePulseDbContext db, Seed seed, CancellationToken ct)
     {

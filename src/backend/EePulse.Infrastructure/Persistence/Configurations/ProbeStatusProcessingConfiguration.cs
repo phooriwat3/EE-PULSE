@@ -149,6 +149,7 @@ internal sealed class AvailabilityIncidentConfiguration : IEntityTypeConfigurati
         {
             t.HasCheckConstraint("ck_availability_incidents_rule_key", "rule_key = 'availability-down'");
             t.HasCheckConstraint("ck_availability_incidents_status", "status IN ('Open', 'Acknowledged', 'Resolved')");
+            t.HasCheckConstraint("ck_availability_incidents_occurrence_count", "occurrence_count >= 1");
             t.HasCheckConstraint("ck_availability_incidents_lifecycle", "(acknowledged_at IS NULL AND acknowledged_by IS NULL AND acknowledgement_comment IS NULL) OR (acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledgement_comment IS NOT NULL)");
             t.HasCheckConstraint("ck_availability_incidents_resolution", "(resolved_at IS NULL AND resolved_by IS NULL AND resolution_note IS NULL) OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution_note IS NOT NULL)");
             t.HasCheckConstraint("ck_availability_incidents_status_lifecycle", "(status = 'Open' AND acknowledged_at IS NULL AND resolved_at IS NULL) OR (status = 'Acknowledged' AND acknowledged_at IS NOT NULL AND resolved_at IS NULL) OR (status = 'Resolved' AND resolved_at IS NOT NULL)");
@@ -167,6 +168,7 @@ internal sealed class AvailabilityIncidentConfiguration : IEntityTypeConfigurati
         b.Property(x => x.ResolvedAt).HasColumnName("resolved_at");
         b.Property(x => x.ResolvedBy).HasColumnName("resolved_by").HasMaxLength(128);
         b.Property(x => x.ResolutionNote).HasColumnName("resolution_note").HasMaxLength(1_000);
+        b.Property(x => x.OccurrenceCount).HasColumnName("occurrence_count");
         b.HasIndex(x => new { x.ProbeId, x.RuleKey }).IsUnique().HasFilter("status IN ('Open', 'Acknowledged')").HasDatabaseName("ux_availability_incidents_active_probe_rule");
         b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
     }
@@ -178,10 +180,10 @@ internal sealed class IncidentLifecycleEventConfiguration : IEntityTypeConfigura
     {
         b.ToTable("incident_lifecycle_events", t =>
         {
-            t.HasCheckConstraint("ck_incident_lifecycle_events_type", "lifecycle_event_type IN ('Opened', 'Resolved')");
-            t.HasCheckConstraint("ck_incident_lifecycle_events_key", "lifecycle_event_key IN ('opened', 'resolved')");
+            t.HasCheckConstraint("ck_incident_lifecycle_events_type", "lifecycle_event_type IN ('Opened', 'Resolved', 'Occurrence')");
+            t.HasCheckConstraint("ck_incident_lifecycle_events_key", "lifecycle_event_key IN ('opened', 'resolved') OR lifecycle_event_key = ('occurrence:' || lower(source_result_id::text))");
             t.HasCheckConstraint("ck_incident_lifecycle_events_disposition", "processing_disposition = 'StateDriving'");
-            t.HasCheckConstraint("ck_incident_lifecycle_events_source", "(lifecycle_event_type = 'Opened' AND lifecycle_event_key = 'opened' AND source_from_status <> 'Down' AND source_to_status = 'Down' AND source_reason_code = 'failure-threshold-met') OR (lifecycle_event_type = 'Resolved' AND lifecycle_event_key = 'resolved' AND source_from_status = 'Recovering' AND source_to_status IN ('Up', 'Degraded') AND source_reason_code = 'recovery-threshold-met')");
+            t.HasCheckConstraint("ck_incident_lifecycle_events_source", "(lifecycle_event_type = 'Opened' AND lifecycle_event_key = 'opened' AND source_from_status <> 'Down' AND source_to_status = 'Down' AND source_reason_code = 'failure-threshold-met') OR (lifecycle_event_type = 'Resolved' AND lifecycle_event_key = 'resolved' AND source_from_status = 'Recovering' AND source_to_status IN ('Up', 'Degraded') AND source_reason_code = 'recovery-threshold-met') OR (lifecycle_event_type = 'Occurrence' AND lifecycle_event_key = ('occurrence:' || lower(source_result_id::text)) AND source_from_status = 'Recovering' AND source_to_status = 'Down' AND source_reason_code = 'recovery-failed')");
         });
         b.HasKey(x => x.EventId);
         b.HasAlternateKey(x => new { x.IncidentId, x.LifecycleEventKey, x.PolicyVersion }).HasName("ak_incident_lifecycle_events_incident_key_policy");
@@ -214,8 +216,8 @@ internal sealed class NotificationSuppressionContextConfiguration : IEntityTypeC
     {
         b.ToTable("notification_suppression_contexts", t =>
         {
-            t.HasCheckConstraint("ck_notification_suppression_contexts_eligibility", "eligibility = 'Eligible'");
-            t.HasCheckConstraint("ck_notification_suppression_contexts_reason", "(lifecycle_event_key = 'opened' AND reason_code = 'availability-down') OR (lifecycle_event_key = 'resolved' AND reason_code = 'confirmed-recovery')");
+            t.HasCheckConstraint("ck_notification_suppression_contexts_eligibility", "(lifecycle_event_key IN ('opened', 'resolved') AND eligibility = 'Eligible') OR (lifecycle_event_key LIKE 'occurrence:%' AND eligibility = 'Suppressed')");
+            t.HasCheckConstraint("ck_notification_suppression_contexts_reason", "(lifecycle_event_key = 'opened' AND reason_code = 'availability-down') OR (lifecycle_event_key = 'resolved' AND reason_code = 'confirmed-recovery') OR (lifecycle_event_key LIKE 'occurrence:%' AND reason_code = 'recovery-failed')");
         });
         b.HasKey(x => x.EventId);
         b.HasIndex(x => new { x.IncidentId, x.LifecycleEventKey, x.PolicyVersion }).IsUnique().HasDatabaseName("ux_notification_suppression_contexts_event_key");
