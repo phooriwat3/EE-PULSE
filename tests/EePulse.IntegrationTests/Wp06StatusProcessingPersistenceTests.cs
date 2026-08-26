@@ -82,6 +82,84 @@ public sealed class Wp06StatusProcessingPersistenceTests
         }
     }
 
+    [Fact]
+    public async Task St03aPersistenceEnforcesOpeningEvidenceUniquenessAndAppendOnlyHandoff()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migrationContext = new EePulseDbContext(options)) await migrationContext.Database.MigrateAsync(ct);
+
+        var seed = await SeedAsync(options, ct);
+        var policy = new ProbeStatusPolicySnapshot(Guid.NewGuid(), 1, 3, 2, 500, null, seed.Now);
+        var disposition = new ProbeResultProcessingDisposition(seed.AgentId, seed.SecondResultId, seed.ProbeId,
+            seed.SecondEventAt, ProbeResultProcessingDispositionKind.StateDriving, "state-driving", policy.Id, policy.PolicyVersion, seed.Now);
+        var transition = new ProbeResultStatusTransition(seed.AgentId, seed.SecondResultId, seed.ProbeId,
+            ProbeStatus.Up, ProbeStatus.Down, "failure-threshold-met", seed.SecondEventAt, seed.Now,
+            ProbeResultProcessingDispositionKind.StateDriving);
+        var bootstrapDisposition = new ProbeResultProcessingDisposition(seed.AgentId, seed.ResultId, seed.ProbeId,
+            seed.EventAt, ProbeResultProcessingDispositionKind.StateDriving, "state-driving", policy.Id, policy.PolicyVersion, seed.Now);
+        var bootstrapTransition = new ProbeResultStatusTransition(seed.AgentId, seed.ResultId, seed.ProbeId,
+            ProbeStatus.Unknown, ProbeStatus.Up, "bootstrap-success", seed.EventAt, seed.Now,
+            ProbeResultProcessingDispositionKind.StateDriving);
+        var mismatchResultId = Guid.NewGuid();
+        var mismatchEventAt = seed.SecondEventAt.AddSeconds(1);
+        var mismatchLedger = new ProbeResultLedgerEntry(seed.AgentId, mismatchResultId, seed.ProbeId, 1,
+            mismatchEventAt.AddSeconds(-1), mismatchEventAt, 1, 0, 1m, null, null, null, "timeout", new byte[32], seed.Now);
+        var mismatchDisposition = new ProbeResultProcessingDisposition(seed.AgentId, mismatchResultId, seed.ProbeId,
+            mismatchEventAt, ProbeResultProcessingDispositionKind.StateDriving, "state-driving", policy.Id, policy.PolicyVersion, seed.Now);
+        var mismatchTransition = new ProbeResultStatusTransition(seed.AgentId, mismatchResultId, seed.ProbeId,
+            ProbeStatus.Degraded, ProbeStatus.Down, "failure-threshold-met", mismatchEventAt, seed.Now,
+            ProbeResultProcessingDispositionKind.StateDriving);
+        var unrelatedPolicy = new ProbeStatusPolicySnapshot(Guid.NewGuid(), 2, 3, 2, 500, null, seed.Now);
+        var incident = new AvailabilityIncident(Guid.NewGuid(), seed.ProbeId, seed.SecondEventAt);
+        var lifecycleEvent = new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, incident.ProbeId, seed.AgentId,
+            seed.SecondResultId, ProbeStatus.Up, policy.Id, policy.PolicyVersion, seed.SecondEventAt);
+        var context = new NotificationSuppressionContext(lifecycleEvent.EventId, incident.Id,
+            lifecycleEvent.LifecycleEventKey, lifecycleEvent.PolicyVersion, seed.Now);
+        var projection = new ProbeStatusProjection(seed.ProbeId, ProbeStatus.Down, 1, 0, seed.SecondEventAt,
+            seed.SecondEventAt, seed.AgentId, seed.SecondResultId, incident.Id);
+
+        await using (var write = new EePulseDbContext(options))
+        {
+            write.AddRange(policy, unrelatedPolicy, disposition, transition, bootstrapDisposition, bootstrapTransition,
+                mismatchLedger, mismatchDisposition, mismatchTransition, incident, lifecycleEvent, context, projection);
+            await write.SaveChangesAsync(ct);
+        }
+
+        await using var direct = new EePulseDbContext(options);
+        AssertSt03aModel(direct);
+        await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at) VALUES ({Guid.NewGuid()}, {seed.ProbeId}, {"availability-down"}, {"Open"}, {seed.Now})", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO incident_lifecycle_events (event_id, incident_id, probe_id, source_agent_id, source_result_id, source_from_status, source_to_status, source_reason_code, policy_snapshot_id, policy_version, lifecycle_event_type, lifecycle_event_key, processing_disposition, occurred_at) VALUES ({Guid.NewGuid()}, {incident.Id}, {seed.ProbeId}, {seed.AgentId}, {seed.ResultId}, {"Unknown"}, {"Up"}, {"bootstrap-success"}, {policy.Id}, {policy.PolicyVersion}, {"Opened"}, {"opened"}, {"StateDriving"}, {seed.Now})", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO incident_lifecycle_events (event_id, incident_id, probe_id, source_agent_id, source_result_id, source_from_status, source_to_status, source_reason_code, policy_snapshot_id, policy_version, lifecycle_event_type, lifecycle_event_key, processing_disposition, occurred_at) VALUES ({Guid.NewGuid()}, {incident.Id}, {seed.ProbeId}, {seed.AgentId}, {mismatchResultId}, {"Degraded"}, {"Down"}, {"failure-threshold-met"}, {unrelatedPolicy.Id}, {unrelatedPolicy.PolicyVersion}, {"Opened"}, {"opened"}, {"StateDriving"}, {seed.Now})", ct));
+        var resolvedIncidentId = Guid.NewGuid();
+        await direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({resolvedIncidentId}, {seed.ProbeId}, {"availability-down"}, {"Resolved"}, {seed.Now}, {seed.Now}, {"system-policy"}, {"confirmed-recovery"})", ct);
+        await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO incident_lifecycle_events (event_id, incident_id, probe_id, source_agent_id, source_result_id, source_from_status, source_to_status, source_reason_code, policy_snapshot_id, policy_version, lifecycle_event_type, lifecycle_event_key, processing_disposition, occurred_at) VALUES ({Guid.NewGuid()}, {resolvedIncidentId}, {seed.ProbeId}, {seed.AgentId}, {seed.SecondResultId}, {"Up"}, {"Down"}, {"failure-threshold-met"}, {policy.Id}, {policy.PolicyVersion}, {"Opened"}, {"opened"}, {"StateDriving"}, {seed.Now})", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO notification_suppression_contexts (event_id, incident_id, lifecycle_event_key, policy_version, eligibility, reason_code, evaluated_at) VALUES ({lifecycleEvent.EventId}, {incident.Id}, {"opened"}, {policy.PolicyVersion}, {"Eligible"}, {"availability-down"}, {seed.Now})", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE incident_lifecycle_events SET occurred_at = {seed.Now.AddSeconds(1)} WHERE event_id = {lifecycleEvent.EventId}", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM incident_lifecycle_events WHERE event_id = {lifecycleEvent.EventId}", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE notification_suppression_contexts SET reason_code = {"tampered"} WHERE event_id = {lifecycleEvent.EventId}", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM notification_suppression_contexts WHERE event_id = {lifecycleEvent.EventId}", ct));
+    }
+
+    private static void AssertSt03aModel(EePulseDbContext db)
+    {
+        var model = db.GetService<IDesignTimeModel>().Model;
+        var incident = model.FindEntityType(typeof(AvailabilityIncident))!;
+        Assert.Contains(incident.GetIndexes(), index => index.IsUnique && index.GetDatabaseName() == "ux_availability_incidents_active_probe_rule" && index.GetFilter() == "status IN ('Open', 'Acknowledged')");
+
+        var lifecycleEvent = model.FindEntityType(typeof(IncidentLifecycleEvent))!;
+        Assert.Contains(lifecycleEvent.GetForeignKeys(), foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual([nameof(IncidentLifecycleEvent.SourceAgentId), nameof(IncidentLifecycleEvent.SourceResultId), nameof(IncidentLifecycleEvent.ProbeId), nameof(IncidentLifecycleEvent.SourceFromStatus), nameof(IncidentLifecycleEvent.SourceToStatus), nameof(IncidentLifecycleEvent.SourceReasonCode), nameof(IncidentLifecycleEvent.ProcessingDisposition)]) &&
+            foreignKey.PrincipalEntityType.ClrType == typeof(ProbeResultStatusTransition) && foreignKey.DeleteBehavior == DeleteBehavior.Restrict);
+        Assert.Contains(lifecycleEvent.GetForeignKeys(), foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual([nameof(IncidentLifecycleEvent.SourceAgentId), nameof(IncidentLifecycleEvent.SourceResultId), nameof(IncidentLifecycleEvent.ProcessingDisposition)]) &&
+            foreignKey.PrincipalEntityType.ClrType == typeof(ProbeResultProcessingDisposition) && foreignKey.DeleteBehavior == DeleteBehavior.Restrict);
+
+        var context = model.FindEntityType(typeof(NotificationSuppressionContext))!;
+        Assert.Contains(context.GetForeignKeys(), foreignKey => foreignKey.PrincipalEntityType.ClrType == typeof(IncidentLifecycleEvent) && foreignKey.DeleteBehavior == DeleteBehavior.Restrict);
+    }
+
     private static async Task AssertProjectionConstraintsAsync(EePulseDbContext db, Seed seed, CancellationToken ct)
     {
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_status_projections (probe_id, underlying_status, consecutive_failure_count, consecutive_success_count, state_version) VALUES ({seed.OtherProbeId}, {"Invalid"}, {0}, {0}, {0L})", ct));

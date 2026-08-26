@@ -30,8 +30,11 @@ internal sealed class ProbeStatusProjectionConfiguration : IEntityTypeConfigurat
         b.Property(x => x.WatermarkEventAt).HasColumnName("watermark_event_at");
         b.Property(x => x.WatermarkAgentId).HasColumnName("watermark_agent_id");
         b.Property(x => x.WatermarkResultId).HasColumnName("watermark_result_id");
+        b.Property(x => x.OpenIncidentId).HasColumnName("open_incident_id");
         b.Property(x => x.StateVersion).HasColumnName("state_version").IsConcurrencyToken();
         b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<AvailabilityIncident>().WithMany().HasForeignKey(x => new { x.OpenIncidentId, x.ProbeId })
+            .HasPrincipalKey(x => new { x.Id, x.ProbeId }).OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -138,6 +141,95 @@ internal sealed class ProbeResultProcessingDispositionConfiguration : IEntityTyp
     }
 }
 
+internal sealed class AvailabilityIncidentConfiguration : IEntityTypeConfiguration<AvailabilityIncident>
+{
+    public void Configure(EntityTypeBuilder<AvailabilityIncident> b)
+    {
+        b.ToTable("availability_incidents", t =>
+        {
+            t.HasCheckConstraint("ck_availability_incidents_rule_key", "rule_key = 'availability-down'");
+            t.HasCheckConstraint("ck_availability_incidents_status", "status IN ('Open', 'Acknowledged', 'Resolved')");
+            t.HasCheckConstraint("ck_availability_incidents_lifecycle", "(acknowledged_at IS NULL AND acknowledged_by IS NULL AND acknowledgement_comment IS NULL) OR (acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledgement_comment IS NOT NULL)");
+            t.HasCheckConstraint("ck_availability_incidents_resolution", "(resolved_at IS NULL AND resolved_by IS NULL AND resolution_note IS NULL) OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution_note IS NOT NULL)");
+            t.HasCheckConstraint("ck_availability_incidents_status_lifecycle", "(status = 'Open' AND acknowledged_at IS NULL AND resolved_at IS NULL) OR (status = 'Acknowledged' AND acknowledged_at IS NOT NULL AND resolved_at IS NULL) OR (status = 'Resolved' AND resolved_at IS NOT NULL)");
+            t.HasCheckConstraint("ck_availability_incidents_timestamps", "(acknowledged_at IS NULL OR opened_at <= acknowledged_at) AND (resolved_at IS NULL OR opened_at <= resolved_at) AND (acknowledged_at IS NULL OR resolved_at IS NULL OR acknowledged_at <= resolved_at)");
+        });
+        b.HasKey(x => x.Id);
+        b.HasAlternateKey(x => new { x.Id, x.ProbeId }).HasName("ak_availability_incidents_id_probe");
+        b.Property(x => x.Id).HasColumnName("id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id");
+        b.Property(x => x.RuleKey).HasColumnName("rule_key").HasMaxLength(64);
+        b.Property(x => x.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20);
+        b.Property(x => x.OpenedAt).HasColumnName("opened_at");
+        b.Property(x => x.AcknowledgedAt).HasColumnName("acknowledged_at");
+        b.Property(x => x.AcknowledgedBy).HasColumnName("acknowledged_by").HasMaxLength(128);
+        b.Property(x => x.AcknowledgementComment).HasColumnName("acknowledgement_comment").HasMaxLength(1_000);
+        b.Property(x => x.ResolvedAt).HasColumnName("resolved_at");
+        b.Property(x => x.ResolvedBy).HasColumnName("resolved_by").HasMaxLength(128);
+        b.Property(x => x.ResolutionNote).HasColumnName("resolution_note").HasMaxLength(1_000);
+        b.HasIndex(x => new { x.ProbeId, x.RuleKey }).IsUnique().HasFilter("status IN ('Open', 'Acknowledged')").HasDatabaseName("ux_availability_incidents_active_probe_rule");
+        b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+internal sealed class IncidentLifecycleEventConfiguration : IEntityTypeConfiguration<IncidentLifecycleEvent>
+{
+    public void Configure(EntityTypeBuilder<IncidentLifecycleEvent> b)
+    {
+        b.ToTable("incident_lifecycle_events", t =>
+        {
+            t.HasCheckConstraint("ck_incident_lifecycle_events_type", "lifecycle_event_type = 'Opened'");
+            t.HasCheckConstraint("ck_incident_lifecycle_events_key", "lifecycle_event_key = 'opened'");
+            t.HasCheckConstraint("ck_incident_lifecycle_events_disposition", "processing_disposition = 'StateDriving'");
+            t.HasCheckConstraint("ck_incident_lifecycle_events_opening_source", "source_from_status <> 'Down' AND source_to_status = 'Down' AND source_reason_code = 'failure-threshold-met'");
+        });
+        b.HasKey(x => x.EventId);
+        b.HasAlternateKey(x => new { x.IncidentId, x.LifecycleEventKey, x.PolicyVersion }).HasName("ak_incident_lifecycle_events_incident_key_policy");
+        b.HasAlternateKey(x => new { x.EventId, x.IncidentId, x.LifecycleEventKey, x.PolicyVersion }).HasName("ak_incident_lifecycle_events_pairing");
+        b.Property(x => x.EventId).HasColumnName("event_id");
+        b.Property(x => x.IncidentId).HasColumnName("incident_id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id");
+        b.Property(x => x.SourceAgentId).HasColumnName("source_agent_id");
+        b.Property(x => x.SourceResultId).HasColumnName("source_result_id");
+        b.Property(x => x.SourceFromStatus).HasColumnName("source_from_status").HasConversion<string>().HasMaxLength(20);
+        b.Property(x => x.SourceToStatus).HasColumnName("source_to_status").HasConversion<string>().HasMaxLength(20);
+        b.Property(x => x.SourceReasonCode).HasColumnName("source_reason_code").HasMaxLength(64);
+        b.Property(x => x.PolicySnapshotId).HasColumnName("policy_snapshot_id");
+        b.Property(x => x.PolicyVersion).HasColumnName("policy_version");
+        b.Property(x => x.LifecycleEventType).HasColumnName("lifecycle_event_type").HasConversion<string>().HasMaxLength(32);
+        b.Property(x => x.LifecycleEventKey).HasColumnName("lifecycle_event_key").HasMaxLength(128);
+        b.Property(x => x.ProcessingDisposition).HasColumnName("processing_disposition").HasConversion<string>().HasMaxLength(32);
+        b.Property(x => x.OccurredAt).HasColumnName("occurred_at");
+        b.HasIndex(x => new { x.SourceAgentId, x.SourceResultId }).IsUnique().HasDatabaseName("ux_incident_lifecycle_events_opening_source");
+        b.HasOne<AvailabilityIncident>().WithMany().HasForeignKey(x => new { x.IncidentId, x.ProbeId }).HasPrincipalKey(x => new { x.Id, x.ProbeId }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeResultStatusTransition>().WithMany().HasForeignKey(x => new { x.SourceAgentId, x.SourceResultId, x.ProbeId, x.SourceFromStatus, x.SourceToStatus, x.SourceReasonCode, x.ProcessingDisposition }).HasPrincipalKey(x => new { x.AgentId, x.ResultId, x.ProbeId, x.FromStatus, x.ToStatus, x.ReasonCode, x.ProcessingDisposition }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeResultProcessingDisposition>().WithMany().HasForeignKey(x => new { x.SourceAgentId, x.SourceResultId, x.ProcessingDisposition }).HasPrincipalKey(x => new { x.AgentId, x.ResultId, x.Disposition }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeStatusPolicySnapshot>().WithMany().HasForeignKey(x => new { x.PolicySnapshotId, x.PolicyVersion }).HasPrincipalKey(x => new { x.Id, x.PolicyVersion }).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+internal sealed class NotificationSuppressionContextConfiguration : IEntityTypeConfiguration<NotificationSuppressionContext>
+{
+    public void Configure(EntityTypeBuilder<NotificationSuppressionContext> b)
+    {
+        b.ToTable("notification_suppression_contexts", t =>
+        {
+            t.HasCheckConstraint("ck_notification_suppression_contexts_eligibility", "eligibility = 'Eligible'");
+            t.HasCheckConstraint("ck_notification_suppression_contexts_reason", "reason_code = 'availability-down'");
+        });
+        b.HasKey(x => x.EventId);
+        b.HasIndex(x => new { x.IncidentId, x.LifecycleEventKey, x.PolicyVersion }).IsUnique().HasDatabaseName("ux_notification_suppression_contexts_event_key");
+        b.Property(x => x.EventId).HasColumnName("event_id");
+        b.Property(x => x.IncidentId).HasColumnName("incident_id");
+        b.Property(x => x.LifecycleEventKey).HasColumnName("lifecycle_event_key").HasMaxLength(128);
+        b.Property(x => x.PolicyVersion).HasColumnName("policy_version");
+        b.Property(x => x.Eligibility).HasColumnName("eligibility").HasConversion<string>().HasMaxLength(32);
+        b.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(64);
+        b.Property(x => x.EvaluatedAt).HasColumnName("evaluated_at");
+        b.HasOne<IncidentLifecycleEvent>().WithMany().HasForeignKey(x => new { x.EventId, x.IncidentId, x.LifecycleEventKey, x.PolicyVersion }).HasPrincipalKey(x => new { x.EventId, x.IncidentId, x.LifecycleEventKey, x.PolicyVersion }).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 internal sealed class ProbeResultStatusTransitionConfiguration : IEntityTypeConfiguration<ProbeResultStatusTransition>
 {
     public void Configure(EntityTypeBuilder<ProbeResultStatusTransition> b)
@@ -152,6 +244,7 @@ internal sealed class ProbeResultStatusTransitionConfiguration : IEntityTypeConf
             t.HasCheckConstraint("ck_probe_result_status_transitions_processing_disposition", "processing_disposition = 'StateDriving'");
         });
         b.HasKey(x => new { x.AgentId, x.ResultId });
+        b.HasAlternateKey(x => new { x.AgentId, x.ResultId, x.ProbeId, x.FromStatus, x.ToStatus, x.ReasonCode, x.ProcessingDisposition }).HasName("ak_probe_result_status_transitions_opening_source");
         b.Property(x => x.AgentId).HasColumnName("agent_id");
         b.Property(x => x.ResultId).HasColumnName("result_id");
         b.Property(x => x.ProbeId).HasColumnName("probe_id");

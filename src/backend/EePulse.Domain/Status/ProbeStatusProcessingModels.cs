@@ -13,6 +13,25 @@ public enum ProbeResultProcessingDispositionKind
     HistoricalOther,
 }
 
+public enum AvailabilityIncidentStatus
+{
+    Open,
+    Acknowledged,
+    Resolved,
+}
+
+public enum IncidentLifecycleEventType
+{
+    Opened,
+}
+
+public enum NotificationSuppressionEligibility
+{
+    Eligible,
+    Suppressed,
+    PolicyUnapproved,
+}
+
 public sealed class ProbeStatusProjection
 {
     private ProbeStatusProjection() { }
@@ -25,7 +44,8 @@ public sealed class ProbeStatusProjection
         DateTimeOffset? lastFreshEventAt,
         DateTimeOffset? watermarkEventAt,
         Guid? watermarkAgentId,
-        Guid? watermarkResultId)
+        Guid? watermarkResultId,
+        Guid? openIncidentId = null)
     {
         ProbeId = Required(probeId, nameof(probeId));
         UnderlyingStatus = underlyingStatus;
@@ -35,6 +55,7 @@ public sealed class ProbeStatusProjection
         WatermarkEventAt = OptionalUtc(watermarkEventAt, nameof(watermarkEventAt));
         WatermarkAgentId = watermarkAgentId;
         WatermarkResultId = watermarkResultId;
+        OpenIncidentId = OptionalId(openIncidentId, nameof(openIncidentId));
         StateVersion = 0;
         ValidateStructure();
     }
@@ -47,6 +68,7 @@ public sealed class ProbeStatusProjection
     public DateTimeOffset? WatermarkEventAt { get; private set; }
     public Guid? WatermarkAgentId { get; private set; }
     public Guid? WatermarkResultId { get; private set; }
+    public Guid? OpenIncidentId { get; private set; }
     public long StateVersion { get; private set; }
 
     public void ApplyResult(ProbeStatusState state, DateTimeOffset eventAt, Guid agentId, Guid resultId)
@@ -75,7 +97,109 @@ public sealed class ProbeStatusProjection
     }
 
     private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+    private static Guid? OptionalId(Guid? value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is invalid.") : value;
     private static DateTimeOffset? OptionalUtc(DateTimeOffset? value, string name) => value.HasValue ? Guard.Utc(value.Value, name) : null;
+}
+
+public sealed class AvailabilityIncident
+{
+    public const string AvailabilityDownRuleKey = "availability-down";
+
+    private AvailabilityIncident() { }
+
+    public AvailabilityIncident(Guid id, Guid probeId, DateTimeOffset openedAt)
+    {
+        Id = Required(id, nameof(id));
+        ProbeId = Required(probeId, nameof(probeId));
+        RuleKey = AvailabilityDownRuleKey;
+        Status = AvailabilityIncidentStatus.Open;
+        OpenedAt = Guard.Utc(openedAt, nameof(openedAt));
+    }
+
+    public Guid Id { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public string RuleKey { get; private set; } = string.Empty;
+    public AvailabilityIncidentStatus Status { get; private set; }
+    public DateTimeOffset OpenedAt { get; private set; }
+    public DateTimeOffset? AcknowledgedAt { get; private set; }
+    public string? AcknowledgedBy { get; private set; }
+    public string? AcknowledgementComment { get; private set; }
+    public DateTimeOffset? ResolvedAt { get; private set; }
+    public string? ResolvedBy { get; private set; }
+    public string? ResolutionNote { get; private set; }
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+}
+
+public sealed class IncidentLifecycleEvent
+{
+    public const string OpenedLifecycleEventKey = "opened";
+
+    private IncidentLifecycleEvent() { }
+
+    public IncidentLifecycleEvent(Guid eventId, Guid incidentId, Guid probeId, Guid sourceAgentId, Guid sourceResultId,
+        ProbeStatus sourceFromStatus, Guid policySnapshotId, int policyVersion, DateTimeOffset occurredAt)
+    {
+        EventId = Required(eventId, nameof(eventId));
+        IncidentId = Required(incidentId, nameof(incidentId));
+        ProbeId = Required(probeId, nameof(probeId));
+        SourceAgentId = Required(sourceAgentId, nameof(sourceAgentId));
+        SourceResultId = Required(sourceResultId, nameof(sourceResultId));
+        if (!Enum.IsDefined(sourceFromStatus) || sourceFromStatus == ProbeStatus.Down) throw new DomainValidationException(nameof(sourceFromStatus), "An opening source transition must enter Down from a non-Down status.");
+        SourceFromStatus = sourceFromStatus;
+        SourceToStatus = ProbeStatus.Down;
+        SourceReasonCode = "failure-threshold-met";
+        PolicySnapshotId = Required(policySnapshotId, nameof(policySnapshotId));
+        PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
+        LifecycleEventType = IncidentLifecycleEventType.Opened;
+        LifecycleEventKey = OpenedLifecycleEventKey;
+        ProcessingDisposition = ProbeResultProcessingDispositionKind.StateDriving;
+        OccurredAt = Guard.Utc(occurredAt, nameof(occurredAt));
+    }
+
+    public Guid EventId { get; private set; }
+    public Guid IncidentId { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public Guid SourceAgentId { get; private set; }
+    public Guid SourceResultId { get; private set; }
+    public ProbeStatus SourceFromStatus { get; private set; }
+    public ProbeStatus SourceToStatus { get; private set; }
+    public string SourceReasonCode { get; private set; } = string.Empty;
+    public Guid PolicySnapshotId { get; private set; }
+    public int PolicyVersion { get; private set; }
+    public IncidentLifecycleEventType LifecycleEventType { get; private set; }
+    public string LifecycleEventKey { get; private set; } = string.Empty;
+    public ProbeResultProcessingDispositionKind ProcessingDisposition { get; private set; }
+    public DateTimeOffset OccurredAt { get; private set; }
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+}
+
+public sealed class NotificationSuppressionContext
+{
+    private NotificationSuppressionContext() { }
+
+    public NotificationSuppressionContext(Guid eventId, Guid incidentId, string lifecycleEventKey, int policyVersion,
+        DateTimeOffset evaluatedAt)
+    {
+        EventId = Required(eventId, nameof(eventId));
+        IncidentId = Required(incidentId, nameof(incidentId));
+        LifecycleEventKey = Guard.Required(lifecycleEventKey, nameof(lifecycleEventKey), 128);
+        PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
+        Eligibility = NotificationSuppressionEligibility.Eligible;
+        ReasonCode = AvailabilityIncident.AvailabilityDownRuleKey;
+        EvaluatedAt = Guard.Utc(evaluatedAt, nameof(evaluatedAt));
+    }
+
+    public Guid EventId { get; private set; }
+    public Guid IncidentId { get; private set; }
+    public string LifecycleEventKey { get; private set; } = string.Empty;
+    public int PolicyVersion { get; private set; }
+    public NotificationSuppressionEligibility Eligibility { get; private set; }
+    public string ReasonCode { get; private set; } = string.Empty;
+    public DateTimeOffset EvaluatedAt { get; private set; }
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
 }
 
 public sealed class ProbeStatusPolicySnapshot

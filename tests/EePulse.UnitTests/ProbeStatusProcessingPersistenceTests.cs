@@ -108,6 +108,34 @@ public sealed class ProbeStatusProcessingPersistenceTests
         Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, transition.ProcessingDisposition);
     }
 
+    [Fact]
+    public void St03aOpeningRecordsRequireAvailabilityDownEvidenceAndEligibleContext()
+    {
+        var incident = new AvailabilityIncident(Guid.NewGuid(), Guid.NewGuid(), Now);
+        var lifecycleEvent = new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, incident.ProbeId,
+            Guid.NewGuid(), Guid.NewGuid(), ProbeStatus.Up, Guid.NewGuid(), 1, Now);
+        var context = new NotificationSuppressionContext(lifecycleEvent.EventId, incident.Id,
+            lifecycleEvent.LifecycleEventKey, lifecycleEvent.PolicyVersion, Now);
+
+        Assert.Equal(AvailabilityIncident.AvailabilityDownRuleKey, incident.RuleKey);
+        Assert.Equal(AvailabilityIncidentStatus.Open, incident.Status);
+        Assert.Equal(IncidentLifecycleEventType.Opened, lifecycleEvent.LifecycleEventType);
+        Assert.Equal(IncidentLifecycleEvent.OpenedLifecycleEventKey, lifecycleEvent.LifecycleEventKey);
+        Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, lifecycleEvent.ProcessingDisposition);
+        Assert.Equal(ProbeStatus.Up, lifecycleEvent.SourceFromStatus);
+        Assert.Equal(ProbeStatus.Down, lifecycleEvent.SourceToStatus);
+        Assert.Equal("failure-threshold-met", lifecycleEvent.SourceReasonCode);
+        Assert.Equal(NotificationSuppressionEligibility.Eligible, context.Eligibility);
+        Assert.Equal("availability-down", context.ReasonCode);
+
+        Assert.Throws<DomainValidationException>(() => new AvailabilityIncident(Guid.Empty, Guid.NewGuid(), Now));
+        Assert.Throws<DomainValidationException>(() => new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, incident.ProbeId,
+            Guid.Empty, Guid.NewGuid(), ProbeStatus.Up, Guid.NewGuid(), 1, Now));
+        Assert.Throws<DomainValidationException>(() => new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, incident.ProbeId,
+            Guid.NewGuid(), Guid.NewGuid(), ProbeStatus.Down, Guid.NewGuid(), 1, Now));
+        Assert.Throws<DomainValidationException>(() => new NotificationSuppressionContext(Guid.NewGuid(), incident.Id, "", 1, Now));
+    }
+
     [Theory]
     [InlineData(ProbeStatusTransitionReason.BootstrapSuccess, "bootstrap-success")]
     [InlineData(ProbeStatusTransitionReason.QualityDegraded, "quality-degraded")]
