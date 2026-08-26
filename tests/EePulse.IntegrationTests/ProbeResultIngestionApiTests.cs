@@ -3,14 +3,18 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using EePulse.Application.Time;
 using EePulse.Api.Agents;
 using EePulse.Contracts.Agents;
 using EePulse.Contracts.Inventory;
 using EePulse.Infrastructure.Persistence;
 using EePulse.Infrastructure.Persistence.ProbeProcessing;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 
 namespace EePulse.IntegrationTests;
@@ -19,6 +23,42 @@ public sealed class ProbeResultIngestionApiTests
 {
     private static readonly Guid ActorId = Guid.Parse("6a7f78d4-679d-4ed2-9aea-1c395a439d30");
     private static readonly JsonSerializerOptions AgentJson = CreateAgentJson();
+
+    [Fact]
+    public async Task ResultIngestionUsesOnePostgresReceiptTimestampPerNewBatchAndPreservesItOnReplay()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var applicationNow = new DateTimeOffset(2001, 2, 3, 4, 5, 6, TimeSpan.Zero);
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString);
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IUtcClock>();
+                services.AddSingleton<IUtcClock>(new FixedClock(applicationNow));
+            });
+        });
+        using var client = factory.CreateClient();
+        var enrolled = await EnrollConfiguredAgentWithProbes(client, 2, ct);
+        var first = Result(enrolled.AgentId, enrolled.ProbeIds[0], enrolled.ConfigurationVersion);
+        var second = Result(enrolled.AgentId, enrolled.ProbeIds[1], enrolled.ConfigurationVersion);
+
+        var before = await ReadPostgresTimestampAsync(postgres.ConnectionString, ct);
+        var accepted = await Send(client, enrolled, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [first, second]), HttpStatusCode.OK, ct);
+        var after = await ReadPostgresTimestampAsync(postgres.ConnectionString, ct);
+
+        Assert.Equal(new[] { first.ResultId, second.ResultId }.OrderBy(id => id).ToArray(), accepted.AcceptedResultIds);
+        var receipts = await ReadLedgerReceiptsAsync(factory, enrolled.AgentId, [first.ResultId, second.ResultId], ct);
+        var receipt = Assert.Single(receipts.Values.Distinct());
+        Assert.InRange(receipt, before, after);
+        Assert.NotEqual(applicationNow, receipt);
+
+        var replay = await Send(client, enrolled, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [second, first]), HttpStatusCode.OK, ct);
+        Assert.Equal(new[] { first.ResultId, second.ResultId }.OrderBy(id => id).ToArray(), replay.AcceptedResultIds);
+        Assert.Equal(receipts, await ReadLedgerReceiptsAsync(factory, enrolled.AgentId, [first.ResultId, second.ResultId], ct));
+        await AssertLedgerCount(factory, 2, ct);
+    }
 
     [Fact]
     public async Task ResultIngestionIsAuthenticatedValidatedIdempotentAndSanitized()
@@ -361,6 +401,23 @@ public sealed class ProbeResultIngestionApiTests
     private static async Task<T> Get<T>(HttpClient client, string path, string credential, CancellationToken ct) { using var request = new HttpRequestMessage(HttpMethod.Get, path); request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential); var response = await client.SendAsync(request, ct); Assert.True(response.IsSuccessStatusCode); return (await response.Content.ReadFromJsonAsync<T>(AgentJson, ct))!; }
     private static async Task<AgentConfigurationAcknowledgementResponse> SendAck(HttpClient client, AgentEnrollmentResponse agent, long version, CancellationToken ct) { using var request = Request($"/api/v1/agents/{agent.AgentId}/configuration/acknowledgements", agent.AgentCredential, new AgentConfigurationAcknowledgementRequest(1, Guid.NewGuid(), version, "Applied", DateTimeOffset.UtcNow, null, DateTimeOffset.UtcNow)); var response = await client.SendAsync(request, ct); Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(ct)); return (await response.Content.ReadFromJsonAsync<AgentConfigurationAcknowledgementResponse>(AgentJson, ct))!; }
     private static async Task AssertLedgerCount(WebApplicationFactory<Program> factory, int expected, CancellationToken ct) { await using var scope = factory.Services.CreateAsyncScope(); Assert.Equal(expected, await scope.ServiceProvider.GetRequiredService<EePulseDbContext>().ProbeResultLedgerEntries.CountAsync(ct)); }
+    private static async Task<DateTimeOffset> ReadPostgresTimestampAsync(string connectionString, CancellationToken ct)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(ct);
+        await using var command = new NpgsqlCommand("SELECT clock_timestamp()", connection);
+        var timestamp = Assert.IsType<DateTime>(await command.ExecuteScalarAsync(ct));
+        Assert.Equal(DateTimeKind.Utc, timestamp.Kind);
+        return PostgresTimestamp(new DateTimeOffset(timestamp));
+    }
+    private static async Task<IReadOnlyDictionary<Guid, DateTimeOffset>> ReadLedgerReceiptsAsync(WebApplicationFactory<Program> factory, Guid agentId, IReadOnlyList<Guid> resultIds, CancellationToken ct)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<EePulseDbContext>().ProbeResultLedgerEntries
+            .Where(row => row.AgentId == agentId && resultIds.Contains(row.ResultId))
+            .ToDictionaryAsync(row => row.ResultId, row => row.ReceivedAt, ct);
+    }
+    private static DateTimeOffset PostgresTimestamp(DateTimeOffset value) => new(value.UtcTicks - value.UtcTicks % 10, TimeSpan.Zero);
     private static DbContextOptions<EePulseDbContext> CreateOptions(string connectionString) => new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(connectionString).Options;
     private static async Task AssertSafeConflictAudit(WebApplicationFactory<Program> factory, Guid agentId, Guid resultId, string credential, CancellationToken ct)
     {
@@ -373,4 +430,5 @@ public sealed class ProbeResultIngestionApiTests
         Assert.Equal(agentId, metadata.RootElement.GetProperty("agentId").GetGuid()); Assert.Equal(resultId, metadata.RootElement.GetProperty("resultId").GetGuid()); Assert.Equal("immutable-payload-digest-mismatch", metadata.RootElement.GetProperty("reasonCode").GetString());
     }
     private static JsonSerializerOptions CreateAgentJson() { var options = new JsonSerializerOptions(JsonSerializerDefaults.Web); AgentJsonContract.AddConverters(options); return options; }
+    private sealed class FixedClock(DateTimeOffset now) : IUtcClock { public DateTimeOffset UtcNow => now; }
 }

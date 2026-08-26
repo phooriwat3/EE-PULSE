@@ -172,6 +172,7 @@ public static partial class AgentEndpoints
         foreach (var resultId in conflictingResultIds.OrderBy(x => x))
             AuditResultIdentityConflict(db, http, clock, agentId, resultId);
         await ProbeTransactionLock.AcquireAllAsync(db, candidates.Values.Select(x => x.Result.ProbeId), ct);
+        var receivedAt = PostgresTimestamp(await db.Database.SqlQueryRaw<DateTimeOffset>("SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct));
         foreach (var candidate in candidates.Values.OrderBy(x => x.Result.ResultId))
         {
             var result = candidate.Result; var key = $"{agentId:D}/{result.ResultId:D}";
@@ -190,7 +191,7 @@ public static partial class AgentEndpoints
             }
             db.Add(new ProbeResultLedgerEntry(agentId, result.ResultId, result.ProbeId, result.ConfigurationVersion,
                 PostgresTimestamp(result.StartedAt), PostgresTimestamp(result.EndedAt), result.AttemptCount, result.SuccessfulAttemptCount, result.PacketLossRatio,
-                result.MinRttMilliseconds, result.AverageRttMilliseconds, result.MaxRttMilliseconds, result.ErrorCategory, candidate.Digest, PostgresTimestamp(clock.UtcNow)));
+                result.MinRttMilliseconds, result.AverageRttMilliseconds, result.MaxRttMilliseconds, result.ErrorCategory, candidate.Digest, receivedAt));
             accepted.Add(result.ResultId);
         }
         await db.SaveChangesAsync(ct);
