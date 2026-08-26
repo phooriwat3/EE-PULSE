@@ -73,7 +73,7 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
             if (addedProjection) db.Add(projection);
         }
 
-        db.Add(new ProbeResultProcessingDisposition(
+        var processingDisposition = new ProbeResultProcessingDisposition(
             ledger.AgentId,
             ledger.ResultId,
             ledger.ProbeId,
@@ -82,10 +82,11 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
             disposition.ReasonCode,
             resolvedSnapshotId,
             resolvedPolicyVersion,
-            decidedAt));
+            decidedAt);
+        db.Add(processingDisposition);
         if (disposition.Kind == ProbeResultProcessingDispositionKind.StateDriving && evaluation?.Transition is { } transition)
         {
-            db.Add(new ProbeResultStatusTransition(
+            var persistedTransition = new ProbeResultStatusTransition(
                 ledger.AgentId,
                 ledger.ResultId,
                 ledger.ProbeId,
@@ -94,7 +95,41 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
                 ProbeResultStatusTransition.ReasonCodeFor(transition.Reason),
                 ledger.EndedAt,
                 ledger.ReceivedAt,
-                disposition.Kind));
+                disposition.Kind);
+            db.Add(persistedTransition);
+
+            if (IsAvailabilityDownOpening(transition))
+            {
+                var activeIncident = await db.AvailabilityIncidents.SingleOrDefaultAsync(incident =>
+                    incident.ProbeId == ledger.ProbeId &&
+                    (incident.Status == AvailabilityIncidentStatus.Open || incident.Status == AvailabilityIncidentStatus.Acknowledged),
+                    cancellationToken);
+                var openIncidentId = projection!.OpenIncidentId;
+
+                if (openIncidentId.HasValue && (activeIncident is null || activeIncident.Id != openIncidentId.Value))
+                {
+                    throw new InvalidOperationException("The Probe status projection references an inconsistent active availability incident.");
+                }
+
+                if (activeIncident is not null)
+                {
+                    if (!openIncidentId.HasValue)
+                    {
+                        db.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = activeIncident.Id;
+                    }
+                }
+                else
+                {
+                    var incident = new AvailabilityIncident(Guid.NewGuid(), ledger.ProbeId, ledger.EndedAt);
+                    var lifecycleEvent = new IncidentLifecycleEvent(Guid.NewGuid(), incident.Id, ledger.ProbeId,
+                        ledger.AgentId, ledger.ResultId, transition.From, snapshot!.Id, snapshot.PolicyVersion, ledger.EndedAt);
+                    var suppressionContext = new NotificationSuppressionContext(lifecycleEvent.EventId, incident.Id,
+                        lifecycleEvent.LifecycleEventKey, lifecycleEvent.PolicyVersion, ledger.ReceivedAt);
+
+                    db.AddRange(incident, lifecycleEvent, suppressionContext);
+                    db.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = incident.Id;
+                }
+            }
         }
         await db.SaveChangesAsync(cancellationToken);
 
@@ -156,6 +191,11 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
         if (agentComparison != 0) return agentComparison < 0;
         return string.CompareOrdinal(ledger.ResultId.ToString("D"), projection.WatermarkResultId!.Value.ToString("D")) < 0;
     }
+
+    private static bool IsAvailabilityDownOpening(ProbeStatusTransition transition) =>
+        transition.From != ProbeStatus.Down &&
+        transition.To == ProbeStatus.Down &&
+        transition.Reason == ProbeStatusTransitionReason.FailureThresholdMet;
 
     private sealed record DispositionDecision(ProbeResultProcessingDispositionKind Kind, string ReasonCode);
 }
