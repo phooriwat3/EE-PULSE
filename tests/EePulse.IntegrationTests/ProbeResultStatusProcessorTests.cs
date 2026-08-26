@@ -1036,6 +1036,140 @@ public sealed class ProbeResultStatusProcessorTests
         }
     }
 
+    [Theory]
+    [InlineData("probe")]
+    [InlineData("device")]
+    [InlineData("agent-group")]
+    public async Task St08DisabledSchedulingOwnershipPersistsOnlyTheDisabledDisposition(string disabledOwner)
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var resultId = await AddLedgerAsync(fixture, fixture.Now, fixture.Now, 3, 0m);
+        var ledger = await ReadLedgerAsync(fixture, resultId);
+        await SetSchedulingOwnerEnabledAsync(fixture, disabledOwner, false);
+
+        await using (var processing = new EePulseDbContext(fixture.Options))
+        {
+            var outcome = await new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now))
+                .ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+            Assert.Equal((ProbeResultStatusProcessorOutcomeKind.Processed, fixture.AgentId, resultId, ProbeResultProcessingDispositionKind.Disabled),
+                (outcome.Kind, outcome.AgentId, outcome.ResultId, outcome.Disposition));
+        }
+
+        await using (var verify = new EePulseDbContext(fixture.Options))
+        {
+            var disposition = await verify.ProbeResultProcessingDispositions.AsNoTracking()
+                .SingleAsync(row => row.AgentId == fixture.AgentId && row.ResultId == resultId, TestContext.Current.CancellationToken);
+            Assert.Equal((ledger.AgentId, ledger.ResultId, ledger.ProbeId, ProbeResultProcessingDispositionKind.Disabled, "disabled",
+                    fixture.PolicyId, 1, fixture.Now),
+                (disposition.AgentId, disposition.ResultId, disposition.ProbeId, disposition.Disposition, disposition.ReasonCode,
+                    disposition.ResolvedPolicySnapshotId, disposition.ResolvedPolicyVersion, disposition.DecidedAt));
+            Assert.Empty(await verify.ProbeStatusProjections.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(await verify.ProbeResultStatusTransitions.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(await verify.AvailabilityIncidents.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(await verify.IncidentLifecycleEvents.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(await verify.NotificationSuppressionContexts.AsNoTracking().ToListAsync(TestContext.Current.CancellationToken));
+        }
+
+        await using var replay = new EePulseDbContext(fixture.Options);
+        Assert.Equal(ProbeResultStatusProcessorOutcomeKind.NoPending,
+            (await new ProbeResultStatusProcessor(replay, new FixedClock(fixture.Now))
+                .ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken)).Kind);
+    }
+
+    [Theory]
+    [InlineData("probe", false)]
+    [InlineData("device", true)]
+    [InlineData("agent-group", false)]
+    public async Task St08DisabledSchedulingOwnershipDoesNotMutateAnActiveIncidentOrProjection(string disabledOwner, bool acknowledgeIncident)
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await ProcessToRecoveringAsync(fixture);
+        if (acknowledgeIncident)
+        {
+            await using var acknowledge = new EePulseDbContext(fixture.Options);
+            await acknowledge.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Acknowledged"}, acknowledged_at = {fixture.Now.AddSeconds(3)}, acknowledged_by = {"operator"}, acknowledgement_comment = {"investigating"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
+        }
+
+        var baseline = await CaptureDisabledNonMutationSnapshotAsync(fixture);
+        await SetSchedulingOwnerEnabledAsync(fixture, disabledOwner, false);
+        var resultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(4), fixture.Now.AddSeconds(4), 0, 1m);
+        await using (var processing = new EePulseDbContext(fixture.Options))
+            await new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+
+        Assert.Equal(baseline, await CaptureDisabledNonMutationSnapshotAsync(fixture));
+        await using var verify = new EePulseDbContext(fixture.Options);
+        var disposition = await verify.ProbeResultProcessingDispositions.AsNoTracking()
+            .SingleAsync(row => row.AgentId == fixture.AgentId && row.ResultId == resultId, TestContext.Current.CancellationToken);
+        Assert.Equal((ProbeResultProcessingDispositionKind.Disabled, "disabled", fixture.PolicyId, 1, fixture.Now),
+            (disposition.Disposition, disposition.ReasonCode, disposition.ResolvedPolicySnapshotId, disposition.ResolvedPolicyVersion, disposition.DecidedAt));
+    }
+
+    [Fact]
+    public async Task St08DisabledDispositionPrecedencePreservesLineageAndConfigurationOutcomesThenWinsOverCursorAndTime()
+    {
+        await using (var lineage = await CreateFixtureAsync(includeBinding: false))
+        {
+            await SetSchedulingOwnerEnabledAsync(lineage, "probe", false);
+            var resultId = await AddLedgerAsync(lineage, lineage.Now, lineage.Now, 3, 0m);
+            await using var processing = new EePulseDbContext(lineage.Options);
+            Assert.Equal(ProbeResultProcessingDispositionKind.HistoricalOther,
+                (await new ProbeResultStatusProcessor(processing, new FixedClock(lineage.Now)).ProcessNextAsync(lineage.ProbeId, TestContext.Current.CancellationToken)).Disposition);
+            Assert.Equal((ProbeResultProcessingDispositionKind.HistoricalOther, "policy-lineage-unresolved"),
+                ((await FindDispositionAsync(lineage, resultId))!.Disposition, (await FindDispositionAsync(lineage, resultId))!.ReasonCode));
+        }
+
+        await using (var configuration = await CreateFixtureAsync())
+        {
+            await SetSchedulingOwnerEnabledAsync(configuration, "probe", false);
+            var resultId = await AddLedgerAsync(configuration, configuration.Now.AddSeconds(-1), configuration.Now.AddSeconds(-1), 3, 0m);
+            await using var processing = new EePulseDbContext(configuration.Options);
+            await new ProbeResultStatusProcessor(processing, new FixedClock(configuration.Now)).ProcessNextAsync(configuration.ProbeId, TestContext.Current.CancellationToken);
+            Assert.Equal((ProbeResultProcessingDispositionKind.HistoricalOther, "config-not-effective"),
+                ((await FindDispositionAsync(configuration, resultId))!.Disposition, (await FindDispositionAsync(configuration, resultId))!.ReasonCode));
+        }
+
+        await using (var cursor = await CreateFixtureAsync())
+        {
+            await AddLedgerAsync(cursor, cursor.Now, cursor.Now, 3, 0m);
+            await using (var bootstrap = new EePulseDbContext(cursor.Options))
+                await new ProbeResultStatusProcessor(bootstrap, new FixedClock(cursor.Now)).ProcessNextAsync(cursor.ProbeId, TestContext.Current.CancellationToken);
+            await SetSchedulingOwnerEnabledAsync(cursor, "probe", false);
+            var resultId = await AddLedgerAsync(cursor, cursor.Now.AddSeconds(-1), cursor.Now, 3, 0m);
+            await using var processing = new EePulseDbContext(cursor.Options);
+            await new ProbeResultStatusProcessor(processing, new FixedClock(cursor.Now)).ProcessNextAsync(cursor.ProbeId, TestContext.Current.CancellationToken);
+            Assert.Equal((ProbeResultProcessingDispositionKind.Disabled, "disabled"),
+                ((await FindDispositionAsync(cursor, resultId))!.Disposition, (await FindDispositionAsync(cursor, resultId))!.ReasonCode));
+        }
+
+        await AssertDisabledWinsOverTimeRuleAsync(TimeSpan.FromMinutes(-5).Add(TimeSpan.FromMicroseconds(-1)), "beyond-approved-lateness");
+        await AssertDisabledWinsOverTimeRuleAsync(TimeSpan.FromSeconds(60).Add(TimeSpan.FromMicroseconds(1)), "future-or-skew-suspect");
+    }
+
+    [Fact]
+    public async Task St08PreCommitFailureRollsBackDisabledDispositionThenRetryAndReplayPersistItOnce()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SetSchedulingOwnerEnabledAsync(fixture, "probe", false);
+        var resultId = await AddLedgerAsync(fixture, fixture.Now, fixture.Now, 3, 0m);
+        var baseline = await CaptureDisabledNonMutationSnapshotAsync(fixture);
+        var failingOptions = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(fixture.ConnectionString)
+            .AddInterceptors(new ThrowBeforeSaveInterceptor()).Options;
+        await using (var failing = new EePulseDbContext(failingOptions))
+            await Assert.ThrowsAsync<InvalidOperationException>(() => new ProbeResultStatusProcessor(failing, new FixedClock(fixture.Now))
+                .ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken));
+
+        Assert.Equal(baseline, await CaptureDisabledNonMutationSnapshotAsync(fixture));
+        Assert.Null(await FindDispositionAsync(fixture, resultId));
+        await using (var retry = new EePulseDbContext(fixture.Options))
+            Assert.Equal(ProbeResultProcessingDispositionKind.Disabled,
+                (await new ProbeResultStatusProcessor(retry, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken)).Disposition);
+        await using (var replay = new EePulseDbContext(fixture.Options))
+            Assert.Equal(ProbeResultStatusProcessorOutcomeKind.NoPending,
+                (await new ProbeResultStatusProcessor(replay, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken)).Kind);
+        await using var verify = new EePulseDbContext(fixture.Options);
+        Assert.Single(await verify.ProbeResultProcessingDispositions.Where(row => row.AgentId == fixture.AgentId && row.ResultId == resultId).ToListAsync(TestContext.Current.CancellationToken));
+    }
+
     private static async Task ProcessToRecoveringAsync(Fixture fixture)
     {
         await AddLedgerAsync(fixture, fixture.Now, fixture.Now, 3, 0m);
@@ -1090,6 +1224,58 @@ public sealed class ProbeResultStatusProcessorTests
         Assert.Equal(expected.EventIds, actual.EventIds);
         Assert.Equal(expected.ContextIds, actual.ContextIds);
     }
+
+    private static async Task SetSchedulingOwnerEnabledAsync(Fixture fixture, string owner, bool enabled)
+    {
+        await using var db = new EePulseDbContext(fixture.Options);
+        switch (owner)
+        {
+            case "probe":
+                await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE probes SET enabled = {enabled} WHERE id = {fixture.ProbeId}", TestContext.Current.CancellationToken);
+                break;
+            case "device":
+                await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE devices SET enabled = {enabled} WHERE id = (SELECT device_id FROM probes WHERE id = {fixture.ProbeId})", TestContext.Current.CancellationToken);
+                break;
+            case "agent-group":
+                await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE agent_groups SET enabled = {enabled} WHERE id = {fixture.GroupId}", TestContext.Current.CancellationToken);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(owner));
+        }
+    }
+
+    private static async Task AssertDisabledWinsOverTimeRuleAsync(TimeSpan eventOffset, string overriddenReason)
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SetSchedulingOwnerEnabledAsync(fixture, "probe", false);
+        var resultId = await AddLedgerAsync(fixture, fixture.Now.Add(eventOffset), fixture.Now, 3, 0m);
+        await using (var processing = new EePulseDbContext(fixture.Options))
+            await new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+
+        var disposition = (await FindDispositionAsync(fixture, resultId))!;
+        Assert.Equal((ProbeResultProcessingDispositionKind.Disabled, "disabled"), (disposition.Disposition, disposition.ReasonCode));
+        Assert.NotEqual(overriddenReason, disposition.ReasonCode);
+    }
+
+    private static async Task<DisabledNonMutationSnapshot> CaptureDisabledNonMutationSnapshotAsync(Fixture fixture)
+    {
+        await using var db = new EePulseDbContext(fixture.Options);
+        var projection = await db.ProbeStatusProjections.AsNoTracking().Where(row => row.ProbeId == fixture.ProbeId)
+            .Select(row => new ProjectionSnapshot(row.UnderlyingStatus, row.ConsecutiveFailureCount, row.ConsecutiveSuccessCount,
+                row.LastFreshEventAt, row.WatermarkEventAt, row.WatermarkAgentId, row.WatermarkResultId, row.StateVersion, row.OpenIncidentId))
+            .SingleOrDefaultAsync(TestContext.Current.CancellationToken);
+        var incidents = await db.AvailabilityIncidents.AsNoTracking().OrderBy(row => row.Id)
+            .Select(row => new IncidentStateSnapshot(row.Id, row.Status, row.OpenedAt, row.AcknowledgedAt, row.AcknowledgedBy,
+                row.AcknowledgementComment, row.ResolvedAt, row.ResolvedBy, row.ResolutionNote, row.OccurrenceCount))
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var transitions = await db.ProbeResultStatusTransitions.AsNoTracking().OrderBy(row => row.AgentId).ThenBy(row => row.ResultId)
+            .Select(row => new ResultIdentity(row.AgentId, row.ResultId)).ToArrayAsync(TestContext.Current.CancellationToken);
+        var events = await db.IncidentLifecycleEvents.AsNoTracking().OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken);
+        var contexts = await db.NotificationSuppressionContexts.AsNoTracking().OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken);
+        return new(projection, Serialize(incidents), Serialize(transitions), Serialize(events), Serialize(contexts));
+    }
+
+    private static string Serialize<T>(IEnumerable<T> values) => string.Join("|", values.Select(value => value!.ToString()));
 
     private static async Task<Fixture> CreateFixtureAsync(bool includeBinding = true, bool includeBoundary = true)
     {
@@ -1182,6 +1368,14 @@ public sealed class ProbeResultStatusProcessorTests
 
     private sealed record ResultIdentity(Guid AgentId, Guid ResultId);
     private sealed record IncidentSnapshot(Guid Id, AvailabilityIncidentStatus Status, int OccurrenceCount);
+    private sealed record ProjectionSnapshot(ProbeStatus UnderlyingStatus, int ConsecutiveFailureCount, int ConsecutiveSuccessCount,
+        DateTimeOffset? LastFreshEventAt, DateTimeOffset? WatermarkEventAt, Guid? WatermarkAgentId, Guid? WatermarkResultId,
+        long StateVersion, Guid? OpenIncidentId);
+    private sealed record IncidentStateSnapshot(Guid Id, AvailabilityIncidentStatus Status, DateTimeOffset OpenedAt,
+        DateTimeOffset? AcknowledgedAt, string? AcknowledgedBy, string? AcknowledgementComment, DateTimeOffset? ResolvedAt,
+        string? ResolvedBy, string? ResolutionNote, int OccurrenceCount);
+    private sealed record DisabledNonMutationSnapshot(ProjectionSnapshot? Projection, string Incidents, string Transitions,
+        string Events, string Contexts);
     private sealed record OccurrenceRollbackSnapshot(ProbeStatus UnderlyingStatus, int ConsecutiveFailureCount,
         int ConsecutiveSuccessCount, DateTimeOffset? LastFreshEventAt, DateTimeOffset? WatermarkEventAt,
         Guid? WatermarkAgentId, Guid? WatermarkResultId, long StateVersion, Guid? OpenIncidentId,

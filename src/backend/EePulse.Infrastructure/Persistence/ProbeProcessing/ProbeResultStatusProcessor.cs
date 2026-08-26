@@ -53,11 +53,23 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
             : await db.ProbeStatusPolicySnapshots.SingleOrDefaultAsync(row => row.Id == binding.PolicySnapshotId, cancellationToken);
         var boundary = await db.AgentConfigurationEffectiveBoundaries
             .SingleOrDefaultAsync(row => row.AgentId == ledger.AgentId && row.ConfigurationVersion == ledger.ConfigurationVersion, cancellationToken);
+        var schedulingOwnership = await (
+            from probe in db.Probes
+            join device in db.Devices on probe.DeviceId equals device.Id
+            join agentGroup in db.AgentGroups on probe.AgentGroupId equals agentGroup.Id
+            where probe.Id == ledger.ProbeId
+            select new { probe.Enabled, DeviceEnabled = device.Enabled, AgentGroupEnabled = agentGroup.Enabled })
+            .SingleAsync(cancellationToken);
 
         var decidedAt = clock.UtcNow;
         var resolvedSnapshotId = snapshot?.Id;
         var resolvedPolicyVersion = snapshot?.PolicyVersion;
-        var disposition = ResolveDisposition(ledger, projection, snapshot, boundary);
+        var disposition = ResolveDisposition(
+            ledger,
+            projection,
+            snapshot,
+            boundary,
+            !schedulingOwnership.Enabled || !schedulingOwnership.DeviceEnabled || !schedulingOwnership.AgentGroupEnabled);
         var addedProjection = false;
         ProbeStatusEvaluationResult? evaluation = null;
 
@@ -194,7 +206,8 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
         ProbeResultLedgerEntry ledger,
         ProbeStatusProjection? projection,
         ProbeStatusPolicySnapshot? snapshot,
-        AgentConfigurationEffectiveBoundary? boundary)
+        AgentConfigurationEffectiveBoundary? boundary,
+        bool schedulingOwnershipDisabled)
     {
         if (snapshot is null || boundary is null)
         {
@@ -204,6 +217,11 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
         if (ledger.ReceivedAt < boundary.AppliedAcknowledgementReceivedAt)
         {
             return new(ProbeResultProcessingDispositionKind.HistoricalOther, "config-not-effective");
+        }
+
+        if (schedulingOwnershipDisabled)
+        {
+            return new(ProbeResultProcessingDispositionKind.Disabled, "disabled");
         }
 
         if (projection is not null && IsCursorLower(projection, ledger))
