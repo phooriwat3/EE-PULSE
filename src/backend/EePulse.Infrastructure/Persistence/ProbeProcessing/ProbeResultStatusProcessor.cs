@@ -59,12 +59,13 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
         var resolvedPolicyVersion = snapshot?.PolicyVersion;
         var disposition = ResolveDisposition(ledger, projection, snapshot, boundary);
         var addedProjection = false;
+        ProbeStatusEvaluationResult? evaluation = null;
 
         if (disposition.Kind == ProbeResultProcessingDispositionKind.StateDriving)
         {
             projection ??= new ProbeStatusProjection(probeId, ProbeStatus.Unknown, 0, 0, null, null, null, null);
             addedProjection = db.Entry(projection).State == EntityState.Detached;
-            var evaluation = ProbeStatusEvaluationKernel.Evaluate(
+            evaluation = ProbeStatusEvaluationKernel.Evaluate(
                 new(snapshot!.FailureThreshold, snapshot.RecoveryThreshold, snapshot.WarningRttMilliseconds, snapshot.WarningPacketLossRatio),
                 new(projection.UnderlyingStatus, projection.ConsecutiveFailureCount, projection.ConsecutiveSuccessCount),
                 new(ledger.SuccessfulAttemptCount == ledger.AttemptCount, ledger.AverageRttMilliseconds, ledger.PacketLossRatio));
@@ -82,6 +83,19 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
             resolvedSnapshotId,
             resolvedPolicyVersion,
             decidedAt));
+        if (disposition.Kind == ProbeResultProcessingDispositionKind.StateDriving && evaluation?.Transition is { } transition)
+        {
+            db.Add(new ProbeResultStatusTransition(
+                ledger.AgentId,
+                ledger.ResultId,
+                ledger.ProbeId,
+                transition.From,
+                transition.To,
+                ProbeResultStatusTransition.ReasonCodeFor(transition.Reason),
+                ledger.EndedAt,
+                ledger.ReceivedAt,
+                disposition.Kind));
+        }
         await db.SaveChangesAsync(cancellationToken);
 
         if (addedProjection)

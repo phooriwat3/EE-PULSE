@@ -115,6 +115,8 @@ internal sealed class ProbeResultProcessingDispositionConfiguration : IEntityTyp
             t.HasCheckConstraint("ck_probe_result_processing_dispositions_state_driving", "disposition <> 'StateDriving' OR (resolved_policy_snapshot_id IS NOT NULL AND resolved_policy_version IS NOT NULL)");
         });
         b.HasKey(x => new { x.AgentId, x.ResultId });
+        b.HasAlternateKey(x => new { x.AgentId, x.ResultId, x.Disposition })
+            .HasName("ak_probe_result_processing_dispositions_identity_kind");
         b.Property(x => x.AgentId).HasColumnName("agent_id");
         b.Property(x => x.ResultId).HasColumnName("result_id");
         b.Property(x => x.ProbeId).HasColumnName("probe_id");
@@ -132,6 +134,41 @@ internal sealed class ProbeResultProcessingDispositionConfiguration : IEntityTyp
         b.HasOne<ProbeStatusPolicySnapshot>().WithMany()
             .HasForeignKey(x => new { x.ResolvedPolicySnapshotId, x.ResolvedPolicyVersion })
             .HasPrincipalKey(x => new { x.Id, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+internal sealed class ProbeResultStatusTransitionConfiguration : IEntityTypeConfiguration<ProbeResultStatusTransition>
+{
+    public void Configure(EntityTypeBuilder<ProbeResultStatusTransition> b)
+    {
+        b.ToTable("probe_result_status_transitions", t =>
+        {
+            t.HasCheckConstraint("ck_probe_result_status_transitions_from_status", "from_status IN ('Unknown', 'Up', 'Degraded', 'Down', 'Recovering')");
+            t.HasCheckConstraint("ck_probe_result_status_transitions_to_status", "to_status IN ('Unknown', 'Up', 'Degraded', 'Down', 'Recovering')");
+            t.HasCheckConstraint("ck_probe_result_status_transitions_status_change", "from_status <> to_status");
+            t.HasCheckConstraint("ck_probe_result_status_transitions_reason_code", "char_length(reason_code) BETWEEN 1 AND 64");
+            t.HasCheckConstraint("ck_probe_result_status_transitions_reason_code_value", "reason_code IN ('bootstrap-success', 'quality-degraded', 'quality-restored', 'failure-threshold-met', 'recovery-pending', 'recovery-threshold-met', 'recovery-failed')");
+            t.HasCheckConstraint("ck_probe_result_status_transitions_processing_disposition", "processing_disposition = 'StateDriving'");
+        });
+        b.HasKey(x => new { x.AgentId, x.ResultId });
+        b.Property(x => x.AgentId).HasColumnName("agent_id");
+        b.Property(x => x.ResultId).HasColumnName("result_id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id");
+        b.Property(x => x.FromStatus).HasColumnName("from_status").HasConversion<string>().HasMaxLength(20);
+        b.Property(x => x.ToStatus).HasColumnName("to_status").HasConversion<string>().HasMaxLength(20);
+        b.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(64);
+        b.Property(x => x.EventAt).HasColumnName("event_at");
+        b.Property(x => x.ReceivedAt).HasColumnName("received_at");
+        b.Property(x => x.ProcessingDisposition).HasColumnName("processing_disposition").HasConversion<string>().HasMaxLength(32);
+        b.HasIndex(x => new { x.ProbeId, x.EventAt, x.AgentId, x.ResultId }).HasDatabaseName("ix_probe_result_status_transitions_probe_event");
+        b.HasOne<ProbeResultLedgerEntry>().WithMany()
+            .HasForeignKey(x => new { x.AgentId, x.ResultId, x.ProbeId, x.EventAt })
+            .HasPrincipalKey(x => new { x.AgentId, x.ResultId, x.ProbeId, x.EndedAt })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeResultProcessingDisposition>().WithMany()
+            .HasForeignKey(x => new { x.AgentId, x.ResultId, x.ProcessingDisposition })
+            .HasPrincipalKey(x => new { x.AgentId, x.ResultId, x.Disposition })
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

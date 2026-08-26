@@ -191,3 +191,64 @@ public sealed class ProbeResultProcessingDisposition
 
     private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
 }
+
+// This persisted history is intentionally distinct from the evaluation kernel's ProbeStatusTransition.
+public sealed class ProbeResultStatusTransition
+{
+    private static readonly string[] ValidReasonCodes =
+    [
+        "bootstrap-success",
+        "quality-degraded",
+        "quality-restored",
+        "failure-threshold-met",
+        "recovery-pending",
+        "recovery-threshold-met",
+        "recovery-failed",
+    ];
+
+    private ProbeResultStatusTransition() { }
+
+    public ProbeResultStatusTransition(Guid agentId, Guid resultId, Guid probeId, ProbeStatus fromStatus,
+        ProbeStatus toStatus, string reasonCode, DateTimeOffset eventAt, DateTimeOffset receivedAt,
+        ProbeResultProcessingDispositionKind processingDisposition)
+    {
+        AgentId = Required(agentId, nameof(agentId));
+        ResultId = Required(resultId, nameof(resultId));
+        ProbeId = Required(probeId, nameof(probeId));
+        if (!Enum.IsDefined(fromStatus)) throw new DomainValidationException(nameof(fromStatus), "From status is invalid.");
+        if (!Enum.IsDefined(toStatus)) throw new DomainValidationException(nameof(toStatus), "To status is invalid.");
+        if (fromStatus == toStatus) throw new DomainValidationException(nameof(toStatus), "A status transition must change status.");
+        FromStatus = fromStatus;
+        ToStatus = toStatus;
+        ReasonCode = Guard.Required(reasonCode, nameof(reasonCode), 64);
+        if (!ValidReasonCodes.Contains(ReasonCode, StringComparer.Ordinal)) throw new DomainValidationException(nameof(reasonCode), "Transition reason code is invalid.");
+        EventAt = Guard.Utc(eventAt, nameof(eventAt));
+        ReceivedAt = Guard.Utc(receivedAt, nameof(receivedAt));
+        if (processingDisposition != ProbeResultProcessingDispositionKind.StateDriving) throw new DomainValidationException(nameof(processingDisposition), "Status transitions require a state-driving processing disposition.");
+        ProcessingDisposition = processingDisposition;
+    }
+
+    public Guid AgentId { get; private set; }
+    public Guid ResultId { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public ProbeStatus FromStatus { get; private set; }
+    public ProbeStatus ToStatus { get; private set; }
+    public string ReasonCode { get; private set; } = string.Empty;
+    public DateTimeOffset EventAt { get; private set; }
+    public DateTimeOffset ReceivedAt { get; private set; }
+    public ProbeResultProcessingDispositionKind ProcessingDisposition { get; private set; }
+
+    public static string ReasonCodeFor(ProbeStatusTransitionReason reason) => reason switch
+    {
+        ProbeStatusTransitionReason.BootstrapSuccess => "bootstrap-success",
+        ProbeStatusTransitionReason.QualityDegraded => "quality-degraded",
+        ProbeStatusTransitionReason.QualityRestored => "quality-restored",
+        ProbeStatusTransitionReason.FailureThresholdMet => "failure-threshold-met",
+        ProbeStatusTransitionReason.RecoveryPending => "recovery-pending",
+        ProbeStatusTransitionReason.RecoveryThresholdMet => "recovery-threshold-met",
+        ProbeStatusTransitionReason.RecoveryFailed => "recovery-failed",
+        _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Transition reason is invalid."),
+    };
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+}

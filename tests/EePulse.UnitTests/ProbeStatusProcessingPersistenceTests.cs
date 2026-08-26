@@ -82,4 +82,41 @@ public sealed class ProbeStatusProcessingPersistenceTests
             ProbeResultProcessingDispositionKind.HistoricalOther, "policy-lineage-unresolved", null, null, Now);
         Assert.Null(historical.ResolvedPolicySnapshotId);
     }
+
+    [Fact]
+    public void ResultStatusTransitionRequiresImmutableChangedStateAndFrozenReasonCode()
+    {
+        var agentId = Guid.NewGuid();
+        var resultId = Guid.NewGuid();
+        var probeId = Guid.NewGuid();
+
+        Assert.Throws<DomainValidationException>(() => new ProbeResultStatusTransition(
+            agentId, resultId, probeId, ProbeStatus.Up, ProbeStatus.Up, "bootstrap-success", Now, Now,
+            ProbeResultProcessingDispositionKind.StateDriving));
+        Assert.Throws<DomainValidationException>(() => new ProbeResultStatusTransition(
+            agentId, resultId, probeId, ProbeStatus.Up, ProbeStatus.Down, "BootstrapSuccess", Now, Now,
+            ProbeResultProcessingDispositionKind.StateDriving));
+        Assert.Throws<DomainValidationException>(() => new ProbeResultStatusTransition(
+            agentId, resultId, probeId, ProbeStatus.Up, ProbeStatus.Down, "failure-threshold-met", Now, Now,
+            ProbeResultProcessingDispositionKind.HistoricalOther));
+
+        var transition = new ProbeResultStatusTransition(
+            agentId, resultId, probeId, ProbeStatus.Unknown, ProbeStatus.Up, "bootstrap-success", Now, Now,
+            ProbeResultProcessingDispositionKind.StateDriving);
+        Assert.Equal(resultId, transition.ResultId);
+        Assert.Equal("bootstrap-success", transition.ReasonCode);
+        Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, transition.ProcessingDisposition);
+    }
+
+    [Theory]
+    [InlineData(ProbeStatusTransitionReason.BootstrapSuccess, "bootstrap-success")]
+    [InlineData(ProbeStatusTransitionReason.QualityDegraded, "quality-degraded")]
+    [InlineData(ProbeStatusTransitionReason.QualityRestored, "quality-restored")]
+    [InlineData(ProbeStatusTransitionReason.FailureThresholdMet, "failure-threshold-met")]
+    [InlineData(ProbeStatusTransitionReason.RecoveryPending, "recovery-pending")]
+    [InlineData(ProbeStatusTransitionReason.RecoveryThresholdMet, "recovery-threshold-met")]
+    [InlineData(ProbeStatusTransitionReason.RecoveryFailed, "recovery-failed")]
+    public void ResultStatusTransitionMapsEveryKernelReasonToItsFrozenCode(
+        ProbeStatusTransitionReason reason, string expectedCode) =>
+        Assert.Equal(expectedCode, ProbeResultStatusTransition.ReasonCodeFor(reason));
 }

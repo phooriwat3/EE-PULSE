@@ -16,12 +16,12 @@ public sealed class ProbeResultStatusProcessorTests
     public async Task ProcessesKernelOutcomesAndAdvancesStateVersionForEveryAppliedResult()
     {
         await using var fixture = await CreateFixtureAsync();
-        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(-4), fixture.Now, successes: 3, packetLossRatio: 0m);
-        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(-3), fixture.Now.AddSeconds(1), successes: 3, packetLossRatio: 0m, averageRtt: 500m);
-        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(-2), fixture.Now.AddSeconds(2), successes: 0, packetLossRatio: 1m);
-        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(-1), fixture.Now.AddSeconds(3), successes: 0, packetLossRatio: 1m);
-        await AddLedgerAsync(fixture, fixture.Now, fixture.Now.AddSeconds(4), successes: 3, packetLossRatio: 0m);
-        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(1), fixture.Now.AddSeconds(5), successes: 3, packetLossRatio: 0m);
+        var bootstrapResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(-4), fixture.Now, successes: 3, packetLossRatio: 0m);
+        var degradationResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(-3), fixture.Now.AddSeconds(1), successes: 3, packetLossRatio: 0m, averageRtt: 500m);
+        var sameStateFailureResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(-2), fixture.Now.AddSeconds(2), successes: 0, packetLossRatio: 1m);
+        var downResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(-1), fixture.Now.AddSeconds(3), successes: 0, packetLossRatio: 1m);
+        var recoveryPendingResultId = await AddLedgerAsync(fixture, fixture.Now, fixture.Now.AddSeconds(4), successes: 3, packetLossRatio: 0m);
+        var recoveredResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(1), fixture.Now.AddSeconds(5), successes: 3, packetLossRatio: 0m);
 
         await using var db = new EePulseDbContext(fixture.Options);
         var processor = new ProbeResultStatusProcessor(db, new FixedClock(fixture.Now.AddMinutes(1)));
@@ -34,6 +34,48 @@ public sealed class ProbeResultStatusProcessorTests
         Assert.Equal(2, projection.ConsecutiveSuccessCount);
         Assert.Equal(6, projection.StateVersion);
         Assert.Equal(6, await verify.ProbeResultProcessingDispositions.CountAsync(TestContext.Current.CancellationToken));
+        var transitions = await verify.ProbeResultStatusTransitions.OrderBy(row => row.EventAt).ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(5, transitions.Count);
+        Assert.DoesNotContain(transitions, row => row.ResultId == sameStateFailureResultId);
+        Assert.Collection(transitions,
+            row => Assert.Equal((bootstrapResultId, "bootstrap-success"), (row.ResultId, row.ReasonCode)),
+            row => Assert.Equal((degradationResultId, "quality-degraded"), (row.ResultId, row.ReasonCode)),
+            row => Assert.Equal((downResultId, "failure-threshold-met"), (row.ResultId, row.ReasonCode)),
+            row => Assert.Equal((recoveryPendingResultId, "recovery-pending"), (row.ResultId, row.ReasonCode)),
+            row => Assert.Equal((recoveredResultId, "recovery-threshold-met"), (row.ResultId, row.ReasonCode)));
+        var bootstrapLedger = await ReadLedgerAsync(fixture, bootstrapResultId);
+        var bootstrapTransition = transitions.Single(row => row.ResultId == bootstrapResultId);
+        Assert.Equal(bootstrapLedger.AgentId, bootstrapTransition.AgentId);
+        Assert.Equal(bootstrapLedger.ResultId, bootstrapTransition.ResultId);
+        Assert.Equal(bootstrapLedger.ProbeId, bootstrapTransition.ProbeId);
+        Assert.Equal(bootstrapLedger.EndedAt, bootstrapTransition.EventAt);
+        Assert.Equal(bootstrapLedger.ReceivedAt, bootstrapTransition.ReceivedAt);
+        var bootstrapDisposition = await verify.ProbeResultProcessingDispositions.SingleAsync(row => row.AgentId == bootstrapTransition.AgentId && row.ResultId == bootstrapTransition.ResultId, TestContext.Current.CancellationToken);
+        Assert.Equal(bootstrapDisposition.ResolvedPolicySnapshotId, fixture.PolicyId);
+        Assert.Equal(1, bootstrapDisposition.ResolvedPolicyVersion);
+    }
+
+    [Fact]
+    public async Task PersistsQualityRestorationAndRecoveryFailureTransitions()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await AddLedgerAsync(fixture, fixture.Now, fixture.Now, 3, 0m, averageRtt: 500m);
+        var restoredResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(1), fixture.Now.AddSeconds(1), 3, 0m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(2), fixture.Now.AddSeconds(2), 0, 1m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(3), fixture.Now.AddSeconds(3), 0, 1m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(4), fixture.Now.AddSeconds(4), 3, 0m);
+        var recoveryFailedResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(5), fixture.Now.AddSeconds(5), 0, 1m);
+
+        await using (var db = new EePulseDbContext(fixture.Options))
+        {
+            var processor = new ProbeResultStatusProcessor(db, new FixedClock(fixture.Now));
+            for (var index = 0; index < 6; index++) await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+        }
+
+        await using var verify = new EePulseDbContext(fixture.Options);
+        var transitions = await verify.ProbeResultStatusTransitions.ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Contains(transitions, row => row.ResultId == restoredResultId && row.ReasonCode == "quality-restored" && row.FromStatus == ProbeStatus.Degraded && row.ToStatus == ProbeStatus.Up);
+        Assert.Contains(transitions, row => row.ResultId == recoveryFailedResultId && row.ReasonCode == "recovery-failed" && row.FromStatus == ProbeStatus.Recovering && row.ToStatus == ProbeStatus.Down);
     }
 
     [Fact]
@@ -75,6 +117,7 @@ public sealed class ProbeResultStatusProcessorTests
 
         await using var verify = new EePulseDbContext(fixture.Options);
         Assert.Equal(2, await verify.ProbeResultProcessingDispositions.CountAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(1, await verify.ProbeResultStatusTransitions.CountAsync(TestContext.Current.CancellationToken));
         Assert.Equal(2, (await verify.ProbeStatusProjections.SingleAsync(TestContext.Current.CancellationToken)).StateVersion);
     }
 
@@ -95,6 +138,7 @@ public sealed class ProbeResultStatusProcessorTests
         {
             Assert.Empty(await afterFailure.ProbeResultProcessingDispositions.ToListAsync(TestContext.Current.CancellationToken));
             Assert.Empty(await afterFailure.ProbeStatusProjections.ToListAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(await afterFailure.ProbeResultStatusTransitions.ToListAsync(TestContext.Current.CancellationToken));
         }
 
         await using var retry = new EePulseDbContext(fixture.Options);
@@ -118,8 +162,16 @@ public sealed class ProbeResultStatusProcessorTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => processing);
         }
 
+        await using (var afterCancellation = new EePulseDbContext(fixture.Options))
+        {
+            Assert.Empty(await afterCancellation.ProbeResultProcessingDispositions.ToListAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(await afterCancellation.ProbeStatusProjections.ToListAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(await afterCancellation.ProbeResultStatusTransitions.ToListAsync(TestContext.Current.CancellationToken));
+        }
+
         await using var retry = new EePulseDbContext(fixture.Options);
         Assert.Equal(resultId, (await new ProbeResultStatusProcessor(retry, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken)).ResultId);
+        Assert.Equal(1, await retry.ProbeResultStatusTransitions.CountAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -188,6 +240,8 @@ public sealed class ProbeResultStatusProcessorTests
         Assert.Contains(dispositions, row => row.ResultId == effectiveBoundaryResultId && row.Disposition == ProbeResultProcessingDispositionKind.StateDriving);
         Assert.All(dispositions.Where(row => row.ResolvedPolicySnapshotId.HasValue), row => Assert.Equal(second.PolicyId, row.ResolvedPolicySnapshotId));
         Assert.Equal(ProbeStatus.Up, (await verify.ProbeStatusProjections.SingleAsync(TestContext.Current.CancellationToken)).UnderlyingStatus);
+        Assert.Contains(await verify.ProbeResultStatusTransitions.ToListAsync(TestContext.Current.CancellationToken), row =>
+            row.ResultId == recoveryResultId && row.ReasonCode == "recovery-threshold-met" && row.FromStatus == ProbeStatus.Down && row.ToStatus == ProbeStatus.Up);
     }
 
     [Fact]
@@ -202,6 +256,7 @@ public sealed class ProbeResultStatusProcessorTests
             Assert.Empty(await verify.ProbeStatusProjections.ToListAsync(TestContext.Current.CancellationToken));
             var disposition = await verify.ProbeResultProcessingDispositions.SingleAsync(TestContext.Current.CancellationToken);
             Assert.Equal("policy-lineage-unresolved", disposition.ReasonCode);
+            Assert.Empty(await verify.ProbeResultStatusTransitions.ToListAsync(TestContext.Current.CancellationToken));
         }
 
         await using var timed = await CreateFixtureAsync();
@@ -233,6 +288,9 @@ public sealed class ProbeResultStatusProcessorTests
         Assert.Contains(timedDispositions, row => row.ResultId == beyondLatenessResultId && row.ReasonCode == "beyond-approved-lateness");
         Assert.Contains(timedDispositions, row => row.ResultId == futureSkewEqualityResultId && row.Disposition == ProbeResultProcessingDispositionKind.StateDriving);
         Assert.Contains(timedDispositions, row => row.ResultId == futureSkewResultId && row.ReasonCode == "future-or-skew-suspect");
+        var timedTransitions = await timeVerify.ProbeResultStatusTransitions.ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Single(timedTransitions);
+        Assert.DoesNotContain(timedTransitions, row => row.ResultId == beyondLatenessResultId || row.ResultId == futureSkewResultId);
 
         await using var cursor = await CreateFixtureAsync();
         await AddLedgerAsync(cursor, cursor.Now, cursor.Now, 3, 0m);
@@ -242,7 +300,10 @@ public sealed class ProbeResultStatusProcessorTests
         await using (var db = new EePulseDbContext(cursor.Options))
             await new ProbeResultStatusProcessor(db, new FixedClock(cursor.Now)).ProcessNextAsync(cursor.ProbeId, TestContext.Current.CancellationToken);
         await using (var cursorVerify = new EePulseDbContext(cursor.Options))
+        {
             Assert.Contains(await cursorVerify.ProbeResultProcessingDispositions.ToListAsync(TestContext.Current.CancellationToken), row => row.ReasonCode == "late-order");
+            Assert.Single(await cursorVerify.ProbeResultStatusTransitions.ToListAsync(TestContext.Current.CancellationToken));
+        }
 
         await using var noBoundary = await CreateFixtureAsync(includeBoundary: false);
         await AddLedgerAsync(noBoundary, noBoundary.Now, noBoundary.Now, 3, 0m);
@@ -252,6 +313,7 @@ public sealed class ProbeResultStatusProcessorTests
         {
             Assert.Empty(await boundaryVerify.ProbeStatusProjections.ToListAsync(TestContext.Current.CancellationToken));
             Assert.Equal("policy-lineage-unresolved", (await boundaryVerify.ProbeResultProcessingDispositions.SingleAsync(TestContext.Current.CancellationToken)).ReasonCode);
+            Assert.Empty(await boundaryVerify.ProbeResultStatusTransitions.ToListAsync(TestContext.Current.CancellationToken));
         }
     }
 

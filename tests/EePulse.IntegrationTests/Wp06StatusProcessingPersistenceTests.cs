@@ -3,6 +3,8 @@ using EePulse.Domain.Inventory;
 using EePulse.Domain.Status;
 using EePulse.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Npgsql;
 
 namespace EePulse.IntegrationTests;
@@ -26,10 +28,15 @@ public sealed class Wp06StatusProcessingPersistenceTests
             AgentAcknowledgementStatus.Applied, seed.AcknowledgementReceivedAt);
         var disposition = new ProbeResultProcessingDisposition(seed.AgentId, seed.ResultId, seed.ProbeId,
             seed.EventAt, ProbeResultProcessingDispositionKind.HistoricalOther, "policy-lineage-unresolved", null, null, seed.Now);
+        var stateDrivingDisposition = new ProbeResultProcessingDisposition(seed.AgentId, seed.SecondResultId, seed.ProbeId,
+            seed.SecondEventAt, ProbeResultProcessingDispositionKind.StateDriving, "state-driving", policy.Id, policy.PolicyVersion, seed.Now);
+        var transition = new ProbeResultStatusTransition(seed.AgentId, seed.SecondResultId, seed.ProbeId,
+            ProbeStatus.Unknown, ProbeStatus.Up, "bootstrap-success", seed.SecondEventAt, seed.Now,
+            ProbeResultProcessingDispositionKind.StateDriving);
 
         await using (var write = new EePulseDbContext(options))
         {
-            write.AddRange(policy, projection, binding, boundary, disposition);
+            write.AddRange(policy, projection, binding, boundary, disposition, stateDrivingDisposition, transition);
             await write.SaveChangesAsync(ct);
         }
 
@@ -42,11 +49,13 @@ public sealed class Wp06StatusProcessingPersistenceTests
 
         await using (var constraints = new EePulseDbContext(options))
         {
+            AssertTransitionDispositionModel(constraints);
             await AssertProjectionConstraintsAsync(constraints, seed, ct);
             await AssertPolicyConstraintsAsync(constraints, seed.Now, ct);
             await AssertBindingConstraintsAsync(constraints, seed, policy.Id, ct);
             await AssertEffectiveBoundaryConstraintsAsync(constraints, seed, ct);
             await AssertDispositionConstraintsAsync(constraints, seed, policy.Id, ct);
+            await AssertTransitionConstraintsAsync(constraints, seed, ct);
         }
 
         await AssertDbContextRejectsAppendOnlyMutationsAsync(options, seed, policy.Id, ct);
@@ -57,16 +66,19 @@ public sealed class Wp06StatusProcessingPersistenceTests
             await Assert.ThrowsAsync<PostgresException>(() => directImmutable.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_policy_bindings SET agent_group_id = {Guid.NewGuid()} WHERE probe_id = {seed.ProbeId} AND configuration_version = {1L}", ct));
             await Assert.ThrowsAsync<PostgresException>(() => directImmutable.Database.ExecuteSqlInterpolatedAsync($"UPDATE agent_configuration_effective_boundaries SET source_acknowledgement_status = {"Rejected"} WHERE agent_id = {seed.AgentId} AND configuration_version = {1L}", ct));
             await Assert.ThrowsAsync<PostgresException>(() => directImmutable.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_result_processing_dispositions SET reason_code = {"tampered"} WHERE agent_id = {seed.AgentId} AND result_id = {seed.ResultId}", ct));
+            await Assert.ThrowsAsync<PostgresException>(() => directImmutable.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_result_status_transitions SET reason_code = {"tampered"} WHERE agent_id = {seed.AgentId} AND result_id = {seed.SecondResultId}", ct));
             await Assert.ThrowsAsync<PostgresException>(() => directImmutable.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_status_policy_snapshots WHERE id = {policy.Id}", ct));
             await Assert.ThrowsAsync<PostgresException>(() => directImmutable.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_status_policy_bindings WHERE probe_id = {seed.ProbeId} AND configuration_version = {1L}", ct));
             await Assert.ThrowsAsync<PostgresException>(() => directImmutable.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM agent_configuration_effective_boundaries WHERE agent_id = {seed.AgentId} AND configuration_version = {1L}", ct));
             await Assert.ThrowsAsync<PostgresException>(() => directImmutable.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_result_processing_dispositions WHERE agent_id = {seed.AgentId} AND result_id = {seed.ResultId}", ct));
+            await Assert.ThrowsAsync<PostgresException>(() => directImmutable.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_result_status_transitions WHERE agent_id = {seed.AgentId} AND result_id = {seed.SecondResultId}", ct));
         }
 
         await using (var indexContext = new EePulseDbContext(options))
         {
             var indexes = await indexContext.Database.SqlQueryRaw<string>("SELECT indexname AS \"Value\" FROM pg_indexes WHERE schemaname = 'public'").ToListAsync(ct);
             Assert.Contains("ix_probe_result_ledger_state_order", indexes);
+            Assert.Contains("ix_probe_result_status_transitions_probe_event", indexes);
         }
     }
 
@@ -111,6 +123,32 @@ public sealed class Wp06StatusProcessingPersistenceTests
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.ProbeId}, {seed.SecondEventAt}, {"StateDriving"}, {"state-driving"}, {seed.Now})", ct));
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, resolved_policy_snapshot_id, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.ProbeId}, {seed.SecondEventAt}, {"HistoricalOther"}, {"policy-lineage-unresolved"}, {policyId}, {seed.Now})", ct));
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, resolved_policy_snapshot_id, resolved_policy_version, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.ProbeId}, {seed.SecondEventAt}, {"StateDriving"}, {"state-driving"}, {policyId}, {2}, {seed.Now})", ct));
+    }
+
+    private static async Task AssertTransitionConstraintsAsync(EePulseDbContext db, Seed seed, CancellationToken ct)
+    {
+        await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_status_transitions (agent_id, result_id, probe_id, from_status, to_status, reason_code, event_at, received_at) VALUES ({seed.AgentId}, {Guid.NewGuid()}, {seed.ProbeId}, {"Invalid"}, {"Up"}, {"bootstrap-success"}, {seed.SecondEventAt}, {seed.Now})", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_status_transitions (agent_id, result_id, probe_id, from_status, to_status, reason_code, event_at, received_at) VALUES ({seed.AgentId}, {Guid.NewGuid()}, {seed.ProbeId}, {"Up"}, {"Up"}, {"bootstrap-success"}, {seed.SecondEventAt}, {seed.Now})", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_status_transitions (agent_id, result_id, probe_id, from_status, to_status, reason_code, event_at, received_at) VALUES ({seed.AgentId}, {Guid.NewGuid()}, {seed.ProbeId}, {"Up"}, {"Down"}, {""}, {seed.SecondEventAt}, {seed.Now})", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_status_transitions (agent_id, result_id, probe_id, from_status, to_status, reason_code, event_at, received_at) VALUES ({seed.AgentId}, {Guid.NewGuid()}, {seed.ProbeId}, {"Up"}, {"Down"}, {"unsupported-reason"}, {seed.SecondEventAt}, {seed.Now})", ct));
+        await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_status_transitions (agent_id, result_id, probe_id, from_status, to_status, reason_code, event_at, received_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.OtherProbeId}, {"Up"}, {"Down"}, {"failure-threshold-met"}, {seed.SecondEventAt}, {seed.Now})", ct));
+        var violation = await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_status_transitions (agent_id, result_id, probe_id, from_status, to_status, reason_code, event_at, received_at, processing_disposition) VALUES ({seed.AgentId}, {seed.ResultId}, {seed.ProbeId}, {"Unknown"}, {"Up"}, {"bootstrap-success"}, {seed.EventAt}, {seed.Now}, {"StateDriving"})", ct));
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, violation.SqlState);
+    }
+
+    private static void AssertTransitionDispositionModel(EePulseDbContext db)
+    {
+        var model = db.GetService<IDesignTimeModel>().Model;
+        var disposition = model.FindEntityType(typeof(ProbeResultProcessingDisposition))!;
+        Assert.Contains(disposition.GetKeys(), key => key.Properties.Select(property => property.Name)
+            .SequenceEqual([nameof(ProbeResultProcessingDisposition.AgentId), nameof(ProbeResultProcessingDisposition.ResultId), nameof(ProbeResultProcessingDisposition.Disposition)]));
+
+        var transition = model.FindEntityType(typeof(ProbeResultStatusTransition))!;
+        Assert.Contains(transition.GetCheckConstraints(), check => check.Name == "ck_probe_result_status_transitions_processing_disposition" && check.Sql == "processing_disposition = 'StateDriving'");
+        Assert.Contains(transition.GetForeignKeys(), foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual([nameof(ProbeResultStatusTransition.AgentId), nameof(ProbeResultStatusTransition.ResultId), nameof(ProbeResultStatusTransition.ProcessingDisposition)]) &&
+            foreignKey.PrincipalKey.Properties.Select(property => property.Name).SequenceEqual([nameof(ProbeResultProcessingDisposition.AgentId), nameof(ProbeResultProcessingDisposition.ResultId), nameof(ProbeResultProcessingDisposition.Disposition)]) &&
+            foreignKey.DeleteBehavior == DeleteBehavior.Restrict);
     }
 
     private static async Task<Seed> SeedAsync(DbContextOptions<EePulseDbContext> options, CancellationToken ct)
@@ -162,6 +200,8 @@ public sealed class Wp06StatusProcessingPersistenceTests
                 (db, token) => db.AgentConfigurationEffectiveBoundaries.SingleAsync(x => x.AgentId == seed.AgentId && x.ConfigurationVersion == 1, token), ct);
             await AssertDbContextRejectsMutationAsync(options, state,
                 (db, token) => db.ProbeResultProcessingDispositions.SingleAsync(x => x.AgentId == seed.AgentId && x.ResultId == seed.ResultId, token), ct);
+            await AssertDbContextRejectsMutationAsync(options, state,
+                (db, token) => db.ProbeResultStatusTransitions.SingleAsync(x => x.AgentId == seed.AgentId && x.ResultId == seed.SecondResultId, token), ct);
         }
     }
 
