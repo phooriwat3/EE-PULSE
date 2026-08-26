@@ -23,6 +23,7 @@ public enum AvailabilityIncidentStatus
 public enum IncidentLifecycleEventType
 {
     Opened,
+    Resolved,
 }
 
 public enum NotificationSuppressionEligibility
@@ -104,6 +105,8 @@ public sealed class ProbeStatusProjection
 public sealed class AvailabilityIncident
 {
     public const string AvailabilityDownRuleKey = "availability-down";
+    public const string SystemPolicyActor = "system-policy";
+    public const string ConfirmedRecoveryReason = "confirmed-recovery";
 
     private AvailabilityIncident() { }
 
@@ -128,12 +131,27 @@ public sealed class AvailabilityIncident
     public string? ResolvedBy { get; private set; }
     public string? ResolutionNote { get; private set; }
 
+    public void ResolveForConfirmedRecovery(DateTimeOffset resolvedAt)
+    {
+        if (Status is not (AvailabilityIncidentStatus.Open or AvailabilityIncidentStatus.Acknowledged))
+        {
+            throw new DomainValidationException(nameof(Status), "Only an active availability incident can be resolved.");
+        }
+
+        ResolvedAt = Guard.Utc(resolvedAt, nameof(resolvedAt));
+        if (ResolvedAt < OpenedAt) throw new DomainValidationException(nameof(resolvedAt), "Resolution cannot precede opening.");
+        Status = AvailabilityIncidentStatus.Resolved;
+        ResolvedBy = SystemPolicyActor;
+        ResolutionNote = ConfirmedRecoveryReason;
+    }
+
     private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
 }
 
 public sealed class IncidentLifecycleEvent
 {
     public const string OpenedLifecycleEventKey = "opened";
+    public const string ResolvedLifecycleEventKey = "resolved";
 
     private IncidentLifecycleEvent() { }
 
@@ -153,6 +171,38 @@ public sealed class IncidentLifecycleEvent
         PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
         LifecycleEventType = IncidentLifecycleEventType.Opened;
         LifecycleEventKey = OpenedLifecycleEventKey;
+        ProcessingDisposition = ProbeResultProcessingDispositionKind.StateDriving;
+        OccurredAt = Guard.Utc(occurredAt, nameof(occurredAt));
+    }
+
+    public static IncidentLifecycleEvent ForConfirmedRecovery(
+        Guid eventId,
+        Guid incidentId,
+        Guid probeId,
+        Guid sourceAgentId,
+        Guid sourceResultId,
+        ProbeStatus sourceToStatus,
+        Guid policySnapshotId,
+        int policyVersion,
+        DateTimeOffset occurredAt) =>
+        new(eventId, incidentId, probeId, sourceAgentId, sourceResultId, sourceToStatus, policySnapshotId, policyVersion, occurredAt, true);
+
+    private IncidentLifecycleEvent(Guid eventId, Guid incidentId, Guid probeId, Guid sourceAgentId, Guid sourceResultId,
+        ProbeStatus sourceToStatus, Guid policySnapshotId, int policyVersion, DateTimeOffset occurredAt, bool confirmedRecovery)
+    {
+        EventId = Required(eventId, nameof(eventId));
+        IncidentId = Required(incidentId, nameof(incidentId));
+        ProbeId = Required(probeId, nameof(probeId));
+        SourceAgentId = Required(sourceAgentId, nameof(sourceAgentId));
+        SourceResultId = Required(sourceResultId, nameof(sourceResultId));
+        if (!confirmedRecovery || sourceToStatus is not (ProbeStatus.Up or ProbeStatus.Degraded)) throw new DomainValidationException(nameof(sourceToStatus), "A confirmed recovery source transition must enter Up or Degraded from Recovering.");
+        SourceFromStatus = ProbeStatus.Recovering;
+        SourceToStatus = sourceToStatus;
+        SourceReasonCode = "recovery-threshold-met";
+        PolicySnapshotId = Required(policySnapshotId, nameof(policySnapshotId));
+        PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
+        LifecycleEventType = IncidentLifecycleEventType.Resolved;
+        LifecycleEventKey = ResolvedLifecycleEventKey;
         ProcessingDisposition = ProbeResultProcessingDispositionKind.StateDriving;
         OccurredAt = Guard.Utc(occurredAt, nameof(occurredAt));
     }
@@ -180,14 +230,14 @@ public sealed class NotificationSuppressionContext
     private NotificationSuppressionContext() { }
 
     public NotificationSuppressionContext(Guid eventId, Guid incidentId, string lifecycleEventKey, int policyVersion,
-        DateTimeOffset evaluatedAt)
+        DateTimeOffset evaluatedAt, string reasonCode = AvailabilityIncident.AvailabilityDownRuleKey)
     {
         EventId = Required(eventId, nameof(eventId));
         IncidentId = Required(incidentId, nameof(incidentId));
         LifecycleEventKey = Guard.Required(lifecycleEventKey, nameof(lifecycleEventKey), 128);
         PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
         Eligibility = NotificationSuppressionEligibility.Eligible;
-        ReasonCode = AvailabilityIncident.AvailabilityDownRuleKey;
+        ReasonCode = Guard.Required(reasonCode, nameof(reasonCode), 64);
         EvaluatedAt = Guard.Utc(evaluatedAt, nameof(evaluatedAt));
     }
 

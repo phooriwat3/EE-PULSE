@@ -178,10 +178,10 @@ internal sealed class IncidentLifecycleEventConfiguration : IEntityTypeConfigura
     {
         b.ToTable("incident_lifecycle_events", t =>
         {
-            t.HasCheckConstraint("ck_incident_lifecycle_events_type", "lifecycle_event_type = 'Opened'");
-            t.HasCheckConstraint("ck_incident_lifecycle_events_key", "lifecycle_event_key = 'opened'");
+            t.HasCheckConstraint("ck_incident_lifecycle_events_type", "lifecycle_event_type IN ('Opened', 'Resolved')");
+            t.HasCheckConstraint("ck_incident_lifecycle_events_key", "lifecycle_event_key IN ('opened', 'resolved')");
             t.HasCheckConstraint("ck_incident_lifecycle_events_disposition", "processing_disposition = 'StateDriving'");
-            t.HasCheckConstraint("ck_incident_lifecycle_events_opening_source", "source_from_status <> 'Down' AND source_to_status = 'Down' AND source_reason_code = 'failure-threshold-met'");
+            t.HasCheckConstraint("ck_incident_lifecycle_events_source", "(lifecycle_event_type = 'Opened' AND lifecycle_event_key = 'opened' AND source_from_status <> 'Down' AND source_to_status = 'Down' AND source_reason_code = 'failure-threshold-met') OR (lifecycle_event_type = 'Resolved' AND lifecycle_event_key = 'resolved' AND source_from_status = 'Recovering' AND source_to_status IN ('Up', 'Degraded') AND source_reason_code = 'recovery-threshold-met')");
         });
         b.HasKey(x => x.EventId);
         b.HasAlternateKey(x => new { x.IncidentId, x.LifecycleEventKey, x.PolicyVersion }).HasName("ak_incident_lifecycle_events_incident_key_policy");
@@ -215,7 +215,7 @@ internal sealed class NotificationSuppressionContextConfiguration : IEntityTypeC
         b.ToTable("notification_suppression_contexts", t =>
         {
             t.HasCheckConstraint("ck_notification_suppression_contexts_eligibility", "eligibility = 'Eligible'");
-            t.HasCheckConstraint("ck_notification_suppression_contexts_reason", "reason_code = 'availability-down'");
+            t.HasCheckConstraint("ck_notification_suppression_contexts_reason", "(lifecycle_event_key = 'opened' AND reason_code = 'availability-down') OR (lifecycle_event_key = 'resolved' AND reason_code = 'confirmed-recovery')");
         });
         b.HasKey(x => x.EventId);
         b.HasIndex(x => new { x.IncidentId, x.LifecycleEventKey, x.PolicyVersion }).IsUnique().HasDatabaseName("ux_notification_suppression_contexts_event_key");

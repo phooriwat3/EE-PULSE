@@ -130,6 +130,32 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
                     db.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = incident.Id;
                 }
             }
+            else if (IsConfirmedRecovery(transition))
+            {
+                var activeIncident = await db.AvailabilityIncidents.SingleOrDefaultAsync(incident =>
+                    incident.ProbeId == ledger.ProbeId &&
+                    (incident.Status == AvailabilityIncidentStatus.Open || incident.Status == AvailabilityIncidentStatus.Acknowledged),
+                    cancellationToken);
+                var openIncidentId = projection!.OpenIncidentId;
+
+                if (openIncidentId.HasValue && (activeIncident is null || activeIncident.Id != openIncidentId.Value))
+                {
+                    throw new InvalidOperationException("The Probe status projection references an inconsistent active availability incident.");
+                }
+
+                if (activeIncident is not null)
+                {
+                    activeIncident.ResolveForConfirmedRecovery(ledger.EndedAt);
+                    var lifecycleEvent = IncidentLifecycleEvent.ForConfirmedRecovery(Guid.NewGuid(), activeIncident.Id,
+                        ledger.ProbeId, ledger.AgentId, ledger.ResultId, transition.To, snapshot!.Id, snapshot.PolicyVersion, ledger.EndedAt);
+                    var suppressionContext = new NotificationSuppressionContext(lifecycleEvent.EventId, activeIncident.Id,
+                        lifecycleEvent.LifecycleEventKey, lifecycleEvent.PolicyVersion, ledger.ReceivedAt,
+                        AvailabilityIncident.ConfirmedRecoveryReason);
+
+                    db.AddRange(lifecycleEvent, suppressionContext);
+                    db.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = null;
+                }
+            }
         }
         await db.SaveChangesAsync(cancellationToken);
 
@@ -196,6 +222,11 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
         transition.From != ProbeStatus.Down &&
         transition.To == ProbeStatus.Down &&
         transition.Reason == ProbeStatusTransitionReason.FailureThresholdMet;
+
+    private static bool IsConfirmedRecovery(ProbeStatusTransition transition) =>
+        transition.From == ProbeStatus.Recovering &&
+        transition.To is ProbeStatus.Up or ProbeStatus.Degraded &&
+        transition.Reason == ProbeStatusTransitionReason.RecoveryThresholdMet;
 
     private sealed record DispositionDecision(ProbeResultProcessingDispositionKind Kind, string ReasonCode);
 }

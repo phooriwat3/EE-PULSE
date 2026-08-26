@@ -12,6 +12,317 @@ namespace EePulse.IntegrationTests;
 
 public sealed class ProbeResultStatusProcessorTests
 {
+    public static TheoryData<bool, decimal, ProbeStatus> ConfirmedRecoveryVariants
+    {
+        get
+        {
+            var variants = new TheoryData<bool, decimal, ProbeStatus>();
+            variants.Add(true, 1m, ProbeStatus.Up);
+            variants.Add(false, 500m, ProbeStatus.Degraded);
+            return variants;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(ConfirmedRecoveryVariants))]
+    public async Task St04ConfirmedRecoveryResolvesOpenOrAcknowledgedIncidentWithTheExpectedQuality(
+        bool acknowledgeIncident,
+        decimal averageRtt,
+        ProbeStatus expectedStatus)
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await AddLedgerAsync(fixture, fixture.Now, fixture.Now, 3, 0m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(1), fixture.Now.AddSeconds(1), 0, 1m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(2), fixture.Now.AddSeconds(2), 0, 1m);
+        await using (var opening = new EePulseDbContext(fixture.Options))
+        {
+            var processor = new ProbeResultStatusProcessor(opening, new FixedClock(fixture.Now));
+            for (var index = 0; index < 3; index++) await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+        }
+        if (acknowledgeIncident)
+        {
+            await using var acknowledge = new EePulseDbContext(fixture.Options);
+            await acknowledge.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Acknowledged"}, acknowledged_at = {fixture.Now.AddSeconds(2)}, acknowledged_by = {"operator"}, acknowledgement_comment = {"investigating"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
+        }
+
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(3), fixture.Now.AddSeconds(3), 3, 0m, averageRtt: averageRtt);
+        var resolvedResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(4), fixture.Now.AddSeconds(4), 3, 0m, averageRtt: averageRtt);
+        await using (var recovery = new EePulseDbContext(fixture.Options))
+        {
+            var processor = new ProbeResultStatusProcessor(recovery, new FixedClock(fixture.Now));
+            await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+            await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+        }
+
+        await using var verify = new EePulseDbContext(fixture.Options);
+        var transition = await verify.ProbeResultStatusTransitions.SingleAsync(row => row.AgentId == fixture.AgentId && row.ResultId == resolvedResultId, TestContext.Current.CancellationToken);
+        var disposition = await verify.ProbeResultProcessingDispositions.SingleAsync(row => row.AgentId == fixture.AgentId && row.ResultId == resolvedResultId, TestContext.Current.CancellationToken);
+        var incident = await verify.AvailabilityIncidents.SingleAsync(TestContext.Current.CancellationToken);
+        var lifecycleEvent = await verify.IncidentLifecycleEvents.SingleAsync(row => row.LifecycleEventType == IncidentLifecycleEventType.Resolved, TestContext.Current.CancellationToken);
+        var context = await verify.NotificationSuppressionContexts.SingleAsync(row => row.EventId == lifecycleEvent.EventId, TestContext.Current.CancellationToken);
+        var projection = await verify.ProbeStatusProjections.SingleAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal((ProbeStatus.Recovering, expectedStatus, "recovery-threshold-met"), (transition.FromStatus, transition.ToStatus, transition.ReasonCode));
+        Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, disposition.Disposition);
+        Assert.Equal(AvailabilityIncidentStatus.Resolved, incident.Status);
+        Assert.Equal(fixture.Now.AddSeconds(4), incident.ResolvedAt);
+        Assert.Equal(AvailabilityIncident.SystemPolicyActor, incident.ResolvedBy);
+        Assert.Equal(AvailabilityIncident.ConfirmedRecoveryReason, incident.ResolutionNote);
+        Assert.Null(projection.OpenIncidentId);
+        Assert.Equal((incident.Id, fixture.ProbeId, fixture.AgentId, resolvedResultId, ProbeStatus.Recovering, expectedStatus, "recovery-threshold-met"),
+            (lifecycleEvent.IncidentId, lifecycleEvent.ProbeId, lifecycleEvent.SourceAgentId, lifecycleEvent.SourceResultId, lifecycleEvent.SourceFromStatus, lifecycleEvent.SourceToStatus, lifecycleEvent.SourceReasonCode));
+        Assert.Equal((disposition.ResolvedPolicySnapshotId, disposition.ResolvedPolicyVersion), (lifecycleEvent.PolicySnapshotId, lifecycleEvent.PolicyVersion));
+        Assert.Equal((IncidentLifecycleEventType.Resolved, IncidentLifecycleEvent.ResolvedLifecycleEventKey), (lifecycleEvent.LifecycleEventType, lifecycleEvent.LifecycleEventKey));
+        Assert.Equal((NotificationSuppressionEligibility.Eligible, AvailabilityIncident.ConfirmedRecoveryReason), (context.Eligibility, context.ReasonCode));
+        Assert.Equal(lifecycleEvent.EventId, context.EventId);
+    }
+
+    [Fact]
+    public async Task St04ConfirmedRecoveryAtomicallyResolvesTheActiveAvailabilityIncident()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await AddLedgerAsync(fixture, fixture.Now, fixture.Now, 3, 0m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(1), fixture.Now.AddSeconds(1), 0, 1m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(2), fixture.Now.AddSeconds(2), 0, 1m);
+        var recoveringResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(3), fixture.Now.AddSeconds(3), 3, 0m);
+        var resolvedResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(4), fixture.Now.AddSeconds(4), 3, 0m);
+
+        await using (var processing = new EePulseDbContext(fixture.Options))
+        {
+            var processor = new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now));
+            for (var index = 0; index < 4; index++) await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+        }
+
+        await using (var recovering = new EePulseDbContext(fixture.Options))
+        {
+            var recoveringProjection = await recovering.ProbeStatusProjections.SingleAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ProbeStatus.Recovering, recoveringProjection.UnderlyingStatus);
+            Assert.NotNull(recoveringProjection.OpenIncidentId);
+            Assert.Single(await recovering.AvailabilityIncidents.Where(incident => incident.Status == AvailabilityIncidentStatus.Open).ToListAsync(TestContext.Current.CancellationToken));
+            Assert.Single(await recovering.IncidentLifecycleEvents.ToListAsync(TestContext.Current.CancellationToken));
+        }
+
+        await using (var processing = new EePulseDbContext(fixture.Options))
+            Assert.Equal(resolvedResultId, (await new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken)).ResultId);
+
+        await using var verify = new EePulseDbContext(fixture.Options);
+        var transition = await verify.ProbeResultStatusTransitions.SingleAsync(row => row.AgentId == fixture.AgentId && row.ResultId == resolvedResultId, TestContext.Current.CancellationToken);
+        var disposition = await verify.ProbeResultProcessingDispositions.SingleAsync(row => row.AgentId == fixture.AgentId && row.ResultId == resolvedResultId, TestContext.Current.CancellationToken);
+        var incident = await verify.AvailabilityIncidents.SingleAsync(TestContext.Current.CancellationToken);
+        var lifecycleEvent = await verify.IncidentLifecycleEvents.SingleAsync(row => row.LifecycleEventType == IncidentLifecycleEventType.Resolved, TestContext.Current.CancellationToken);
+        var context = await verify.NotificationSuppressionContexts.SingleAsync(row => row.EventId == lifecycleEvent.EventId, TestContext.Current.CancellationToken);
+        var projection = await verify.ProbeStatusProjections.SingleAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal((ProbeStatus.Recovering, ProbeStatus.Up, "recovery-threshold-met"), (transition.FromStatus, transition.ToStatus, transition.ReasonCode));
+        Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, disposition.Disposition);
+        Assert.Equal(AvailabilityIncidentStatus.Resolved, incident.Status);
+        Assert.Equal((fixture.Now.AddSeconds(4), AvailabilityIncident.SystemPolicyActor, AvailabilityIncident.ConfirmedRecoveryReason), (incident.ResolvedAt, incident.ResolvedBy, incident.ResolutionNote));
+        Assert.Null(projection.OpenIncidentId);
+        Assert.Equal((incident.Id, fixture.AgentId, resolvedResultId, ProbeStatus.Recovering, ProbeStatus.Up, "recovery-threshold-met"),
+            (lifecycleEvent.IncidentId, lifecycleEvent.SourceAgentId, lifecycleEvent.SourceResultId, lifecycleEvent.SourceFromStatus, lifecycleEvent.SourceToStatus, lifecycleEvent.SourceReasonCode));
+        Assert.Equal((disposition.ResolvedPolicySnapshotId, disposition.ResolvedPolicyVersion), (lifecycleEvent.PolicySnapshotId, lifecycleEvent.PolicyVersion));
+        Assert.Equal(IncidentLifecycleEventType.Resolved, lifecycleEvent.LifecycleEventType);
+        Assert.Equal(IncidentLifecycleEvent.ResolvedLifecycleEventKey, lifecycleEvent.LifecycleEventKey);
+        Assert.Equal((NotificationSuppressionEligibility.Eligible, AvailabilityIncident.ConfirmedRecoveryReason), (context.Eligibility, context.ReasonCode));
+        Assert.Equal(recoveringResultId, (await verify.ProbeResultStatusTransitions.SingleAsync(row => row.AgentId == fixture.AgentId && row.ResultId == recoveringResultId, TestContext.Current.CancellationToken)).ResultId);
+    }
+
+    [Fact]
+    public async Task St04ConfirmedRecoveryWithoutAnActiveIncidentCommitsOnlyNormalResultProcessing()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using (var seed = new EePulseDbContext(fixture.Options))
+        {
+            seed.Add(new ProbeStatusProjection(fixture.ProbeId, ProbeStatus.Down, 2, 0, fixture.Now,
+                fixture.Now, fixture.AgentId, Guid.NewGuid()));
+            await seed.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(1), fixture.Now.AddSeconds(1), 3, 0m);
+        var resolvedResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(2), fixture.Now.AddSeconds(2), 3, 0m);
+
+        await using (var processing = new EePulseDbContext(fixture.Options))
+        {
+            var processor = new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now));
+            await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+            await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+        }
+
+        await using var verify = new EePulseDbContext(fixture.Options);
+        var projection = await verify.ProbeStatusProjections.SingleAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(ProbeStatus.Up, projection.UnderlyingStatus);
+        Assert.Null(projection.OpenIncidentId);
+        Assert.NotNull(await verify.ProbeResultProcessingDispositions.SingleOrDefaultAsync(row => row.AgentId == fixture.AgentId && row.ResultId == resolvedResultId, TestContext.Current.CancellationToken));
+        Assert.NotNull(await verify.ProbeResultStatusTransitions.SingleOrDefaultAsync(row => row.AgentId == fixture.AgentId && row.ResultId == resolvedResultId && row.ReasonCode == "recovery-threshold-met", TestContext.Current.CancellationToken));
+        Assert.Empty(await verify.AvailabilityIncidents.ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await verify.IncidentLifecycleEvents.ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await verify.NotificationSuppressionContexts.ToListAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task St04ConfirmedRecoveryWithAnInconsistentPointerRollsBackEveryRecoveryMutation()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await AddLedgerAsync(fixture, fixture.Now, fixture.Now, 3, 0m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(1), fixture.Now.AddSeconds(1), 0, 1m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(2), fixture.Now.AddSeconds(2), 0, 1m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(3), fixture.Now.AddSeconds(3), 3, 0m);
+        await using (var processing = new EePulseDbContext(fixture.Options))
+        {
+            var processor = new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now));
+            for (var index = 0; index < 4; index++) await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+        }
+
+        var mismatchedIncidentId = Guid.NewGuid();
+        await using (var corrupt = new EePulseDbContext(fixture.Options))
+        {
+            await corrupt.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({mismatchedIncidentId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"system-policy"}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
+            var projection = await corrupt.ProbeStatusProjections.SingleAsync(row => row.ProbeId == fixture.ProbeId, TestContext.Current.CancellationToken);
+            corrupt.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = mismatchedIncidentId;
+            await corrupt.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var recoveryResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(4), fixture.Now.AddSeconds(4), 3, 0m);
+        ProbeStatusProjection baselineProjection;
+        (Guid AgentId, Guid ResultId)[] baselineDispositions;
+        (Guid AgentId, Guid ResultId, ProbeStatus FromStatus, ProbeStatus ToStatus, string ReasonCode)[] baselineTransitions;
+        (Guid Id, AvailabilityIncidentStatus Status, DateTimeOffset? ResolvedAt, string? ResolvedBy, string? ResolutionNote)[] baselineIncidents;
+        Guid[] baselineEventIds;
+        Guid[] baselineContextIds;
+        await using (var baseline = new EePulseDbContext(fixture.Options))
+        {
+            baselineProjection = await baseline.ProbeStatusProjections.AsNoTracking().SingleAsync(row => row.ProbeId == fixture.ProbeId, TestContext.Current.CancellationToken);
+            baselineDispositions = (await baseline.ProbeResultProcessingDispositions.AsNoTracking().OrderBy(row => row.AgentId).ThenBy(row => row.ResultId).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.AgentId, row.ResultId)).ToArray();
+            baselineTransitions = (await baseline.ProbeResultStatusTransitions.AsNoTracking().OrderBy(row => row.AgentId).ThenBy(row => row.ResultId).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.AgentId, row.ResultId, row.FromStatus, row.ToStatus, row.ReasonCode)).ToArray();
+            baselineIncidents = (await baseline.AvailabilityIncidents.AsNoTracking().OrderBy(row => row.Id).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.Id, row.Status, row.ResolvedAt, row.ResolvedBy, row.ResolutionNote)).ToArray();
+            baselineEventIds = await baseline.IncidentLifecycleEvents.AsNoTracking().OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken);
+            baselineContextIds = await baseline.NotificationSuppressionContexts.AsNoTracking().OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using (var processing = new EePulseDbContext(fixture.Options))
+            await Assert.ThrowsAsync<InvalidOperationException>(() => new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken));
+
+        await using var verify = new EePulseDbContext(fixture.Options);
+        var projectionAfterFailure = await verify.ProbeStatusProjections.SingleAsync(row => row.ProbeId == fixture.ProbeId, TestContext.Current.CancellationToken);
+        Assert.Equal(baselineProjection.UnderlyingStatus, projectionAfterFailure.UnderlyingStatus);
+        Assert.Equal(baselineProjection.ConsecutiveFailureCount, projectionAfterFailure.ConsecutiveFailureCount);
+        Assert.Equal(baselineProjection.ConsecutiveSuccessCount, projectionAfterFailure.ConsecutiveSuccessCount);
+        Assert.Equal(baselineProjection.LastFreshEventAt, projectionAfterFailure.LastFreshEventAt);
+        Assert.Equal(baselineProjection.WatermarkEventAt, projectionAfterFailure.WatermarkEventAt);
+        Assert.Equal(baselineProjection.WatermarkAgentId, projectionAfterFailure.WatermarkAgentId);
+        Assert.Equal(baselineProjection.WatermarkResultId, projectionAfterFailure.WatermarkResultId);
+        Assert.Equal(baselineProjection.StateVersion, projectionAfterFailure.StateVersion);
+        Assert.Equal(baselineProjection.OpenIncidentId, projectionAfterFailure.OpenIncidentId);
+        Assert.Equal(baselineDispositions, (await verify.ProbeResultProcessingDispositions.OrderBy(row => row.AgentId).ThenBy(row => row.ResultId).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.AgentId, row.ResultId)).ToArray());
+        Assert.Equal(baselineTransitions, (await verify.ProbeResultStatusTransitions.OrderBy(row => row.AgentId).ThenBy(row => row.ResultId).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.AgentId, row.ResultId, row.FromStatus, row.ToStatus, row.ReasonCode)).ToArray());
+        Assert.Equal(baselineIncidents, (await verify.AvailabilityIncidents.OrderBy(row => row.Id).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.Id, row.Status, row.ResolvedAt, row.ResolvedBy, row.ResolutionNote)).ToArray());
+        Assert.Equal(baselineEventIds, await verify.IncidentLifecycleEvents.OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(baselineContextIds, await verify.NotificationSuppressionContexts.OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken));
+        Assert.Null(await verify.ProbeResultProcessingDispositions.SingleOrDefaultAsync(row => row.AgentId == fixture.AgentId && row.ResultId == recoveryResultId, TestContext.Current.CancellationToken));
+        Assert.Null(await verify.ProbeResultStatusTransitions.SingleOrDefaultAsync(row => row.AgentId == fixture.AgentId && row.ResultId == recoveryResultId, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task St04ConfirmedRecoveryWithADanglingInactivePointerRollsBackEveryRecoveryMutation()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var inactiveIncidentId = Guid.NewGuid();
+        await using (var seed = new EePulseDbContext(fixture.Options))
+        {
+            await seed.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({inactiveIncidentId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"system-policy"}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
+            seed.Add(new ProbeStatusProjection(fixture.ProbeId, ProbeStatus.Recovering, 0, 1, fixture.Now,
+                fixture.Now, fixture.AgentId, Guid.NewGuid(), inactiveIncidentId));
+            await seed.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var recoveryResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(1), fixture.Now.AddSeconds(1), 3, 0m);
+        ProbeStatusProjection baselineProjection;
+        (Guid AgentId, Guid ResultId)[] baselineDispositions;
+        (Guid AgentId, Guid ResultId, ProbeStatus FromStatus, ProbeStatus ToStatus, string ReasonCode)[] baselineTransitions;
+        (Guid Id, AvailabilityIncidentStatus Status, DateTimeOffset? ResolvedAt, string? ResolvedBy, string? ResolutionNote)[] baselineIncidents;
+        Guid[] baselineEventIds;
+        Guid[] baselineContextIds;
+        await using (var baseline = new EePulseDbContext(fixture.Options))
+        {
+            baselineProjection = await baseline.ProbeStatusProjections.AsNoTracking().SingleAsync(row => row.ProbeId == fixture.ProbeId, TestContext.Current.CancellationToken);
+            baselineDispositions = (await baseline.ProbeResultProcessingDispositions.AsNoTracking().OrderBy(row => row.AgentId).ThenBy(row => row.ResultId).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.AgentId, row.ResultId)).ToArray();
+            baselineTransitions = (await baseline.ProbeResultStatusTransitions.AsNoTracking().OrderBy(row => row.AgentId).ThenBy(row => row.ResultId).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.AgentId, row.ResultId, row.FromStatus, row.ToStatus, row.ReasonCode)).ToArray();
+            baselineIncidents = (await baseline.AvailabilityIncidents.AsNoTracking().OrderBy(row => row.Id).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.Id, row.Status, row.ResolvedAt, row.ResolvedBy, row.ResolutionNote)).ToArray();
+            baselineEventIds = await baseline.IncidentLifecycleEvents.AsNoTracking().OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken);
+            baselineContextIds = await baseline.NotificationSuppressionContexts.AsNoTracking().OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using (var processing = new EePulseDbContext(fixture.Options))
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken));
+            Assert.Contains("inconsistent active availability incident", exception.Message, StringComparison.Ordinal);
+        }
+
+        await using var verify = new EePulseDbContext(fixture.Options);
+        var projectionAfterFailure = await verify.ProbeStatusProjections.SingleAsync(row => row.ProbeId == fixture.ProbeId, TestContext.Current.CancellationToken);
+        Assert.Equal(baselineProjection.UnderlyingStatus, projectionAfterFailure.UnderlyingStatus);
+        Assert.Equal(baselineProjection.ConsecutiveFailureCount, projectionAfterFailure.ConsecutiveFailureCount);
+        Assert.Equal(baselineProjection.ConsecutiveSuccessCount, projectionAfterFailure.ConsecutiveSuccessCount);
+        Assert.Equal(baselineProjection.LastFreshEventAt, projectionAfterFailure.LastFreshEventAt);
+        Assert.Equal(baselineProjection.WatermarkEventAt, projectionAfterFailure.WatermarkEventAt);
+        Assert.Equal(baselineProjection.WatermarkAgentId, projectionAfterFailure.WatermarkAgentId);
+        Assert.Equal(baselineProjection.WatermarkResultId, projectionAfterFailure.WatermarkResultId);
+        Assert.Equal(baselineProjection.StateVersion, projectionAfterFailure.StateVersion);
+        Assert.Equal(baselineProjection.OpenIncidentId, projectionAfterFailure.OpenIncidentId);
+        Assert.Equal(baselineDispositions, (await verify.ProbeResultProcessingDispositions.OrderBy(row => row.AgentId).ThenBy(row => row.ResultId).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.AgentId, row.ResultId)).ToArray());
+        Assert.Equal(baselineTransitions, (await verify.ProbeResultStatusTransitions.OrderBy(row => row.AgentId).ThenBy(row => row.ResultId).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.AgentId, row.ResultId, row.FromStatus, row.ToStatus, row.ReasonCode)).ToArray());
+        Assert.Equal(baselineIncidents, (await verify.AvailabilityIncidents.OrderBy(row => row.Id).ToListAsync(TestContext.Current.CancellationToken)).Select(row => (row.Id, row.Status, row.ResolvedAt, row.ResolvedBy, row.ResolutionNote)).ToArray());
+        Assert.Equal(baselineEventIds, await verify.IncidentLifecycleEvents.OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(baselineContextIds, await verify.NotificationSuppressionContexts.OrderBy(row => row.EventId).Select(row => row.EventId).ToArrayAsync(TestContext.Current.CancellationToken));
+        Assert.Null(await verify.ProbeResultProcessingDispositions.SingleOrDefaultAsync(row => row.AgentId == fixture.AgentId && row.ResultId == recoveryResultId, TestContext.Current.CancellationToken));
+        Assert.Null(await verify.ProbeResultStatusTransitions.SingleOrDefaultAsync(row => row.AgentId == fixture.AgentId && row.ResultId == recoveryResultId, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task St04PreCommitFailureRollsBackResolutionThenRetryAndReplayRemainIdempotent()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await AddLedgerAsync(fixture, fixture.Now, fixture.Now, 3, 0m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(1), fixture.Now.AddSeconds(1), 0, 1m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(2), fixture.Now.AddSeconds(2), 0, 1m);
+        await AddLedgerAsync(fixture, fixture.Now.AddSeconds(3), fixture.Now.AddSeconds(3), 3, 0m);
+        await using (var processing = new EePulseDbContext(fixture.Options))
+        {
+            var processor = new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now));
+            for (var index = 0; index < 4; index++) await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+        }
+
+        var recoveryResultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(4), fixture.Now.AddSeconds(4), 3, 0m);
+        await using (var baseline = new EePulseDbContext(fixture.Options))
+        {
+            var projection = await baseline.ProbeStatusProjections.AsNoTracking().SingleAsync(TestContext.Current.CancellationToken);
+            var incident = await baseline.AvailabilityIncidents.AsNoTracking().SingleAsync(TestContext.Current.CancellationToken);
+            var failingOptions = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(fixture.ConnectionString).AddInterceptors(new ThrowBeforeSaveInterceptor()).Options;
+            await using (var failing = new EePulseDbContext(failingOptions))
+                await Assert.ThrowsAsync<InvalidOperationException>(() => new ProbeResultStatusProcessor(failing, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken));
+
+            await using var afterFailure = new EePulseDbContext(fixture.Options);
+            var projectionAfterFailure = await afterFailure.ProbeStatusProjections.SingleAsync(TestContext.Current.CancellationToken);
+            var incidentAfterFailure = await afterFailure.AvailabilityIncidents.SingleAsync(TestContext.Current.CancellationToken);
+            Assert.Equal((projection.UnderlyingStatus, projection.ConsecutiveFailureCount, projection.ConsecutiveSuccessCount, projection.LastFreshEventAt, projection.WatermarkEventAt, projection.WatermarkAgentId, projection.WatermarkResultId, projection.StateVersion, projection.OpenIncidentId),
+                (projectionAfterFailure.UnderlyingStatus, projectionAfterFailure.ConsecutiveFailureCount, projectionAfterFailure.ConsecutiveSuccessCount, projectionAfterFailure.LastFreshEventAt, projectionAfterFailure.WatermarkEventAt, projectionAfterFailure.WatermarkAgentId, projectionAfterFailure.WatermarkResultId, projectionAfterFailure.StateVersion, projectionAfterFailure.OpenIncidentId));
+            Assert.Equal((incident.Status, incident.ResolvedAt, incident.ResolvedBy, incident.ResolutionNote), (incidentAfterFailure.Status, incidentAfterFailure.ResolvedAt, incidentAfterFailure.ResolvedBy, incidentAfterFailure.ResolutionNote));
+            Assert.Null(await afterFailure.ProbeResultProcessingDispositions.SingleOrDefaultAsync(row => row.AgentId == fixture.AgentId && row.ResultId == recoveryResultId, TestContext.Current.CancellationToken));
+            Assert.Null(await afterFailure.ProbeResultStatusTransitions.SingleOrDefaultAsync(row => row.AgentId == fixture.AgentId && row.ResultId == recoveryResultId, TestContext.Current.CancellationToken));
+            Assert.Single(await afterFailure.IncidentLifecycleEvents.ToListAsync(TestContext.Current.CancellationToken));
+            Assert.Single(await afterFailure.NotificationSuppressionContexts.ToListAsync(TestContext.Current.CancellationToken));
+        }
+
+        await using (var retry = new EePulseDbContext(fixture.Options))
+            Assert.Equal(recoveryResultId, (await new ProbeResultStatusProcessor(retry, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken)).ResultId);
+        await using (var replay = new EePulseDbContext(fixture.Options))
+            Assert.Equal(ProbeResultStatusProcessorOutcomeKind.NoPending, (await new ProbeResultStatusProcessor(replay, new FixedClock(fixture.Now)).ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken)).Kind);
+
+        await using var verify = new EePulseDbContext(fixture.Options);
+        Assert.Equal(AvailabilityIncidentStatus.Resolved, (await verify.AvailabilityIncidents.SingleAsync(TestContext.Current.CancellationToken)).Status);
+        Assert.Single(await verify.IncidentLifecycleEvents.Where(row => row.LifecycleEventType == IncidentLifecycleEventType.Resolved).ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Single(await verify.NotificationSuppressionContexts.Where(row => row.LifecycleEventKey == IncidentLifecycleEvent.ResolvedLifecycleEventKey).ToListAsync(TestContext.Current.CancellationToken));
+    }
+
     [Fact]
     public async Task St03OpeningAtomicallyPersistsOneCompleteAvailabilityIncidentSet()
     {
