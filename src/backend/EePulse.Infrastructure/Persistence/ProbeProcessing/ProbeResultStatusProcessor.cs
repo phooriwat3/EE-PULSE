@@ -30,9 +30,25 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
         await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
         await ProbeTransactionLock.AcquireAsync(db, probeId, cancellationToken);
 
+        var outcome = await ProcessNextInTransactionAsync(probeId, null, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return outcome ?? new(ProbeResultStatusProcessorOutcomeKind.NoPending);
+    }
+
+    // The freshness-expiry worker shares this transaction-local path so its cutoff is
+    // evaluated after every result that was already received at that cutoff.
+    internal async Task<ProbeResultStatusProcessorOutcome?> ProcessNextInTransactionAsync(
+        Guid probeId,
+        DateTimeOffset? receivedAtCutoff,
+        CancellationToken cancellationToken)
+    {
+        if (db.Database.CurrentTransaction is null)
+            throw new InvalidOperationException("An active EePulseDbContext database transaction is required to process a Probe result.");
+
         var ledger = await db.ProbeResultLedgerEntries
             .Where(row => row.ProbeId == probeId && !db.ProbeResultProcessingDispositions
-                .Any(disposition => disposition.AgentId == row.AgentId && disposition.ResultId == row.ResultId))
+                .Any(disposition => disposition.AgentId == row.AgentId && disposition.ResultId == row.ResultId) &&
+                (!receivedAtCutoff.HasValue || row.ReceivedAt <= receivedAtCutoff.Value))
             .OrderBy(row => row.EndedAt)
             .ThenBy(row => row.AgentId)
             .ThenBy(row => row.ResultId)
@@ -40,8 +56,7 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
 
         if (ledger is null)
         {
-            await transaction.CommitAsync(cancellationToken);
-            return new(ProbeResultStatusProcessorOutcomeKind.NoPending);
+            return null;
         }
 
         var projection = await db.ProbeStatusProjections
@@ -227,7 +242,6 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
             await db.SaveChangesAsync(cancellationToken);
         }
 
-        await transaction.CommitAsync(cancellationToken);
         return new(ProbeResultStatusProcessorOutcomeKind.Processed, ledger.AgentId, ledger.ResultId, disposition.Kind);
     }
 

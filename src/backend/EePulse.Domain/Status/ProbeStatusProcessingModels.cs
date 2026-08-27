@@ -18,6 +18,12 @@ public enum ProbeFreshnessExpiryCauseType
     ResultFreshnessExpiry,
 }
 
+public enum ProbeFreshnessExpiryCauseDispositionOutcome
+{
+    Applied,
+    NoOp,
+}
+
 public enum AvailabilityIncidentStatus
 {
     Open,
@@ -56,6 +62,7 @@ public sealed class ProbeStatusProjection
     {
         ProbeId = Required(probeId, nameof(probeId));
         UnderlyingStatus = underlyingStatus;
+        VisibleStatus = underlyingStatus;
         ConsecutiveFailureCount = consecutiveFailureCount;
         ConsecutiveSuccessCount = consecutiveSuccessCount;
         LastFreshEventAt = OptionalUtc(lastFreshEventAt, nameof(lastFreshEventAt));
@@ -69,6 +76,7 @@ public sealed class ProbeStatusProjection
 
     public Guid ProbeId { get; private set; }
     public ProbeStatus UnderlyingStatus { get; private set; }
+    public ProbeStatus VisibleStatus { get; private set; }
     public int ConsecutiveFailureCount { get; private set; }
     public int ConsecutiveSuccessCount { get; private set; }
     public DateTimeOffset? LastFreshEventAt { get; private set; }
@@ -83,6 +91,7 @@ public sealed class ProbeStatusProjection
         ArgumentNullException.ThrowIfNull(state);
 
         UnderlyingStatus = state.Status;
+        VisibleStatus = state.Status;
         ConsecutiveFailureCount = state.ConsecutiveFailureCount;
         ConsecutiveSuccessCount = state.ConsecutiveSuccessCount;
         LastFreshEventAt = Guard.Utc(eventAt, nameof(eventAt));
@@ -92,9 +101,12 @@ public sealed class ProbeStatusProjection
         ValidateStructure();
     }
 
+    public void ExpireResultFreshness() => VisibleStatus = ProbeStatus.Unknown;
+
     private void ValidateStructure()
     {
         if (!Enum.IsDefined(UnderlyingStatus)) throw new DomainValidationException(nameof(UnderlyingStatus), "Probe status is invalid.");
+        if (!Enum.IsDefined(VisibleStatus)) throw new DomainValidationException(nameof(VisibleStatus), "Probe status is invalid.");
         if (ConsecutiveFailureCount < 0 || ConsecutiveSuccessCount < 0) throw new DomainValidationException(nameof(ConsecutiveFailureCount), "Status counters cannot be negative.");
         if (ConsecutiveFailureCount > 0 && ConsecutiveSuccessCount > 0) throw new DomainValidationException(nameof(ConsecutiveFailureCount), "Status counters cannot both be positive.");
         var watermarkValueCount = new[] { WatermarkEventAt.HasValue, WatermarkAgentId.HasValue, WatermarkResultId.HasValue }.Count(value => value);
@@ -508,6 +520,102 @@ public sealed class ProbeFreshnessExpiryCause
     public int FreshnessGraceSeconds { get; private set; }
     public DateTimeOffset DueAt { get; private set; }
     public DateTimeOffset RequestedAt { get; private set; }
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+}
+
+public sealed class ProbeFreshnessExpiryCauseDisposition
+{
+    public const string ResultFreshnessExpiredReasonCode = "result-freshness-expired";
+    public const string ProjectionMissingReasonCode = "projection-missing";
+    public const string FreshnessSourceSupersededReasonCode = "freshness-source-superseded";
+    public const string VisibleAlreadyUnknownReasonCode = "visible-already-unknown";
+
+    private ProbeFreshnessExpiryCauseDisposition() { }
+
+    private ProbeFreshnessExpiryCauseDisposition(
+        Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion,
+        ProbeFreshnessExpiryCauseDispositionOutcome outcome, string reasonCode,
+        DateTimeOffset expiryCutoffReceivedAt, DateTimeOffset? appliedAt)
+    {
+        CauseId = Required(causeId, nameof(causeId));
+        ProbeId = Required(probeId, nameof(probeId));
+        PolicySnapshotId = Required(policySnapshotId, nameof(policySnapshotId));
+        PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
+        Outcome = outcome;
+        ReasonCode = Guard.Required(reasonCode, nameof(reasonCode), 64);
+        ExpiryCutoffReceivedAt = Guard.Utc(expiryCutoffReceivedAt, nameof(expiryCutoffReceivedAt));
+        AppliedAt = appliedAt.HasValue ? Guard.Utc(appliedAt.Value, nameof(appliedAt)) : null;
+        ValidateShape();
+    }
+
+    public static ProbeFreshnessExpiryCauseDisposition Applied(
+        Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion, DateTimeOffset expiryCutoffReceivedAt) =>
+        new(causeId, probeId, policySnapshotId, policyVersion,
+            ProbeFreshnessExpiryCauseDispositionOutcome.Applied, ResultFreshnessExpiredReasonCode,
+            expiryCutoffReceivedAt, expiryCutoffReceivedAt);
+
+    public static ProbeFreshnessExpiryCauseDisposition NoOp(
+        Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion,
+        string reasonCode, DateTimeOffset expiryCutoffReceivedAt) =>
+        new(causeId, probeId, policySnapshotId, policyVersion,
+            ProbeFreshnessExpiryCauseDispositionOutcome.NoOp, reasonCode, expiryCutoffReceivedAt, null);
+
+    public Guid CauseId { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public Guid PolicySnapshotId { get; private set; }
+    public int PolicyVersion { get; private set; }
+    public ProbeFreshnessExpiryCauseDispositionOutcome Outcome { get; private set; }
+    public string ReasonCode { get; private set; } = string.Empty;
+    public DateTimeOffset ExpiryCutoffReceivedAt { get; private set; }
+    public DateTimeOffset? AppliedAt { get; private set; }
+
+    private void ValidateShape()
+    {
+        if (!Enum.IsDefined(Outcome)) throw new DomainValidationException(nameof(Outcome), "Expiry disposition outcome is invalid.");
+        if (Outcome == ProbeFreshnessExpiryCauseDispositionOutcome.Applied &&
+            (ReasonCode != ResultFreshnessExpiredReasonCode || AppliedAt != ExpiryCutoffReceivedAt))
+            throw new DomainValidationException(nameof(Outcome), "Applied expiry dispositions require the fixed reason and cutoff timestamp.");
+        if (Outcome == ProbeFreshnessExpiryCauseDispositionOutcome.NoOp &&
+            (AppliedAt.HasValue || ReasonCode is not (ProjectionMissingReasonCode or FreshnessSourceSupersededReasonCode or VisibleAlreadyUnknownReasonCode)))
+            throw new DomainValidationException(nameof(Outcome), "No-op expiry dispositions require an approved reason and no applied timestamp.");
+    }
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+}
+
+public sealed class ProbeFreshnessExpiryCauseTransition
+{
+    public const string ResultFreshnessExpiredReasonCode = ProbeFreshnessExpiryCauseDisposition.ResultFreshnessExpiredReasonCode;
+
+    private ProbeFreshnessExpiryCauseTransition() { }
+
+    public ProbeFreshnessExpiryCauseTransition(
+        Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion,
+        ProbeStatus fromVisibleStatus, DateTimeOffset appliedAt)
+    {
+        CauseId = Required(causeId, nameof(causeId));
+        ProbeId = Required(probeId, nameof(probeId));
+        PolicySnapshotId = Required(policySnapshotId, nameof(policySnapshotId));
+        PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
+        if (fromVisibleStatus is not (ProbeStatus.Up or ProbeStatus.Degraded or ProbeStatus.Down or ProbeStatus.Recovering))
+            throw new DomainValidationException(nameof(fromVisibleStatus), "Freshness expiry must transition a known visible status to Unknown.");
+        FromVisibleStatus = fromVisibleStatus;
+        DispositionOutcome = ProbeFreshnessExpiryCauseDispositionOutcome.Applied;
+        ToVisibleStatus = ProbeStatus.Unknown;
+        ReasonCode = ResultFreshnessExpiredReasonCode;
+        AppliedAt = Guard.Utc(appliedAt, nameof(appliedAt));
+    }
+
+    public Guid CauseId { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public Guid PolicySnapshotId { get; private set; }
+    public int PolicyVersion { get; private set; }
+    public ProbeFreshnessExpiryCauseDispositionOutcome DispositionOutcome { get; private set; }
+    public ProbeStatus FromVisibleStatus { get; private set; }
+    public ProbeStatus ToVisibleStatus { get; private set; }
+    public string ReasonCode { get; private set; } = string.Empty;
+    public DateTimeOffset AppliedAt { get; private set; }
 
     private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
 }

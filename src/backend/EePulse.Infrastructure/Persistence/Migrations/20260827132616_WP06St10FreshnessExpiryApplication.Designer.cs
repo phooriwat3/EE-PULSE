@@ -4,6 +4,7 @@ using System.Net;
 using EePulse.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace EePulse.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(EePulseDbContext))]
-    partial class EePulseDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260827132616_WP06St10FreshnessExpiryApplication")]
+    partial class WP06St10FreshnessExpiryApplication
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

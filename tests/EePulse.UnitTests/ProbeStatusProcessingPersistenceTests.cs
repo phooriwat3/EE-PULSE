@@ -24,6 +24,7 @@ public sealed class ProbeStatusProcessingPersistenceTests
 
         var valid = new ProbeStatusProjection(probeId, ProbeStatus.Down, 1, 0, Now, Now, Guid.NewGuid(), Guid.NewGuid());
         Assert.Equal(0, valid.StateVersion);
+        Assert.Equal(ProbeStatus.Down, valid.VisibleStatus);
     }
 
     [Fact]
@@ -37,6 +38,7 @@ public sealed class ProbeStatusProcessingPersistenceTests
         projection.ApplyResult(new ProbeStatusState(ProbeStatus.Recovering, 0, 1), eventAt, agentId, resultId);
 
         Assert.Equal(ProbeStatus.Recovering, projection.UnderlyingStatus);
+        Assert.Equal(ProbeStatus.Recovering, projection.VisibleStatus);
         Assert.Equal(0, projection.ConsecutiveFailureCount);
         Assert.Equal(1, projection.ConsecutiveSuccessCount);
         Assert.Equal(eventAt, projection.LastFreshEventAt);
@@ -44,6 +46,28 @@ public sealed class ProbeStatusProcessingPersistenceTests
         Assert.Equal(agentId, projection.WatermarkAgentId);
         Assert.Equal(resultId, projection.WatermarkResultId);
         Assert.Equal(0, projection.StateVersion);
+    }
+
+    [Fact]
+    public void ResultFreshnessExpiryChangesOnlyTheVisibleStatusAndAResultResetsIt()
+    {
+        var probeId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+        var resultId = Guid.NewGuid();
+        var projection = new ProbeStatusProjection(probeId, ProbeStatus.Down, 2, 0, Now, Now, agentId, resultId, Guid.NewGuid());
+        var before = (projection.UnderlyingStatus, projection.ConsecutiveFailureCount, projection.ConsecutiveSuccessCount,
+            projection.LastFreshEventAt, projection.WatermarkEventAt, projection.WatermarkAgentId, projection.WatermarkResultId,
+            projection.OpenIncidentId, projection.StateVersion);
+
+        projection.ExpireResultFreshness();
+
+        Assert.Equal(ProbeStatus.Unknown, projection.VisibleStatus);
+        Assert.Equal(before, (projection.UnderlyingStatus, projection.ConsecutiveFailureCount, projection.ConsecutiveSuccessCount,
+            projection.LastFreshEventAt, projection.WatermarkEventAt, projection.WatermarkAgentId, projection.WatermarkResultId,
+            projection.OpenIncidentId, projection.StateVersion));
+
+        projection.ApplyResult(new ProbeStatusState(ProbeStatus.Up, 0, 1), Now.AddSeconds(1), Guid.NewGuid(), Guid.NewGuid());
+        Assert.Equal(ProbeStatus.Up, projection.VisibleStatus);
     }
 
     [Theory]
@@ -205,5 +229,41 @@ public sealed class ProbeStatusProcessingPersistenceTests
             Now, Now, 1, Guid.NewGuid(), Guid.NewGuid(), 1, 0, 60, Now.AddSeconds(60)));
         Assert.Throws<DomainValidationException>(() => new ProbeFreshnessExpiryCause(Guid.NewGuid(), Guid.NewGuid(), sourceAgentId, sourceResultId,
             Now, Now, 1, Guid.NewGuid(), Guid.NewGuid(), 1, 30, 60, Now.AddTicks(-1)));
+    }
+
+    [Fact]
+    public void St10FreshnessExpiryDispositionAndTransitionHaveClosedConstructionShapes()
+    {
+        var causeId = Guid.NewGuid();
+        var probeId = Guid.NewGuid();
+        var policySnapshotId = Guid.NewGuid();
+        var applied = ProbeFreshnessExpiryCauseDisposition.Applied(causeId, probeId, policySnapshotId, 1, Now);
+        var projectionMissing = ProbeFreshnessExpiryCauseDisposition.NoOp(Guid.NewGuid(), probeId, policySnapshotId, 1,
+            ProbeFreshnessExpiryCauseDisposition.ProjectionMissingReasonCode, Now);
+        var superseded = ProbeFreshnessExpiryCauseDisposition.NoOp(Guid.NewGuid(), probeId, policySnapshotId, 1,
+            ProbeFreshnessExpiryCauseDisposition.FreshnessSourceSupersededReasonCode, Now);
+        var alreadyUnknown = ProbeFreshnessExpiryCauseDisposition.NoOp(Guid.NewGuid(), probeId, policySnapshotId, 1,
+            ProbeFreshnessExpiryCauseDisposition.VisibleAlreadyUnknownReasonCode, Now);
+
+        Assert.Equal((ProbeFreshnessExpiryCauseDispositionOutcome.Applied, "result-freshness-expired", Now),
+            (applied.Outcome, applied.ReasonCode, applied.AppliedAt));
+        Assert.All(new[] { projectionMissing, superseded, alreadyUnknown }, disposition =>
+        {
+            Assert.Equal(ProbeFreshnessExpiryCauseDispositionOutcome.NoOp, disposition.Outcome);
+            Assert.Null(disposition.AppliedAt);
+        });
+        Assert.Empty(typeof(ProbeFreshnessExpiryCauseDisposition).GetConstructors());
+        Assert.Throws<DomainValidationException>(() => ProbeFreshnessExpiryCauseDisposition.NoOp(Guid.NewGuid(), probeId, policySnapshotId, 1,
+            "unrecognized", Now));
+        Assert.Throws<DomainValidationException>(() => ProbeFreshnessExpiryCauseDisposition.Applied(Guid.NewGuid(), probeId, policySnapshotId, 1,
+            Now.ToOffset(TimeSpan.FromHours(1))));
+
+        var transition = new ProbeFreshnessExpiryCauseTransition(causeId, probeId, policySnapshotId, 1, ProbeStatus.Down, Now);
+        Assert.Equal(ProbeFreshnessExpiryCauseDispositionOutcome.Applied, transition.DispositionOutcome);
+        Assert.Equal(ProbeStatus.Unknown, transition.ToVisibleStatus);
+        Assert.Equal("result-freshness-expired", transition.ReasonCode);
+        Assert.Throws<DomainValidationException>(() => new ProbeFreshnessExpiryCauseTransition(Guid.NewGuid(), probeId, policySnapshotId, 1, ProbeStatus.Unknown, Now));
+        Assert.Throws<DomainValidationException>(() => new ProbeFreshnessExpiryCauseTransition(Guid.NewGuid(), probeId, policySnapshotId, 1, ProbeStatus.Up,
+            Now.ToOffset(TimeSpan.FromHours(1))));
     }
 }

@@ -31,6 +31,8 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
     public DbSet<AgentConfigurationEffectiveBoundary> AgentConfigurationEffectiveBoundaries => Set<AgentConfigurationEffectiveBoundary>();
     public DbSet<ProbeResultProcessingDisposition> ProbeResultProcessingDispositions => Set<ProbeResultProcessingDisposition>();
     public DbSet<ProbeFreshnessExpiryCause> ProbeFreshnessExpiryCauses => Set<ProbeFreshnessExpiryCause>();
+    public DbSet<ProbeFreshnessExpiryCauseDisposition> ProbeFreshnessExpiryCauseDispositions => Set<ProbeFreshnessExpiryCauseDisposition>();
+    public DbSet<ProbeFreshnessExpiryCauseTransition> ProbeFreshnessExpiryCauseTransitions => Set<ProbeFreshnessExpiryCauseTransition>();
     public DbSet<ProbeResultStatusTransition> ProbeResultStatusTransitions => Set<ProbeResultStatusTransition>();
     public DbSet<AvailabilityIncident> AvailabilityIncidents => Set<AvailabilityIncident>();
     public DbSet<IncidentLifecycleEvent> IncidentLifecycleEvents => Set<IncidentLifecycleEvent>();
@@ -72,6 +74,8 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         RejectChanges(ChangeTracker.Entries<AgentConfigurationEffectiveBoundary>(), "Configuration effective boundaries are immutable.");
         RejectChanges(ChangeTracker.Entries<ProbeResultProcessingDisposition>(), "Probe result processing dispositions are immutable.");
         RejectChanges(ChangeTracker.Entries<ProbeFreshnessExpiryCause>(), "Probe freshness expiry causes are immutable.");
+        RejectChanges(ChangeTracker.Entries<ProbeFreshnessExpiryCauseDisposition>(), "Probe freshness expiry cause dispositions are immutable.");
+        RejectChanges(ChangeTracker.Entries<ProbeFreshnessExpiryCauseTransition>(), "Probe freshness expiry cause transitions are immutable.");
         RejectChanges(ChangeTracker.Entries<ProbeResultStatusTransition>(), "Probe result status transitions are immutable.");
         RejectChanges(ChangeTracker.Entries<IncidentLifecycleEvent>(), "Incident lifecycle events are immutable.");
         RejectChanges(ChangeTracker.Entries<NotificationSuppressionContext>(), "Notification suppression contexts are immutable.");

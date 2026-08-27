@@ -16,6 +16,7 @@ internal sealed class ProbeStatusProjectionConfiguration : IEntityTypeConfigurat
         {
             t.HasCheckConstraint("ck_probe_status_projections_watermark", "(watermark_event_at IS NULL AND watermark_agent_id IS NULL AND watermark_result_id IS NULL) OR (watermark_event_at IS NOT NULL AND watermark_agent_id IS NOT NULL AND watermark_result_id IS NOT NULL)");
             t.HasCheckConstraint("ck_probe_status_projections_status", "underlying_status IN ('Unknown', 'Up', 'Degraded', 'Down', 'Recovering')");
+            t.HasCheckConstraint("ck_probe_status_projections_visible_status", "visible_status IN ('Unknown', 'Up', 'Degraded', 'Down', 'Recovering')");
             t.HasCheckConstraint("ck_probe_status_projections_counters", "consecutive_failure_count >= 0 AND consecutive_success_count >= 0 AND NOT (consecutive_failure_count > 0 AND consecutive_success_count > 0)");
             t.HasCheckConstraint("ck_probe_status_projections_state_version", "state_version >= 0");
             t.HasCheckConstraint("ck_probe_status_projections_down", "underlying_status <> 'Down' OR (consecutive_failure_count >= 1 AND consecutive_success_count = 0)");
@@ -24,6 +25,7 @@ internal sealed class ProbeStatusProjectionConfiguration : IEntityTypeConfigurat
         b.HasKey(x => x.ProbeId);
         b.Property(x => x.ProbeId).HasColumnName("probe_id");
         b.Property(x => x.UnderlyingStatus).HasColumnName("underlying_status").HasConversion<string>().HasMaxLength(20);
+        b.Property(x => x.VisibleStatus).HasColumnName("visible_status").HasConversion<string>().HasColumnType("varchar(20)").HasMaxLength(20).IsRequired();
         b.Property(x => x.ConsecutiveFailureCount).HasColumnName("consecutive_failure_count");
         b.Property(x => x.ConsecutiveSuccessCount).HasColumnName("consecutive_success_count");
         b.Property(x => x.LastFreshEventAt).HasColumnName("last_fresh_event_at");
@@ -155,6 +157,8 @@ internal sealed class ProbeFreshnessExpiryCauseConfiguration : IEntityTypeConfig
             t.HasCheckConstraint("ck_probe_freshness_expiry_causes_due_at", "due_at >= source_last_fresh_event_at");
         });
         b.HasKey(x => x.CauseId);
+        b.HasAlternateKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .HasName("ak_probe_freshness_expiry_causes_lineage");
         b.HasAlternateKey(x => new { x.ProbeId, x.SourceAgentId, x.SourceResultId, x.SourceCursorEventAt })
             .HasName("ak_probe_freshness_expiry_causes_source");
         b.Property(x => x.CauseId).HasColumnName("cause_id");
@@ -188,6 +192,75 @@ internal sealed class ProbeFreshnessExpiryCauseConfiguration : IEntityTypeConfig
             .HasForeignKey(x => new { AgentGroupId = x.SourceAgentGroupId, Version = x.SourceConfigurationVersion })
             .HasPrincipalKey(x => new { x.AgentGroupId, x.Version })
             .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeStatusPolicySnapshot>().WithMany()
+            .HasForeignKey(x => new { x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.Id, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+internal sealed class ProbeFreshnessExpiryCauseDispositionConfiguration : IEntityTypeConfiguration<ProbeFreshnessExpiryCauseDisposition>
+{
+    public void Configure(EntityTypeBuilder<ProbeFreshnessExpiryCauseDisposition> b)
+    {
+        b.ToTable("probe_freshness_expiry_cause_dispositions", t =>
+        {
+            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_dispositions_outcome", "outcome IN ('Applied', 'NoOp')");
+            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_dispositions_shape", "(outcome = 'Applied' AND reason_code = 'result-freshness-expired' AND applied_at = expiry_cutoff_received_at) OR (outcome = 'NoOp' AND reason_code IN ('projection-missing', 'freshness-source-superseded', 'visible-already-unknown') AND applied_at IS NULL)");
+        });
+        b.HasKey(x => x.CauseId);
+        b.HasAlternateKey(x => new { x.CauseId, x.Outcome })
+            .HasName("ak_probe_freshness_expiry_cause_dispositions_cause_outcome");
+        b.Property(x => x.CauseId).HasColumnName("cause_id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id");
+        b.Property(x => x.PolicySnapshotId).HasColumnName("policy_snapshot_id");
+        b.Property(x => x.PolicyVersion).HasColumnName("policy_version");
+        b.Property(x => x.Outcome).HasColumnName("outcome").HasConversion<string>().HasColumnType("varchar(16)").HasMaxLength(16).IsRequired();
+        b.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(64).IsRequired();
+        b.Property(x => x.ExpiryCutoffReceivedAt).HasColumnName("expiry_cutoff_received_at");
+        b.Property(x => x.AppliedAt).HasColumnName("applied_at");
+        b.HasOne<ProbeFreshnessExpiryCause>().WithMany()
+            .HasForeignKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeStatusPolicySnapshot>().WithMany()
+            .HasForeignKey(x => new { x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.Id, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+internal sealed class ProbeFreshnessExpiryCauseTransitionConfiguration : IEntityTypeConfiguration<ProbeFreshnessExpiryCauseTransition>
+{
+    public void Configure(EntityTypeBuilder<ProbeFreshnessExpiryCauseTransition> b)
+    {
+        b.ToTable("probe_freshness_expiry_cause_transitions", t =>
+        {
+            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_transitions_disposition_outcome", "disposition_outcome = 'Applied'");
+            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_transitions_from_visible_status", "from_visible_status IN ('Up', 'Degraded', 'Down', 'Recovering')");
+            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_transitions_to_visible_status", "to_visible_status = 'Unknown'");
+            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_transitions_reason_code", "reason_code = 'result-freshness-expired'");
+        });
+        b.HasKey(x => x.CauseId);
+        b.Property(x => x.CauseId).HasColumnName("cause_id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id");
+        b.Property(x => x.PolicySnapshotId).HasColumnName("policy_snapshot_id");
+        b.Property(x => x.PolicyVersion).HasColumnName("policy_version");
+        b.Property(x => x.DispositionOutcome).HasColumnName("disposition_outcome").HasConversion<string>().HasColumnType("varchar(16)").HasMaxLength(16).IsRequired();
+        b.Property(x => x.FromVisibleStatus).HasColumnName("from_visible_status").HasConversion<string>().HasMaxLength(20).IsRequired();
+        b.Property(x => x.ToVisibleStatus).HasColumnName("to_visible_status").HasConversion<string>().HasMaxLength(20).IsRequired();
+        b.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(64).IsRequired();
+        b.Property(x => x.AppliedAt).HasColumnName("applied_at");
+        b.HasOne<ProbeFreshnessExpiryCause>().WithMany()
+            .HasForeignKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeFreshnessExpiryCauseDisposition>().WithMany()
+            .HasForeignKey(x => new { x.CauseId, Outcome = x.DispositionOutcome })
+            .HasPrincipalKey(x => new { x.CauseId, x.Outcome })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
         b.HasOne<ProbeStatusPolicySnapshot>().WithMany()
             .HasForeignKey(x => new { x.PolicySnapshotId, x.PolicyVersion })
             .HasPrincipalKey(x => new { x.Id, x.PolicyVersion })

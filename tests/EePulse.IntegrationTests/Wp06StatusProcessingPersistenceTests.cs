@@ -438,6 +438,38 @@ public sealed class Wp06StatusProcessingPersistenceTests
     private static Task<int> InsertFreshnessCauseAsync(EePulseDbContext db, FreshnessCause cause, DateTimeOffset requestedAt, CancellationToken ct) =>
         db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_freshness_expiry_causes (cause_id, probe_id, cause_type, source_agent_id, source_result_id, source_cursor_event_at, source_last_fresh_event_at, source_configuration_version, source_agent_group_id, source_disposition, policy_snapshot_id, policy_version, freshness_interval_seconds, freshness_grace_seconds, due_at, requested_at) VALUES ({cause.CauseId}, {cause.ProbeId}, {"ResultFreshnessExpiry"}, {cause.SourceAgentId}, {cause.SourceResultId}, {cause.SourceCursorEventAt}, {cause.SourceLastFreshEventAt}, {cause.SourceConfigurationVersion}, {cause.SourceAgentGroupId}, {"StateDriving"}, {cause.PolicySnapshotId}, {cause.PolicyVersion}, {cause.FreshnessIntervalSeconds}, {cause.FreshnessGraceSeconds}, {cause.DueAt}, {requestedAt})", ct);
 
+    private static Task<int> InsertExpiryDispositionAsync(EePulseDbContext db, Guid causeId, Guid probeId,
+        Guid policySnapshotId, int policyVersion, string outcome, string reasonCode,
+        DateTimeOffset expiryCutoffReceivedAt, DateTimeOffset? appliedAt, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_freshness_expiry_cause_dispositions (cause_id, probe_id, policy_snapshot_id, policy_version, outcome, reason_code, expiry_cutoff_received_at, applied_at) VALUES ({causeId}, {probeId}, {policySnapshotId}, {policyVersion}, {outcome}, {reasonCode}, {expiryCutoffReceivedAt}, {appliedAt})", ct);
+
+    private static Task<int> InsertExpiryTransitionAsync(EePulseDbContext db, Guid causeId, Guid probeId,
+        Guid policySnapshotId, int policyVersion, string dispositionOutcome, string fromVisibleStatus,
+        string toVisibleStatus, string reasonCode, DateTimeOffset appliedAt, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_freshness_expiry_cause_transitions (cause_id, probe_id, policy_snapshot_id, policy_version, disposition_outcome, from_visible_status, to_visible_status, reason_code, applied_at) VALUES ({causeId}, {probeId}, {policySnapshotId}, {policyVersion}, {dispositionOutcome}, {fromVisibleStatus}, {toVisibleStatus}, {reasonCode}, {appliedAt})", ct);
+
+    private static async Task<FreshnessCause> AddAdditionalFreshnessCauseAsync(DbContextOptions<EePulseDbContext> options,
+        Seed seed, ProbeStatusPolicySnapshot policy, int secondsAfterSource, CancellationToken ct)
+    {
+        var resultId = Guid.NewGuid();
+        var eventAt = seed.EventAt.AddSeconds(secondsAfterSource);
+        await using (var write = new EePulseDbContext(options))
+        {
+            write.Add(new ProbeResultLedgerEntry(seed.AgentId, resultId, seed.ProbeId, 1, eventAt.AddSeconds(-1), eventAt,
+                1, 1, 0m, 1m, 1m, 1m, null, new byte[32], seed.Now));
+            write.Add(new ProbeResultProcessingDisposition(seed.AgentId, resultId, seed.ProbeId, eventAt,
+                ProbeResultProcessingDispositionKind.StateDriving, "state-driving", policy.Id, policy.PolicyVersion, seed.Now));
+            await write.SaveChangesAsync(ct);
+            await write.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_projections SET watermark_event_at = {eventAt}, watermark_agent_id = {seed.AgentId}, watermark_result_id = {resultId}, last_fresh_event_at = {eventAt} WHERE probe_id = {seed.ProbeId}", ct);
+        }
+
+        var cause = new FreshnessCause(Guid.NewGuid(), seed.ProbeId, seed.AgentId, resultId, eventAt, eventAt,
+            1, seed.AgentGroupId, policy.Id, policy.PolicyVersion, 30, 60, eventAt.AddSeconds(60));
+        await using var direct = new EePulseDbContext(options);
+        await InsertFreshnessCauseAsync(direct, cause, DateTimeOffset.UnixEpoch, ct);
+        return cause;
+    }
+
     private static async Task<FreshnessSource> AddFreshnessCauseSourceAsync(DbContextOptions<EePulseDbContext> options, Seed seed, CancellationToken ct)
     {
         var policy = new ProbeStatusPolicySnapshot(Guid.NewGuid(), 1, 3, 2, 500, null, seed.Now);
@@ -774,6 +806,250 @@ public sealed class Wp06StatusProcessingPersistenceTests
 
         // Phase 2 PostgreSQL contract: trigger-validate exact source/cursor/policy/configuration interval/source-Agent grace/DueAt;
         // enforce alternate-key uniqueness and restrictive deletes; and reject direct SQL UPDATE/DELETE.
+    }
+
+    [Fact]
+    public async Task St10MigrationBackfillsVisibleStatusWithoutChangingProjectionState()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using var migration = new EePulseDbContext(options);
+        var migrator = migration.GetService<IMigrator>();
+        await migrator.MigrateAsync("20260827023012_WP06St09bResultFreshnessExpiryCause", ct);
+        var seed = await SeedAsync(options, ct);
+        var thirdProbe = new Probe(Guid.NewGuid(), (await migration.Probes.SingleAsync(x => x.Id == seed.ProbeId, ct)).DeviceId,
+            seed.AgentGroupId, 30, 2_000, 3, 500, null, 3, 2);
+        migration.Add(thirdProbe);
+        await migration.SaveChangesAsync(ct);
+        var watermarkAgentId = Guid.NewGuid();
+        var watermarkResultId = Guid.NewGuid();
+        await migration.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_status_projections (probe_id, underlying_status, consecutive_failure_count, consecutive_success_count, last_fresh_event_at, watermark_event_at, watermark_agent_id, watermark_result_id, state_version) VALUES ({seed.ProbeId}, {"Up"}, {0}, {1}, {seed.Now}, {seed.Now}, {watermarkAgentId}, {watermarkResultId}, {7L}), ({seed.OtherProbeId}, {"Down"}, {2}, {0}, {seed.Now.AddSeconds(1)}, {seed.Now.AddSeconds(1)}, {Guid.NewGuid()}, {Guid.NewGuid()}, {8L}), ({thirdProbe.Id}, {"Recovering"}, {0}, {2}, {seed.Now.AddSeconds(2)}, {seed.Now.AddSeconds(2)}, {Guid.NewGuid()}, {Guid.NewGuid()}, {9L})", ct);
+
+        await migrator.MigrateAsync("20260827132616_WP06St10FreshnessExpiryApplication", ct);
+        await using var verify = new EePulseDbContext(options);
+        var projections = await verify.ProbeStatusProjections.AsNoTracking().OrderBy(x => x.StateVersion).ToListAsync(ct);
+        Assert.Collection(projections,
+            row =>
+            {
+                Assert.Equal(ProbeStatus.Up, row.UnderlyingStatus); Assert.Equal(ProbeStatus.Up, row.VisibleStatus);
+                Assert.Equal(0, row.ConsecutiveFailureCount); Assert.Equal(1, row.ConsecutiveSuccessCount);
+                Assert.Equal(seed.Now, row.LastFreshEventAt); Assert.Equal(seed.Now, row.WatermarkEventAt);
+                Assert.Equal(watermarkAgentId, row.WatermarkAgentId); Assert.Equal(watermarkResultId, row.WatermarkResultId);
+                Assert.Null(row.OpenIncidentId); Assert.Equal(7L, row.StateVersion);
+            },
+            row =>
+            {
+                Assert.Equal(ProbeStatus.Down, row.UnderlyingStatus); Assert.Equal(ProbeStatus.Down, row.VisibleStatus);
+                Assert.Equal(2, row.ConsecutiveFailureCount); Assert.Equal(0, row.ConsecutiveSuccessCount);
+                Assert.Equal(seed.Now.AddSeconds(1), row.LastFreshEventAt); Assert.Equal(seed.Now.AddSeconds(1), row.WatermarkEventAt);
+                Assert.Null(row.OpenIncidentId); Assert.Equal(8L, row.StateVersion);
+            },
+            row =>
+            {
+                Assert.Equal(ProbeStatus.Recovering, row.UnderlyingStatus); Assert.Equal(ProbeStatus.Recovering, row.VisibleStatus);
+                Assert.Equal(0, row.ConsecutiveFailureCount); Assert.Equal(2, row.ConsecutiveSuccessCount);
+                Assert.Equal(seed.Now.AddSeconds(2), row.LastFreshEventAt); Assert.Equal(seed.Now.AddSeconds(2), row.WatermarkEventAt);
+                Assert.Null(row.OpenIncidentId); Assert.Equal(9L, row.StateVersion);
+            });
+    }
+
+    [Fact]
+    public async Task St10PostgreSqlEnforcesFreshnessExpiryApplicationPersistenceContract()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddFreshnessCauseSourceAsync(options, seed, ct);
+        await using var direct = new EePulseDbContext(options);
+        await InsertFreshnessCauseAsync(direct, source.Cause, DateTimeOffset.UnixEpoch, ct);
+        var noOpProjectionMissing = await AddAdditionalFreshnessCauseAsync(options, seed, source.Policy, 1, ct);
+        var noOpSuperseded = await AddAdditionalFreshnessCauseAsync(options, seed, source.Policy, 2, ct);
+        var noOpAlreadyUnknown = await AddAdditionalFreshnessCauseAsync(options, seed, source.Policy, 3, ct);
+        var invalidTransitionCause = await AddAdditionalFreshnessCauseAsync(options, seed, source.Policy, 4, ct);
+        var noOpTransitionCause = await AddAdditionalFreshnessCauseAsync(options, seed, source.Policy, 5, ct);
+        var mismatchedProbeCause = await AddAdditionalFreshnessCauseAsync(options, seed, source.Policy, 6, ct);
+        var mismatchedPolicyCause = await AddAdditionalFreshnessCauseAsync(options, seed, source.Policy, 7, ct);
+        var cutoff = seed.Now.AddSeconds(30);
+
+        await InsertExpiryDispositionAsync(direct, source.Cause.CauseId, source.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "result-freshness-expired", cutoff, cutoff, ct);
+        await InsertExpiryTransitionAsync(direct, source.Cause.CauseId, source.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Down", "Unknown", "result-freshness-expired", cutoff, ct);
+        await InsertExpiryDispositionAsync(direct, noOpSuperseded.CauseId, noOpSuperseded.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "freshness-source-superseded", cutoff, null, ct);
+        await InsertExpiryDispositionAsync(direct, noOpAlreadyUnknown.CauseId, noOpAlreadyUnknown.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "visible-already-unknown", cutoff, null, ct);
+        await InsertExpiryDispositionAsync(direct, noOpTransitionCause.CauseId, noOpTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "freshness-source-superseded", cutoff, null, ct);
+        await direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_status_projections WHERE probe_id = {seed.ProbeId}", ct);
+        await InsertExpiryDispositionAsync(direct, noOpProjectionMissing.CauseId, noOpProjectionMissing.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "projection-missing", cutoff, null, ct);
+
+        await using (var read = new EePulseDbContext(options))
+        {
+            var disposition = await read.ProbeFreshnessExpiryCauseDispositions.AsNoTracking().SingleAsync(x => x.CauseId == source.Cause.CauseId, ct);
+            var transition = await read.ProbeFreshnessExpiryCauseTransitions.AsNoTracking().SingleAsync(x => x.CauseId == source.Cause.CauseId, ct);
+            var projectionMissing = await read.ProbeFreshnessExpiryCauseDispositions.AsNoTracking().SingleAsync(x => x.CauseId == noOpProjectionMissing.CauseId, ct);
+            var superseded = await read.ProbeFreshnessExpiryCauseDispositions.AsNoTracking().SingleAsync(x => x.CauseId == noOpSuperseded.CauseId, ct);
+            var alreadyUnknown = await read.ProbeFreshnessExpiryCauseDispositions.AsNoTracking().SingleAsync(x => x.CauseId == noOpAlreadyUnknown.CauseId, ct);
+            Assert.Equal((source.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, ProbeFreshnessExpiryCauseDispositionOutcome.Applied, "result-freshness-expired", cutoff, (DateTimeOffset?)cutoff),
+                (disposition.ProbeId, disposition.PolicySnapshotId, disposition.PolicyVersion, disposition.Outcome, disposition.ReasonCode, disposition.ExpiryCutoffReceivedAt, disposition.AppliedAt));
+            Assert.Equal((source.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, ProbeFreshnessExpiryCauseDispositionOutcome.Applied, ProbeStatus.Down, ProbeStatus.Unknown, "result-freshness-expired", cutoff),
+                (transition.ProbeId, transition.PolicySnapshotId, transition.PolicyVersion, transition.DispositionOutcome, transition.FromVisibleStatus, transition.ToVisibleStatus, transition.ReasonCode, transition.AppliedAt));
+            AssertNoOpDisposition(projectionMissing, noOpProjectionMissing, source.Policy, "projection-missing", cutoff);
+            AssertNoOpDisposition(superseded, noOpSuperseded, source.Policy, "freshness-source-superseded", cutoff);
+            AssertNoOpDisposition(alreadyUnknown, noOpAlreadyUnknown, source.Policy, "visible-already-unknown", cutoff);
+        }
+
+        await AssertUniqueViolationAsync(() => InsertExpiryDispositionAsync(direct, source.Cause.CauseId, source.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "result-freshness-expired", cutoff, cutoff, ct), "PK_probe_freshness_expiry_cause_dispositions");
+        await AssertUniqueViolationAsync(() => InsertExpiryTransitionAsync(direct, source.Cause.CauseId, source.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Down", "Unknown", "result-freshness-expired", cutoff, ct), "PK_probe_freshness_expiry_cause_transitions");
+        await AssertCheckViolationAsync(() => InsertExpiryDispositionAsync(direct, invalidTransitionCause.CauseId, invalidTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Invalid", "result-freshness-expired", cutoff, cutoff, ct), "ck_probe_freshness_expiry_cause_dispositions_outcome");
+        await AssertCheckViolationAsync(() => InsertExpiryDispositionAsync(direct, invalidTransitionCause.CauseId, invalidTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "wrong", cutoff, cutoff, ct), "ck_probe_freshness_expiry_cause_dispositions_shape");
+        await AssertCheckViolationAsync(() => InsertExpiryDispositionAsync(direct, invalidTransitionCause.CauseId, invalidTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "result-freshness-expired", cutoff, cutoff.AddTicks(10), ct), "ck_probe_freshness_expiry_cause_dispositions_shape");
+        await AssertCheckViolationAsync(() => InsertExpiryDispositionAsync(direct, invalidTransitionCause.CauseId, invalidTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "projection-missing", cutoff, cutoff, ct), "ck_probe_freshness_expiry_cause_dispositions_shape");
+
+        await InsertExpiryDispositionAsync(direct, invalidTransitionCause.CauseId, invalidTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "result-freshness-expired", cutoff, cutoff, ct);
+        await AssertCheckViolationAsync(() => InsertExpiryTransitionAsync(direct, noOpTransitionCause.CauseId, noOpTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "Up", "Unknown", "result-freshness-expired", cutoff, ct), "ck_probe_freshness_expiry_cause_transitions_disposition_outcome");
+        await AssertCheckViolationAsync(() => InsertExpiryTransitionAsync(direct, invalidTransitionCause.CauseId, invalidTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Unknown", "Unknown", "result-freshness-expired", cutoff, ct), "ck_probe_freshness_expiry_cause_transitions_from_visible_status");
+        await AssertCheckViolationAsync(() => InsertExpiryTransitionAsync(direct, invalidTransitionCause.CauseId, invalidTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Up", "result-freshness-expired", cutoff, ct), "ck_probe_freshness_expiry_cause_transitions_to_visible_status");
+        await AssertCheckViolationAsync(() => InsertExpiryTransitionAsync(direct, invalidTransitionCause.CauseId, invalidTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "wrong", cutoff, ct), "ck_probe_freshness_expiry_cause_transitions_reason_code");
+        await AssertTriggerViolationAsync(() => InsertExpiryTransitionAsync(direct, invalidTransitionCause.CauseId, invalidTransitionCause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "result-freshness-expired", cutoff.AddTicks(10), ct), "WP-06 freshness expiry transition disposition timestamp mismatch");
+        await AssertTriggerViolationAsync(() => InsertExpiryTransitionAsync(direct, noOpSuperseded.CauseId, noOpSuperseded.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "result-freshness-expired", cutoff, ct), "WP-06 freshness expiry transition disposition timestamp mismatch");
+
+        // This validation trigger precedes FK checks on INSERT. Disable it only to assert its defense-in-depth FK identities.
+        await direct.Database.ExecuteSqlRawAsync("ALTER TABLE probe_freshness_expiry_cause_transitions DISABLE TRIGGER tr_probe_freshness_expiry_cause_transitions_validate_disposition_timestamp", ct);
+        try
+        {
+            var missingDisposition = await Assert.ThrowsAsync<PostgresException>(() => InsertExpiryTransitionAsync(direct, noOpSuperseded.CauseId, noOpSuperseded.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "result-freshness-expired", cutoff, ct));
+            Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, missingDisposition.SqlState);
+            Assert.Equal("FK_probe_freshness_expiry_cause_transitions_probe_freshness_ex~", missingDisposition.ConstraintName);
+            var missingCause = await Assert.ThrowsAsync<PostgresException>(() => InsertExpiryDispositionAsync(direct, Guid.NewGuid(), seed.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "projection-missing", cutoff, null, ct));
+            Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, missingCause.SqlState);
+            Assert.Equal("FK_probe_freshness_expiry_cause_dispositions_probe_freshness_e~", missingCause.ConstraintName);
+            var mismatchedProbe = await Assert.ThrowsAsync<PostgresException>(() => InsertExpiryDispositionAsync(direct, mismatchedProbeCause.CauseId, seed.OtherProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "projection-missing", cutoff, null, ct));
+            Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, mismatchedProbe.SqlState);
+            Assert.Equal("FK_probe_freshness_expiry_cause_dispositions_probe_freshness_e~", mismatchedProbe.ConstraintName);
+            var mismatchedPolicy = await Assert.ThrowsAsync<PostgresException>(() => InsertExpiryDispositionAsync(direct, mismatchedPolicyCause.CauseId, mismatchedPolicyCause.ProbeId, source.OtherPolicy.Id, source.OtherPolicy.PolicyVersion, "NoOp", "projection-missing", cutoff, null, ct));
+            Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, mismatchedPolicy.SqlState);
+            Assert.Equal("FK_probe_freshness_expiry_cause_dispositions_probe_freshness_e~", mismatchedPolicy.ConstraintName);
+        }
+        finally
+        {
+            await direct.Database.ExecuteSqlRawAsync("ALTER TABLE probe_freshness_expiry_cause_transitions ENABLE TRIGGER tr_probe_freshness_expiry_cause_transitions_validate_disposition_timestamp", CancellationToken.None);
+        }
+
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_freshness_expiry_cause_dispositions SET reason_code = {"result-freshness-expired"} WHERE cause_id = {source.Cause.CauseId}", ct), "probe_freshness_expiry_cause_dispositions");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_freshness_expiry_cause_dispositions WHERE cause_id = {source.Cause.CauseId}", ct), "probe_freshness_expiry_cause_dispositions");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_freshness_expiry_cause_transitions SET applied_at = {cutoff} WHERE cause_id = {source.Cause.CauseId}", ct), "probe_freshness_expiry_cause_transitions");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_freshness_expiry_cause_transitions WHERE cause_id = {source.Cause.CauseId}", ct), "probe_freshness_expiry_cause_transitions");
+        await direct.Database.ExecuteSqlRawAsync("ALTER TABLE probe_freshness_expiry_causes DISABLE TRIGGER tr_probe_freshness_expiry_causes_append_only", ct);
+        try
+        {
+            var restrictiveDelete = await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_freshness_expiry_causes WHERE cause_id = {source.Cause.CauseId}", ct));
+            Assert.Equal(PostgresErrorCodes.RestrictViolation, restrictiveDelete.SqlState);
+        }
+        finally
+        {
+            await direct.Database.ExecuteSqlRawAsync("ALTER TABLE probe_freshness_expiry_causes ENABLE TRIGGER tr_probe_freshness_expiry_causes_append_only", CancellationToken.None);
+        }
+    }
+
+    private static void AssertNoOpDisposition(ProbeFreshnessExpiryCauseDisposition disposition, FreshnessCause cause,
+        ProbeStatusPolicySnapshot policy, string reasonCode, DateTimeOffset expiryCutoffReceivedAt)
+    {
+        Assert.Equal(cause.CauseId, disposition.CauseId);
+        Assert.Equal(cause.ProbeId, disposition.ProbeId);
+        Assert.Equal(policy.Id, disposition.PolicySnapshotId);
+        Assert.Equal(policy.PolicyVersion, disposition.PolicyVersion);
+        Assert.Equal(ProbeFreshnessExpiryCauseDispositionOutcome.NoOp, disposition.Outcome);
+        Assert.Equal(reasonCode, disposition.ReasonCode);
+        Assert.Equal(expiryCutoffReceivedAt, disposition.ExpiryCutoffReceivedAt);
+        Assert.Null(disposition.AppliedAt);
+    }
+
+    [Fact]
+    public async Task St10ModelDefinesResultFreshnessExpiryDispositionAndTransitionContracts()
+    {
+        var options = new DbContextOptionsBuilder<EePulseDbContext>()
+            .UseNpgsql("Host=localhost;Database=ee_pulse_st10_contract;Username=unused;Password=unused")
+            .Options;
+        await using var db = new EePulseDbContext(options);
+        var model = db.GetService<IDesignTimeModel>().Model;
+        var projection = model.FindEntityType(typeof(ProbeStatusProjection))!;
+        var disposition = model.FindEntityType(typeof(ProbeFreshnessExpiryCauseDisposition))!;
+        var transition = model.FindEntityType(typeof(ProbeFreshnessExpiryCauseTransition))!;
+
+        Assert.Equal("probe_status_projections", projection.GetTableName());
+        var visibleStatus = projection.FindProperty(nameof(ProbeStatusProjection.VisibleStatus))!;
+        Assert.Equal("visible_status", visibleStatus.GetColumnName());
+        Assert.False(visibleStatus.IsNullable);
+        Assert.Equal(20, visibleStatus.GetMaxLength());
+        Assert.Equal("varchar(20)", visibleStatus.GetColumnType());
+        Assert.NotNull(visibleStatus.GetTypeMapping().Converter);
+        Assert.Contains(projection.GetCheckConstraints(), check => check.Name == "ck_probe_status_projections_visible_status" &&
+            check.Sql == "visible_status IN ('Unknown', 'Up', 'Degraded', 'Down', 'Recovering')");
+
+        Assert.Equal("probe_freshness_expiry_cause_dispositions", disposition.GetTableName());
+        Assert.True(disposition.FindPrimaryKey()!.Properties.Select(x => x.Name)
+            .SequenceEqual([nameof(ProbeFreshnessExpiryCauseDisposition.CauseId)]));
+        Assert.Contains(disposition.GetKeys(), key => key.Properties.Select(x => x.Name)
+            .SequenceEqual([nameof(ProbeFreshnessExpiryCauseDisposition.CauseId), nameof(ProbeFreshnessExpiryCauseDisposition.Outcome)]));
+        AssertRequiredColumn(disposition, nameof(ProbeFreshnessExpiryCauseDisposition.CauseId), "cause_id", null, false);
+        AssertRequiredColumn(disposition, nameof(ProbeFreshnessExpiryCauseDisposition.ProbeId), "probe_id", null, false);
+        AssertRequiredColumn(disposition, nameof(ProbeFreshnessExpiryCauseDisposition.PolicySnapshotId), "policy_snapshot_id", null, false);
+        AssertRequiredColumn(disposition, nameof(ProbeFreshnessExpiryCauseDisposition.PolicyVersion), "policy_version", null, false);
+        AssertRequiredColumn(disposition, nameof(ProbeFreshnessExpiryCauseDisposition.Outcome), "outcome", 16, true, "varchar(16)");
+        AssertRequiredColumn(disposition, nameof(ProbeFreshnessExpiryCauseDisposition.ReasonCode), "reason_code", 64, false);
+        AssertRequiredColumn(disposition, nameof(ProbeFreshnessExpiryCauseDisposition.ExpiryCutoffReceivedAt), "expiry_cutoff_received_at", null, false);
+        Assert.Equal("applied_at", disposition.FindProperty(nameof(ProbeFreshnessExpiryCauseDisposition.AppliedAt))!.GetColumnName());
+        Assert.True(disposition.FindProperty(nameof(ProbeFreshnessExpiryCauseDisposition.AppliedAt))!.IsNullable);
+        Assert.Contains(disposition.GetCheckConstraints(), check => check.Name == "ck_probe_freshness_expiry_cause_dispositions_outcome" && check.Sql == "outcome IN ('Applied', 'NoOp')");
+        Assert.Contains(disposition.GetCheckConstraints(), check => check.Name == "ck_probe_freshness_expiry_cause_dispositions_shape" && check.Sql == "(outcome = 'Applied' AND reason_code = 'result-freshness-expired' AND applied_at = expiry_cutoff_received_at) OR (outcome = 'NoOp' AND reason_code IN ('projection-missing', 'freshness-source-superseded', 'visible-already-unknown') AND applied_at IS NULL)");
+        AssertRestrictiveForeignKey(disposition, [nameof(ProbeFreshnessExpiryCauseDisposition.CauseId), nameof(ProbeFreshnessExpiryCauseDisposition.ProbeId), nameof(ProbeFreshnessExpiryCauseDisposition.PolicySnapshotId), nameof(ProbeFreshnessExpiryCauseDisposition.PolicyVersion)], typeof(ProbeFreshnessExpiryCause), [nameof(ProbeFreshnessExpiryCause.CauseId), nameof(ProbeFreshnessExpiryCause.ProbeId), nameof(ProbeFreshnessExpiryCause.PolicySnapshotId), nameof(ProbeFreshnessExpiryCause.PolicyVersion)]);
+        AssertRestrictiveForeignKey(disposition, [nameof(ProbeFreshnessExpiryCauseDisposition.ProbeId)], typeof(Probe), [nameof(Probe.Id)]);
+        AssertRestrictiveForeignKey(disposition, [nameof(ProbeFreshnessExpiryCauseDisposition.PolicySnapshotId), nameof(ProbeFreshnessExpiryCauseDisposition.PolicyVersion)], typeof(ProbeStatusPolicySnapshot), [nameof(ProbeStatusPolicySnapshot.Id), nameof(ProbeStatusPolicySnapshot.PolicyVersion)]);
+
+        Assert.Equal("probe_freshness_expiry_cause_transitions", transition.GetTableName());
+        Assert.True(transition.FindPrimaryKey()!.Properties.Select(x => x.Name)
+            .SequenceEqual([nameof(ProbeFreshnessExpiryCauseTransition.CauseId)]));
+        AssertRequiredColumn(transition, nameof(ProbeFreshnessExpiryCauseTransition.CauseId), "cause_id", null, false);
+        AssertRequiredColumn(transition, nameof(ProbeFreshnessExpiryCauseTransition.ProbeId), "probe_id", null, false);
+        AssertRequiredColumn(transition, nameof(ProbeFreshnessExpiryCauseTransition.PolicySnapshotId), "policy_snapshot_id", null, false);
+        AssertRequiredColumn(transition, nameof(ProbeFreshnessExpiryCauseTransition.PolicyVersion), "policy_version", null, false);
+        AssertRequiredColumn(transition, nameof(ProbeFreshnessExpiryCauseTransition.DispositionOutcome), "disposition_outcome", 16, true, "varchar(16)");
+        AssertRequiredColumn(transition, nameof(ProbeFreshnessExpiryCauseTransition.FromVisibleStatus), "from_visible_status", 20, true);
+        AssertRequiredColumn(transition, nameof(ProbeFreshnessExpiryCauseTransition.ToVisibleStatus), "to_visible_status", 20, true);
+        AssertRequiredColumn(transition, nameof(ProbeFreshnessExpiryCauseTransition.ReasonCode), "reason_code", 64, false);
+        AssertRequiredColumn(transition, nameof(ProbeFreshnessExpiryCauseTransition.AppliedAt), "applied_at", null, false);
+        Assert.Contains(transition.GetCheckConstraints(), check => check.Name == "ck_probe_freshness_expiry_cause_transitions_disposition_outcome" && check.Sql == "disposition_outcome = 'Applied'");
+        Assert.Contains(transition.GetCheckConstraints(), check => check.Name == "ck_probe_freshness_expiry_cause_transitions_from_visible_status" && check.Sql == "from_visible_status IN ('Up', 'Degraded', 'Down', 'Recovering')");
+        Assert.Contains(transition.GetCheckConstraints(), check => check.Name == "ck_probe_freshness_expiry_cause_transitions_to_visible_status" && check.Sql == "to_visible_status = 'Unknown'");
+        Assert.Contains(transition.GetCheckConstraints(), check => check.Name == "ck_probe_freshness_expiry_cause_transitions_reason_code" && check.Sql == "reason_code = 'result-freshness-expired'");
+        AssertRestrictiveForeignKey(transition, [nameof(ProbeFreshnessExpiryCauseTransition.CauseId), nameof(ProbeFreshnessExpiryCauseTransition.ProbeId), nameof(ProbeFreshnessExpiryCauseTransition.PolicySnapshotId), nameof(ProbeFreshnessExpiryCauseTransition.PolicyVersion)], typeof(ProbeFreshnessExpiryCause), [nameof(ProbeFreshnessExpiryCause.CauseId), nameof(ProbeFreshnessExpiryCause.ProbeId), nameof(ProbeFreshnessExpiryCause.PolicySnapshotId), nameof(ProbeFreshnessExpiryCause.PolicyVersion)]);
+        AssertRestrictiveForeignKey(transition, [nameof(ProbeFreshnessExpiryCauseTransition.CauseId), nameof(ProbeFreshnessExpiryCauseTransition.DispositionOutcome)], typeof(ProbeFreshnessExpiryCauseDisposition), [nameof(ProbeFreshnessExpiryCauseDisposition.CauseId), nameof(ProbeFreshnessExpiryCauseDisposition.Outcome)]);
+        AssertRestrictiveForeignKey(transition, [nameof(ProbeFreshnessExpiryCauseTransition.ProbeId)], typeof(Probe), [nameof(Probe.Id)]);
+        AssertRestrictiveForeignKey(transition, [nameof(ProbeFreshnessExpiryCauseTransition.PolicySnapshotId), nameof(ProbeFreshnessExpiryCauseTransition.PolicyVersion)], typeof(ProbeStatusPolicySnapshot), [nameof(ProbeStatusPolicySnapshot.Id), nameof(ProbeStatusPolicySnapshot.PolicyVersion)]);
+
+        foreach (var entity in new object[]
+                 {
+                     ProbeFreshnessExpiryCauseDisposition.Applied(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 1, new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero)),
+                     new ProbeFreshnessExpiryCauseTransition(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 1, ProbeStatus.Up, new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero)),
+                 })
+        {
+            foreach (var state in new[] { EntityState.Modified, EntityState.Deleted })
+            {
+                db.Entry(entity).State = state;
+                await Assert.ThrowsAsync<InvalidOperationException>(() => db.SaveChangesAsync(TestContext.Current.CancellationToken));
+                db.Entry(entity).State = EntityState.Detached;
+            }
+        }
+    }
+
+    private static void AssertRequiredColumn(IEntityType entity, string propertyName, string columnName, int? maxLength, bool requiresConversion, string? columnType = null)
+    {
+        var property = entity.FindProperty(propertyName)!;
+        Assert.Equal(columnName, property.GetColumnName());
+        Assert.False(property.IsNullable);
+        Assert.Equal(maxLength, property.GetMaxLength());
+        if (columnType is not null) Assert.Equal(columnType, property.GetColumnType());
+        if (requiresConversion) Assert.NotNull(property.GetTypeMapping().Converter);
     }
 
     private static void AssertRestrictiveForeignKey(IEntityType dependent, IReadOnlyList<string> propertyNames, Type principalType, IReadOnlyList<string> principalKeyPropertyNames) =>
