@@ -30,6 +30,7 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
     public DbSet<ProbeStatusPolicyBinding> ProbeStatusPolicyBindings => Set<ProbeStatusPolicyBinding>();
     public DbSet<AgentConfigurationEffectiveBoundary> AgentConfigurationEffectiveBoundaries => Set<AgentConfigurationEffectiveBoundary>();
     public DbSet<ProbeResultProcessingDisposition> ProbeResultProcessingDispositions => Set<ProbeResultProcessingDisposition>();
+    public DbSet<ProbeFreshnessExpiryCause> ProbeFreshnessExpiryCauses => Set<ProbeFreshnessExpiryCause>();
     public DbSet<ProbeResultStatusTransition> ProbeResultStatusTransitions => Set<ProbeResultStatusTransition>();
     public DbSet<AvailabilityIncident> AvailabilityIncidents => Set<AvailabilityIncident>();
     public DbSet<IncidentLifecycleEvent> IncidentLifecycleEvents => Set<IncidentLifecycleEvent>();
@@ -70,6 +71,7 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         RejectChanges(ChangeTracker.Entries<ProbeStatusPolicyBinding>(), "Status policy bindings are immutable.");
         RejectChanges(ChangeTracker.Entries<AgentConfigurationEffectiveBoundary>(), "Configuration effective boundaries are immutable.");
         RejectChanges(ChangeTracker.Entries<ProbeResultProcessingDisposition>(), "Probe result processing dispositions are immutable.");
+        RejectChanges(ChangeTracker.Entries<ProbeFreshnessExpiryCause>(), "Probe freshness expiry causes are immutable.");
         RejectChanges(ChangeTracker.Entries<ProbeResultStatusTransition>(), "Probe result status transitions are immutable.");
         RejectChanges(ChangeTracker.Entries<IncidentLifecycleEvent>(), "Incident lifecycle events are immutable.");
         RejectChanges(ChangeTracker.Entries<NotificationSuppressionContext>(), "Notification suppression contexts are immutable.");

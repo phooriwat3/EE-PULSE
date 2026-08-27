@@ -141,6 +141,60 @@ internal sealed class ProbeResultProcessingDispositionConfiguration : IEntityTyp
     }
 }
 
+internal sealed class ProbeFreshnessExpiryCauseConfiguration : IEntityTypeConfiguration<ProbeFreshnessExpiryCause>
+{
+    public void Configure(EntityTypeBuilder<ProbeFreshnessExpiryCause> b)
+    {
+        b.ToTable("probe_freshness_expiry_causes", t =>
+        {
+            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_type", "cause_type = 'ResultFreshnessExpiry'");
+            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_source_disposition", "source_disposition = 'StateDriving'");
+            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_versions", "source_configuration_version >= 1 AND policy_version >= 1");
+            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_inputs", "freshness_interval_seconds >= 1 AND freshness_grace_seconds >= 1");
+            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_source_freshness", "source_cursor_event_at = source_last_fresh_event_at");
+            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_due_at", "due_at >= source_last_fresh_event_at");
+        });
+        b.HasKey(x => x.CauseId);
+        b.HasAlternateKey(x => new { x.ProbeId, x.SourceAgentId, x.SourceResultId, x.SourceCursorEventAt })
+            .HasName("ak_probe_freshness_expiry_causes_source");
+        b.Property(x => x.CauseId).HasColumnName("cause_id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id");
+        b.Property(x => x.CauseType).HasColumnName("cause_type").HasConversion<string>().HasMaxLength(32);
+        b.Property(x => x.SourceAgentId).HasColumnName("source_agent_id");
+        b.Property(x => x.SourceResultId).HasColumnName("source_result_id");
+        b.Property(x => x.SourceCursorEventAt).HasColumnName("source_cursor_event_at");
+        b.Property(x => x.SourceLastFreshEventAt).HasColumnName("source_last_fresh_event_at");
+        b.Property(x => x.SourceConfigurationVersion).HasColumnName("source_configuration_version");
+        b.Property(x => x.SourceAgentGroupId).HasColumnName("source_agent_group_id");
+        b.Property(x => x.SourceDisposition).HasColumnName("source_disposition").HasConversion<string>().HasMaxLength(32);
+        b.Property(x => x.PolicySnapshotId).HasColumnName("policy_snapshot_id");
+        b.Property(x => x.PolicyVersion).HasColumnName("policy_version");
+        b.Property(x => x.FreshnessIntervalSeconds).HasColumnName("freshness_interval_seconds");
+        b.Property(x => x.FreshnessGraceSeconds).HasColumnName("freshness_grace_seconds");
+        b.Property(x => x.DueAt).HasColumnName("due_at");
+        b.Property(x => x.RequestedAt).HasColumnName("requested_at").ValueGeneratedOnAdd().HasDefaultValueSql("clock_timestamp()");
+        b.HasIndex(x => new { x.DueAt, x.ProbeId }).HasDatabaseName("ix_probe_freshness_expiry_causes_due_probe");
+        b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Agent>().WithMany().HasForeignKey(x => x.SourceAgentId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeResultLedgerEntry>().WithMany()
+            .HasForeignKey(x => new { x.SourceAgentId, x.SourceResultId, x.ProbeId, EventAt = x.SourceCursorEventAt })
+            .HasPrincipalKey(x => new { x.AgentId, x.ResultId, x.ProbeId, x.EndedAt })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeResultProcessingDisposition>().WithMany()
+            .HasForeignKey(x => new { x.SourceAgentId, x.SourceResultId, Disposition = x.SourceDisposition })
+            .HasPrincipalKey(x => new { x.AgentId, x.ResultId, x.Disposition })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<AgentConfigurationSnapshot>().WithMany()
+            .HasForeignKey(x => new { AgentGroupId = x.SourceAgentGroupId, Version = x.SourceConfigurationVersion })
+            .HasPrincipalKey(x => new { x.AgentGroupId, x.Version })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeStatusPolicySnapshot>().WithMany()
+            .HasForeignKey(x => new { x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.Id, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 internal sealed class AvailabilityIncidentConfiguration : IEntityTypeConfiguration<AvailabilityIncident>
 {
     public void Configure(EntityTypeBuilder<AvailabilityIncident> b)

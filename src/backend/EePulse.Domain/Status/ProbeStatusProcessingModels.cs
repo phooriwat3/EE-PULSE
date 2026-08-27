@@ -13,6 +13,11 @@ public enum ProbeResultProcessingDispositionKind
     HistoricalOther,
 }
 
+public enum ProbeFreshnessExpiryCauseType
+{
+    ResultFreshnessExpiry,
+}
+
 public enum AvailabilityIncidentStatus
 {
     Open,
@@ -445,6 +450,64 @@ public sealed class ProbeResultProcessingDisposition
     public Guid? ResolvedPolicySnapshotId { get; private set; }
     public int? ResolvedPolicyVersion { get; private set; }
     public DateTimeOffset DecidedAt { get; private set; }
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+}
+
+public sealed class ProbeFreshnessExpiryCause
+{
+    private ProbeFreshnessExpiryCause() { }
+
+    public ProbeFreshnessExpiryCause(
+        Guid causeId,
+        Guid probeId,
+        Guid sourceAgentId,
+        Guid sourceResultId,
+        DateTimeOffset sourceCursorEventAt,
+        DateTimeOffset sourceLastFreshEventAt,
+        long sourceConfigurationVersion,
+        Guid sourceAgentGroupId,
+        Guid policySnapshotId,
+        int policyVersion,
+        int freshnessIntervalSeconds,
+        int freshnessGraceSeconds,
+        DateTimeOffset dueAt)
+    {
+        CauseId = Required(causeId, nameof(causeId));
+        ProbeId = Required(probeId, nameof(probeId));
+        CauseType = ProbeFreshnessExpiryCauseType.ResultFreshnessExpiry;
+        SourceAgentId = Required(sourceAgentId, nameof(sourceAgentId));
+        SourceResultId = Required(sourceResultId, nameof(sourceResultId));
+        SourceCursorEventAt = Guard.Utc(sourceCursorEventAt, nameof(sourceCursorEventAt));
+        SourceLastFreshEventAt = Guard.Utc(sourceLastFreshEventAt, nameof(sourceLastFreshEventAt));
+        if (SourceCursorEventAt != SourceLastFreshEventAt) throw new DomainValidationException(nameof(sourceLastFreshEventAt), "The freshness source cursor and last-fresh event must match.");
+        SourceConfigurationVersion = sourceConfigurationVersion < 1 ? throw new DomainValidationException(nameof(sourceConfigurationVersion), "Source configuration version must be positive.") : sourceConfigurationVersion;
+        SourceAgentGroupId = Required(sourceAgentGroupId, nameof(sourceAgentGroupId));
+        SourceDisposition = ProbeResultProcessingDispositionKind.StateDriving;
+        PolicySnapshotId = Required(policySnapshotId, nameof(policySnapshotId));
+        PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
+        FreshnessIntervalSeconds = Guard.Range(freshnessIntervalSeconds, nameof(freshnessIntervalSeconds), 1, int.MaxValue);
+        FreshnessGraceSeconds = Guard.Range(freshnessGraceSeconds, nameof(freshnessGraceSeconds), 1, int.MaxValue);
+        DueAt = Guard.Utc(dueAt, nameof(dueAt));
+        if (DueAt < SourceLastFreshEventAt) throw new DomainValidationException(nameof(dueAt), "Freshness expiry cannot precede its source event.");
+    }
+
+    public Guid CauseId { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public ProbeFreshnessExpiryCauseType CauseType { get; private set; }
+    public Guid SourceAgentId { get; private set; }
+    public Guid SourceResultId { get; private set; }
+    public DateTimeOffset SourceCursorEventAt { get; private set; }
+    public DateTimeOffset SourceLastFreshEventAt { get; private set; }
+    public long SourceConfigurationVersion { get; private set; }
+    public Guid SourceAgentGroupId { get; private set; }
+    public ProbeResultProcessingDispositionKind SourceDisposition { get; private set; }
+    public Guid PolicySnapshotId { get; private set; }
+    public int PolicyVersion { get; private set; }
+    public int FreshnessIntervalSeconds { get; private set; }
+    public int FreshnessGraceSeconds { get; private set; }
+    public DateTimeOffset DueAt { get; private set; }
+    public DateTimeOffset RequestedAt { get; private set; }
 
     private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
 }

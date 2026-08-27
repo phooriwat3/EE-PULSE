@@ -179,4 +179,31 @@ public sealed class ProbeStatusProcessingPersistenceTests
     public void ResultStatusTransitionMapsEveryKernelReasonToItsFrozenCode(
         ProbeStatusTransitionReason reason, string expectedCode) =>
         Assert.Equal(expectedCode, ProbeResultStatusTransition.ReasonCodeFor(reason));
+
+    [Fact]
+    public void St09bFreshnessExpiryCauseHasFixedSourceShapeAndDatabaseGeneratedRequestedAt()
+    {
+        var sourceAgentId = Guid.NewGuid();
+        var sourceResultId = Guid.NewGuid();
+        var cause = new ProbeFreshnessExpiryCause(Guid.NewGuid(), Guid.NewGuid(), sourceAgentId, sourceResultId,
+            Now, Now, 1, Guid.NewGuid(), Guid.NewGuid(), 1, 30, 60, Now.AddSeconds(60));
+
+        Assert.Equal(ProbeFreshnessExpiryCauseType.ResultFreshnessExpiry, cause.CauseType);
+        Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, cause.SourceDisposition);
+        Assert.Equal(default, cause.RequestedAt);
+        Assert.DoesNotContain(typeof(ProbeFreshnessExpiryCause).GetConstructors()
+            .SelectMany(constructor => constructor.GetParameters()), parameter => parameter.Name == "requestedAt");
+        var requestedAtSetter = typeof(ProbeFreshnessExpiryCause).GetProperty(nameof(ProbeFreshnessExpiryCause.RequestedAt))!.GetSetMethod(nonPublic: true);
+        Assert.NotNull(requestedAtSetter);
+        Assert.False(requestedAtSetter!.IsPublic);
+
+        Assert.Throws<DomainValidationException>(() => new ProbeFreshnessExpiryCause(Guid.NewGuid(), Guid.NewGuid(), sourceAgentId, sourceResultId,
+            Now, Now.AddTicks(10), 1, Guid.NewGuid(), Guid.NewGuid(), 1, 30, 60, Now.AddSeconds(60)));
+        Assert.Throws<DomainValidationException>(() => new ProbeFreshnessExpiryCause(Guid.NewGuid(), Guid.NewGuid(), sourceAgentId, sourceResultId,
+            Now, Now, 0, Guid.NewGuid(), Guid.NewGuid(), 1, 30, 60, Now.AddSeconds(60)));
+        Assert.Throws<DomainValidationException>(() => new ProbeFreshnessExpiryCause(Guid.NewGuid(), Guid.NewGuid(), sourceAgentId, sourceResultId,
+            Now, Now, 1, Guid.NewGuid(), Guid.NewGuid(), 1, 0, 60, Now.AddSeconds(60)));
+        Assert.Throws<DomainValidationException>(() => new ProbeFreshnessExpiryCause(Guid.NewGuid(), Guid.NewGuid(), sourceAgentId, sourceResultId,
+            Now, Now, 1, Guid.NewGuid(), Guid.NewGuid(), 1, 30, 60, Now.AddTicks(-1)));
+    }
 }
