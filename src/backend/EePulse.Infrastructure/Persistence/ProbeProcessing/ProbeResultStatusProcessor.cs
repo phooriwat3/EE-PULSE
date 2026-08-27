@@ -2,6 +2,8 @@ using EePulse.Application.Time;
 using EePulse.Domain.Agents;
 using EePulse.Domain.Status;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
+using System.Text.Json;
 
 namespace EePulse.Infrastructure.Persistence.ProbeProcessing;
 
@@ -72,6 +74,7 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
             !schedulingOwnership.Enabled || !schedulingOwnership.DeviceEnabled || !schedulingOwnership.AgentGroupEnabled);
         var addedProjection = false;
         ProbeStatusEvaluationResult? evaluation = null;
+        FreshnessCauseInputs? freshnessCauseInputs = null;
 
         if (disposition.Kind == ProbeResultProcessingDispositionKind.StateDriving)
         {
@@ -83,6 +86,7 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
                 new(ledger.SuccessfulAttemptCount == ledger.AttemptCount, ledger.AverageRttMilliseconds, ledger.PacketLossRatio));
             projection.ApplyResult(evaluation.State, ledger.EndedAt, ledger.AgentId, ledger.ResultId);
             if (addedProjection) db.Add(projection);
+            freshnessCauseInputs = await ResolveFreshnessCauseInputsAsync(ledger, snapshot, projection, cancellationToken);
         }
 
         var processingDisposition = new ProbeResultProcessingDisposition(
@@ -186,6 +190,8 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
                 db.AddRange(lifecycleEvent, suppressionContext);
             }
         }
+        // This first flush is deliberately still inside the transaction.  The freshness-cause
+        // trigger must be able to read this result's persisted disposition and projection.
         await db.SaveChangesAsync(cancellationToken);
 
         if (addedProjection)
@@ -196,6 +202,29 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
             var stateVersion = db.Entry(projection!).Property(row => row.StateVersion);
             stateVersion.CurrentValue = 1;
             stateVersion.OriginalValue = 1;
+            stateVersion.IsModified = false;
+        }
+
+        if (freshnessCauseInputs is not null)
+        {
+            db.Add(new ProbeFreshnessExpiryCause(
+                Guid.NewGuid(),
+                ledger.ProbeId,
+                ledger.AgentId,
+                ledger.ResultId,
+                ledger.EndedAt,
+                projection!.LastFreshEventAt!.Value,
+                ledger.ConfigurationVersion,
+                freshnessCauseInputs.AgentGroupId,
+                snapshot!.Id,
+                snapshot.PolicyVersion,
+                freshnessCauseInputs.IntervalSeconds,
+                freshnessCauseInputs.GraceSeconds,
+                freshnessCauseInputs.DueAt));
+
+            // Keep this separate from the result flush: ST-09B validates the source through
+            // transactionally persisted rows, not EF's pending change tracker.
+            await db.SaveChangesAsync(cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -268,5 +297,57 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
         transition.To == ProbeStatus.Down &&
         transition.Reason == ProbeStatusTransitionReason.RecoveryFailed;
 
+    private async Task<FreshnessCauseInputs> ResolveFreshnessCauseInputsAsync(
+        ProbeResultLedgerEntry ledger,
+        ProbeStatusPolicySnapshot snapshot,
+        ProbeStatusProjection projection,
+        CancellationToken cancellationToken)
+    {
+        var agent = await db.Agents.SingleOrDefaultAsync(row => row.Id == ledger.AgentId, cancellationToken)
+            ?? throw new InvalidOperationException("WP-06 freshness cause source Agent is missing.");
+        var configuration = await db.AgentConfigurationSnapshots.SingleOrDefaultAsync(row =>
+            row.AgentGroupId == agent.AgentGroupId && row.Version == ledger.ConfigurationVersion, cancellationToken)
+            ?? throw new InvalidOperationException("WP-06 freshness cause source configuration snapshot is missing.");
+
+        var intervalSeconds = ReadSourceIntervalSeconds(configuration.Payload, ledger.ProbeId);
+        var lastFreshEventAt = projection.LastFreshEventAt
+            ?? throw new InvalidOperationException("WP-06 freshness cause source projection has no last-fresh event.");
+        var graceSeconds = Math.Max(60, checked(3 * agent.HeartbeatIntervalSeconds));
+        var freshnessSeconds = Math.Max(checked(2 * intervalSeconds), graceSeconds);
+        return new(agent.AgentGroupId, intervalSeconds, graceSeconds, lastFreshEventAt.AddSeconds(freshnessSeconds));
+    }
+
+    private static int ReadSourceIntervalSeconds(string payload, Guid probeId)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            if (!document.RootElement.TryGetProperty("probes", out var probes) || probes.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("WP-06 freshness cause source configuration payload has no probes array.");
+
+            var canonicalProbeId = probeId.ToString("D");
+            var matches = probes.EnumerateArray()
+                .Where(entry => entry.ValueKind == JsonValueKind.Object &&
+                    entry.TryGetProperty("probeId", out var id) && id.ValueKind == JsonValueKind.String &&
+                    string.Equals(id.GetString(), canonicalProbeId, StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length != 1)
+                throw new InvalidOperationException("WP-06 freshness cause source configuration must contain exactly one matching Probe.");
+            if (!matches[0].TryGetProperty("intervalSeconds", out var interval) || interval.ValueKind != JsonValueKind.Number)
+                throw new InvalidOperationException("WP-06 freshness cause source intervalSeconds is invalid.");
+
+            var raw = interval.GetRawText();
+            if (raw.Length == 0 || raw.Any(character => character is < '0' or > '9') ||
+                !int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value < 1)
+                throw new InvalidOperationException("WP-06 freshness cause source intervalSeconds is invalid.");
+            return value;
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException("WP-06 freshness cause source configuration payload is malformed.", exception);
+        }
+    }
+
     private sealed record DispositionDecision(ProbeResultProcessingDispositionKind Kind, string ReasonCode);
+    private sealed record FreshnessCauseInputs(Guid AgentGroupId, int IntervalSeconds, int GraceSeconds, DateTimeOffset DueAt);
 }
