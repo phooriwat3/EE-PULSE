@@ -3347,7 +3347,7 @@ public sealed class ProbeResultStatusProcessorTests
         {
             using var wait = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken); wait.CancelAfter(TimeSpan.FromSeconds(10));
             await gate.WaitUntilEnteredAsync(wait.Token);
-            Assert.Equal(1, gate.AgentShareCommands.Length); Assert.True(ImmutableArray.Create(fixture.AgentId.ToString("D")).SequenceEqual(gate.AgentShareCommands[0].AgentIds));
+            var firstAgentShareCommand = Assert.Single(gate.AgentShareCommands); Assert.True(ImmutableArray.Create(fixture.AgentId.ToString("D")).SequenceEqual(firstAgentShareCommand.AgentIds));
             await AddLedgerAsync(fixture, eventB, eventB, 3, 0m, resultId: resultB, agentId: agentB);
             await using (var whileGated = new EePulseDbContext(fixture.Options))
             {
