@@ -77,7 +77,7 @@ internal sealed class AgentConfigurationSnapshotConfiguration : IEntityTypeConfi
 }
 internal sealed class AgentConfigurationAcknowledgementConfiguration : IEntityTypeConfiguration<AgentConfigurationAcknowledgement>
 {
-    public void Configure(EntityTypeBuilder<AgentConfigurationAcknowledgement> b) { b.ToTable("agent_configuration_acknowledgements"); b.HasKey(x => new { x.AgentId, x.Id }); b.Property(x => x.Id).HasColumnName("acknowledgement_id"); b.Property(x => x.AgentId).HasColumnName("agent_id"); b.Property(x => x.ConfigurationVersion).HasColumnName("configuration_version"); b.Property(x => x.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20); b.Property(x => x.AppliedAt).HasColumnName("applied_at"); b.Property(x => x.SentAt).HasColumnName("sent_at"); b.Property(x => x.ReceivedAt).HasColumnName("received_at"); b.Property(x => x.ErrorCode).HasColumnName("error_code").HasMaxLength(100); b.Property(x => x.CentralEffectiveConfigurationVersion).HasColumnName("central_effective_configuration_version"); b.Property(x => x.DesiredConfigurationVersion).HasColumnName("desired_configuration_version"); b.HasOne<Agent>().WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Restrict); }
+    public void Configure(EntityTypeBuilder<AgentConfigurationAcknowledgement> b) { b.ToTable("agent_configuration_acknowledgements"); b.HasKey(x => new { x.AgentId, x.Id }); b.HasAlternateKey(x => new { x.AgentId, x.Id, x.ConfigurationVersion, x.Status, x.ReceivedAt }).HasName("ak_agent_configuration_acknowledgements_boundary_source"); b.Property(x => x.Id).HasColumnName("acknowledgement_id"); b.Property(x => x.AgentId).HasColumnName("agent_id"); b.Property(x => x.ConfigurationVersion).HasColumnName("configuration_version"); b.Property(x => x.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20); b.Property(x => x.AppliedAt).HasColumnName("applied_at"); b.Property(x => x.SentAt).HasColumnName("sent_at"); b.Property(x => x.ReceivedAt).HasColumnName("received_at"); b.Property(x => x.ErrorCode).HasColumnName("error_code").HasMaxLength(100); b.Property(x => x.CentralEffectiveConfigurationVersion).HasColumnName("central_effective_configuration_version"); b.Property(x => x.DesiredConfigurationVersion).HasColumnName("desired_configuration_version"); b.HasOne<Agent>().WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Restrict); }
 }
 internal sealed class AgentHeartbeatReceiptConfiguration : IEntityTypeConfiguration<AgentHeartbeatReceipt>
 {
@@ -100,7 +100,10 @@ internal sealed class ProbeResultLedgerEntryConfiguration : IEntityTypeConfigura
         b.Property(x => x.MaxRttMilliseconds).HasColumnName("max_rtt_milliseconds").HasPrecision(18, 6);
         b.Property(x => x.ErrorCategory).HasColumnName("error_category").HasMaxLength(32);
         b.Property(x => x.ImmutablePayloadDigest).HasColumnName("immutable_payload_digest").HasColumnType("bytea"); b.Property(x => x.ReceivedAt).HasColumnName("received_at");
+        b.HasIndex(x => x.ProbeId).HasDatabaseName("IX_probe_result_ledger_probe_id");
         b.HasIndex(x => x.ReceivedAt).HasDatabaseName("ix_probe_result_ledger_received");
+        b.HasAlternateKey(x => new { x.AgentId, x.ResultId, x.ProbeId, x.EndedAt }).HasName("ak_probe_result_ledger_processing_identity");
+        b.HasIndex(x => new { x.ProbeId, x.EndedAt, x.AgentId, x.ResultId }).HasDatabaseName("ix_probe_result_ledger_state_order");
         b.HasOne<Agent>().WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
     }
