@@ -3766,7 +3766,27 @@ public sealed class ProbeResultStatusProcessorTests
                    COALESCE(array_to_string(pg_blocking_pids(@pid),','),'<none>')
             FROM pg_stat_activity a WHERE a.pid=@pid
             """, observer); command.Parameters.AddWithValue("pid", waiter.Pid); command.Parameters.AddWithValue("blocker", blocker.Pid); command.Parameters.AddWithValue("excluded", excludedProbeBlocker); await using var reader = await command.ExecuteReaderAsync(timeout.Token);
-                if (await reader.ReadAsync(timeout.Token)) { var identity = reader.GetString(0) == waiter.ApplicationName && reader.GetString(1) == waiter.BackendStartedAt && reader.GetString(2) == waiter.DatabaseName; last = $"expected={waiter};observed={reader.GetString(0)}|{reader.GetString(1)}|{reader.GetString(2)};state={reader.GetString(3)};wait={(reader.IsDBNull(4) ? "<null>" : reader.GetString(4))}/{(reader.IsDBNull(5) ? "<null>" : reader.GetString(5)};blocking={reader.GetString(9)}"; if (identity && string.Equals(reader.IsDBNull(4) ? null : reader.GetString(4), "Lock", StringComparison.Ordinal) && reader.GetBoolean(6) && reader.GetBoolean(7) && reader.GetBoolean(8)) return; } else last = "<missing>";
+                if (await reader.ReadAsync(timeout.Token))
+                {
+                    var observedApplication = reader.GetString(0);
+                    var observedBackendStart = reader.GetString(1);
+                    var observedDatabase = reader.GetString(2);
+                    var observedState = reader.GetString(3);
+                    var observedWaitType = reader.IsDBNull(4) ? "<null>" : reader.GetString(4);
+                    var observedWaitEvent = reader.IsDBNull(5) ? "<null>" : reader.GetString(5);
+                    var observedBlockingPids = reader.GetString(9);
+                    var observedIdentityText = $"{observedApplication}|{observedBackendStart}|{observedDatabase}";
+                    var identity = observedApplication == waiter.ApplicationName
+                        && observedBackendStart == waiter.BackendStartedAt
+                        && observedDatabase == waiter.DatabaseName;
+                    last = $"expected={waiter};observed={observedIdentityText};state={observedState};wait={observedWaitType}/{observedWaitEvent};blocking={observedBlockingPids}";
+                    if (identity
+                        && string.Equals(reader.IsDBNull(4) ? null : reader.GetString(4), "Lock", StringComparison.Ordinal)
+                        && reader.GetBoolean(6)
+                        && reader.GetBoolean(7)
+                        && reader.GetBoolean(8)) return;
+                }
+                else last = "<missing>";
                 if (waiterTask.IsCompleted || h1Task.IsCompleted) { if (waiterTask.IsCompleted) await waiterTask; if (h1Task.IsCompleted) await h1Task; throw new Xunit.Sdk.XunitException($"T4B4 waiter E lock evidence was not observed. {last};attempts={attempts};elapsed={DateTimeOffset.UtcNow - started}."); }
                 await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
             }
