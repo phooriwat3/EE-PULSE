@@ -177,6 +177,112 @@ public sealed class ProbeResultIngestionApiTests
     }
 
     [Fact]
+    public async Task T4A3ResultIngestionAcquiresReceivingAgentBeforeRequestingProbeLock()
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        var ct = timeout.Token;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var applicationName = "t4a3-ingestion-" + Guid.NewGuid().ToString("N");
+        var requestConnectionString = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { ApplicationName = applicationName }.ConnectionString;
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", requestConnectionString));
+        using var client = factory.CreateClient();
+        var enrolled = await EnrollConfiguredAgent(client, ct);
+        var result = Result(enrolled.AgentId, enrolled.ProbeId, enrolled.ConfigurationVersion);
+
+        await using var agentBlocker = new NpgsqlConnection(postgres.ConnectionString);
+        await using var probeBlocker = new NpgsqlConnection(postgres.ConnectionString);
+        await using var observer = new NpgsqlConnection(postgres.ConnectionString);
+        NpgsqlTransaction? agentTransaction = null;
+        NpgsqlTransaction? probeTransaction = null;
+        Task<HttpResponseMessage>? pendingResponse = null;
+        var agentReleased = false;
+        var probeReleased = false;
+        Exception? primary = null;
+        try
+        {
+            await agentBlocker.OpenAsync(ct);
+            await probeBlocker.OpenAsync(ct);
+            await observer.OpenAsync(ct);
+            agentTransaction = await agentBlocker.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+            probeTransaction = await probeBlocker.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+            var agentBlockerPid = await BackendPidAsync(agentBlocker, ct);
+            var probeBlockerPid = await BackendPidAsync(probeBlocker, ct);
+            var observerPid = await BackendPidAsync(observer, ct);
+            Assert.NotEqual(agentBlockerPid, probeBlockerPid);
+            Assert.NotEqual(agentBlockerPid, observerPid);
+            Assert.NotEqual(probeBlockerPid, observerPid);
+
+            await using (var lockAgent = new NpgsqlCommand("SELECT id FROM agents WHERE id = @agentId FOR UPDATE", agentBlocker, agentTransaction))
+            {
+                lockAgent.Parameters.AddWithValue("agentId", enrolled.AgentId);
+                Assert.Equal(enrolled.AgentId, await lockAgent.ExecuteScalarAsync(ct));
+            }
+            await using (var lockProbe = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@probeId, 0))", probeBlocker, probeTransaction))
+            {
+                lockProbe.Parameters.AddWithValue("probeId", enrolled.ProbeId.ToString("D"));
+                await lockProbe.ExecuteNonQueryAsync(ct);
+            }
+
+            var requestBefore = await ReadPostgresTimestampAsync(postgres.ConnectionString, ct);
+            using var request = Request($"/api/v1/agents/{enrolled.AgentId}/result-batches", enrolled.Credential, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [result]));
+            pendingResponse = client.SendAsync(request, ct);
+            var requestPid = await WaitForAgentBlockAsync(observer, applicationName, agentBlockerPid, probeBlockerPid, pendingResponse, ct);
+            Assert.NotEqual(agentBlockerPid, requestPid);
+            Assert.NotEqual(probeBlockerPid, requestPid);
+            await AssertLedgerCount(factory, 0, ct);
+
+            await agentTransaction.RollbackAsync(ct);
+            agentReleased = true;
+
+            await WaitForProbeBlockAsync(observer, requestPid, enrolled.ProbeId, agentBlockerPid, probeBlockerPid, pendingResponse, ct);
+            await probeTransaction.RollbackAsync(ct);
+            probeReleased = true;
+
+            using var response = await WaitForRequestCompletionAsync(pendingResponse, agentBlockerPid, probeBlockerPid, ct);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = (await response.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, ct))!;
+            var requestAfter = await ReadPostgresTimestampAsync(postgres.ConnectionString, ct);
+            Assert.Equal([result.ResultId], body.AcceptedResultIds);
+            Assert.Empty(body.Rejections);
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            var persisted = await db.ProbeResultLedgerEntries.AsNoTracking().SingleAsync(x => x.AgentId == enrolled.AgentId && x.ResultId == result.ResultId, ct);
+            Assert.Equal((enrolled.AgentId, result.ResultId, enrolled.ProbeId, enrolled.ConfigurationVersion, result.StartedAt, result.EndedAt,
+                    result.AttemptCount, result.SuccessfulAttemptCount, result.PacketLossRatio, result.MinRttMilliseconds,
+                    result.AverageRttMilliseconds, result.MaxRttMilliseconds, result.ErrorCategory),
+                (persisted.AgentId, persisted.ResultId, persisted.ProbeId, persisted.ConfigurationVersion, persisted.StartedAt,
+                    persisted.EndedAt, persisted.AttemptCount, persisted.SuccessfulAttemptCount, persisted.PacketLossRatio,
+                    persisted.MinRttMilliseconds, persisted.AverageRttMilliseconds, persisted.MaxRttMilliseconds, persisted.ErrorCategory));
+            Assert.InRange(persisted.ReceivedAt, requestBefore, requestAfter);
+            Assert.Equal(1, await db.ProbeResultLedgerEntries.AsNoTracking().CountAsync(ct));
+        }
+        catch (Exception exception)
+        {
+            primary = exception;
+            throw;
+        }
+        finally
+        {
+            var cleanupFailures = new List<Exception>();
+            if (!agentReleased && agentTransaction is not null)
+                await TryRollbackAsync(agentTransaction, cleanupFailures);
+            if (!probeReleased && probeTransaction is not null)
+                await TryRollbackAsync(probeTransaction, cleanupFailures);
+            if (pendingResponse is not null)
+                await TryAwaitRequestAsync(pendingResponse, cleanupFailures);
+            if (cleanupFailures.Count != 0)
+            {
+                if (primary is not null)
+                {
+                    foreach (var failure in cleanupFailures) primary.Data["T4A3CleanupFailure" + primary.Data.Count] = failure;
+                }
+                else throw new AggregateException("T4A3 cleanup failed.", cleanupFailures);
+            }
+        }
+    }
+
+    [Fact]
     public async Task ReversedOverlappingProbeBatchesCompleteAndPersistEachIdentityOnce()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -334,6 +440,118 @@ public sealed class ProbeResultIngestionApiTests
         }
     }
 
+    private static async Task<int> WaitForAgentBlockAsync(NpgsqlConnection observer, string applicationName, int agentBlockerPid, int probeBlockerPid, Task pendingRequest, CancellationToken cancellationToken)
+    {
+        LockWaitObservation? last = null;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (true)
+            {
+                last = await ReadLockWaitObservationAsync(observer, applicationName, null, null, deadline.Token);
+                if (last is { RequestPid: not null, WaitEventType: "Lock", HasUngrantedTransactionId: true, HasAnyAdvisory: false } && last.BlockingPids.Contains(agentBlockerPid) && !last.BlockingPids.Contains(probeBlockerPid))
+                    return last.RequestPid.Value;
+                if (pendingRequest.IsCompleted)
+                {
+                    await pendingRequest;
+                    throw new Xunit.Sdk.XunitException("The ingestion request completed before its Agent-row lock wait was observed.");
+                }
+                await Task.Delay(TimeSpan.FromMilliseconds(20), deadline.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new Xunit.Sdk.XunitException($"Timed out waiting for the Agent lock wait. agentBlockerPid={agentBlockerPid}, probeBlockerPid={probeBlockerPid}, last={last}");
+        }
+    }
+
+    private static async Task WaitForProbeBlockAsync(NpgsqlConnection observer, int requestPid, Guid probeId, int agentBlockerPid, int probeBlockerPid, Task pendingRequest, CancellationToken cancellationToken)
+    {
+        LockWaitObservation? last = null;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (true)
+            {
+                last = await ReadLockWaitObservationAsync(observer, null, requestPid, probeId, deadline.Token);
+                if (last is { WaitEventType: "Lock", HasMatchingUngrantedAdvisory: true } && last.BlockingPids.Contains(probeBlockerPid) && !last.BlockingPids.Contains(agentBlockerPid)) return;
+                if (pendingRequest.IsCompleted)
+                {
+                    await pendingRequest;
+                    throw new Xunit.Sdk.XunitException("The ingestion request completed before its Probe advisory-lock wait was observed.");
+                }
+                await Task.Delay(TimeSpan.FromMilliseconds(20), deadline.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new Xunit.Sdk.XunitException($"Timed out waiting for the Probe advisory-lock wait. requestPid={requestPid}, agentBlockerPid={agentBlockerPid}, probeBlockerPid={probeBlockerPid}, probeId={probeId:D}, last={last}");
+        }
+    }
+
+    private static async Task<LockWaitObservation?> ReadLockWaitObservationAsync(NpgsqlConnection observer, string? applicationName, int? requestPid, Guid? probeId, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT a.pid, a.wait_event_type, a.wait_event,
+                   EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'transactionid' AND NOT l.granted),
+                   EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'advisory'),
+                   EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'advisory' AND NOT l.granted
+                       AND (lpad(to_hex(l.classid::bigint), 8, '0') || lpad(to_hex(l.objid::bigint), 8, '0')) = lpad(to_hex(hashtextextended(@probeId, 0)), 16, '0')),
+                   pg_blocking_pids(a.pid)
+            FROM pg_stat_activity a
+            WHERE (@applicationName IS NULL OR a.application_name = @applicationName)
+              AND (@requestPid IS NULL OR a.pid = @requestPid)
+              AND (@applicationName IS NULL OR a.state <> 'idle')
+            ORDER BY a.pid
+            LIMIT 1
+            """, observer);
+        command.Parameters.AddWithValue("applicationName", (object?)applicationName ?? DBNull.Value);
+        command.Parameters.AddWithValue("requestPid", (object?)requestPid ?? DBNull.Value);
+        command.Parameters.AddWithValue("probeId", (object?)(probeId?.ToString("D")) ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+        return new(reader.GetInt32(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetBoolean(3), reader.GetBoolean(4), reader.GetBoolean(5), reader.GetFieldValue<int[]>(6));
+    }
+
+    private static async Task<int> BackendPidAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("SELECT pg_backend_pid()", connection);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static async Task TryRollbackAsync(NpgsqlTransaction transaction, List<Exception> failures)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await transaction.RollbackAsync(timeout.Token);
+        }
+        catch (Exception exception) { failures.Add(exception); }
+    }
+
+    private static async Task TryAwaitRequestAsync(Task<HttpResponseMessage> request, List<Exception> failures)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var response = await request.WaitAsync(timeout.Token);
+        }
+        catch (Exception exception) { failures.Add(exception); }
+    }
+
+    private static async Task<HttpResponseMessage> WaitForRequestCompletionAsync(Task<HttpResponseMessage> request, int agentBlockerPid, int probeBlockerPid, CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        try { return await request.WaitAsync(deadline.Token); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new Xunit.Sdk.XunitException($"Timed out waiting for the ingestion request to complete. agentBlockerPid={agentBlockerPid}, probeBlockerPid={probeBlockerPid}");
+        }
+    }
+
     private static async Task WaitForProbeLockAsync(
         NpgsqlConnection observer,
         Guid probeId,
@@ -431,4 +649,6 @@ public sealed class ProbeResultIngestionApiTests
     }
     private static JsonSerializerOptions CreateAgentJson() { var options = new JsonSerializerOptions(JsonSerializerDefaults.Web); AgentJsonContract.AddConverters(options); return options; }
     private sealed class FixedClock(DateTimeOffset now) : IUtcClock { public DateTimeOffset UtcNow => now; }
+    private sealed record LockWaitObservation(int? RequestPid, string? WaitEventType, string? WaitEvent,
+        bool HasUngrantedTransactionId, bool HasAnyAdvisory, bool HasMatchingUngrantedAdvisory, int[] BlockingPids);
 }

@@ -1,6 +1,7 @@
 using EePulse.Domain.Agents;
 using EePulse.Domain.Common;
 using EePulse.Domain.Status;
+using System.Reflection;
 
 namespace EePulse.UnitTests;
 
@@ -265,5 +266,99 @@ public sealed class ProbeStatusProcessingPersistenceTests
         Assert.Throws<DomainValidationException>(() => new ProbeFreshnessExpiryCauseTransition(Guid.NewGuid(), probeId, policySnapshotId, 1, ProbeStatus.Unknown, Now));
         Assert.Throws<DomainValidationException>(() => new ProbeFreshnessExpiryCauseTransition(Guid.NewGuid(), probeId, policySnapshotId, 1, ProbeStatus.Up,
             Now.ToOffset(TimeSpan.FromHours(1))));
+    }
+
+    [Fact]
+    public void St10bHeartbeatExpiryTypesFreezeAuthoritySourceAndClosedOutcomeShapes()
+    {
+        var causeId = Guid.NewGuid();
+        var probeId = Guid.NewGuid();
+        var authorityAgentId = Guid.NewGuid();
+        var sourceResultId = Guid.NewGuid();
+        var policySnapshotId = Guid.NewGuid();
+        var sourceAgentGroupId = Guid.NewGuid();
+        var cause = new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now,
+            Now, 15, 1, sourceAgentGroupId, policySnapshotId, 1);
+        var maximumIntervalCause = new ProbeHeartbeatExpiryCause(Guid.NewGuid(), probeId, authorityAgentId, Guid.NewGuid(), Now,
+            Now, 30, 1, sourceAgentGroupId, policySnapshotId, 1);
+
+        Assert.Equal(ProbeHeartbeatExpiryCauseType.AgentHeartbeatExpiry, cause.CauseType);
+        Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, cause.SourceDisposition);
+        Assert.Equal(Now.AddSeconds(60), cause.DueAt);
+        Assert.Equal(Now.AddSeconds(90), maximumIntervalCause.DueAt);
+        Assert.Equal(default, cause.RequestedAt);
+        Assert.DoesNotContain(typeof(ProbeHeartbeatExpiryCause).GetConstructors().Single().GetParameters(), x => x.Name is "dueAt" or "requestedAt");
+        Assert.False(typeof(ProbeHeartbeatExpiryCause).GetProperty(nameof(ProbeHeartbeatExpiryCause.RequestedAt))!.GetSetMethod(true)!.IsPublic);
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(Guid.Empty, probeId, authorityAgentId, sourceResultId, Now, Now, 15, 1, sourceAgentGroupId, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, Guid.Empty, authorityAgentId, sourceResultId, Now, Now, 15, 1, sourceAgentGroupId, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, Guid.Empty, sourceResultId, Now, Now, 15, 1, sourceAgentGroupId, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, Guid.Empty, Now, Now, 15, 1, sourceAgentGroupId, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now, Now, 15, 1, Guid.Empty, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now, Now, 15, 1, sourceAgentGroupId, Guid.Empty, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now.ToOffset(TimeSpan.FromHours(7)), Now, 15, 1, sourceAgentGroupId, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now, Now.ToOffset(TimeSpan.FromHours(7)), 15, 1, sourceAgentGroupId, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now, Now, 15, 0, sourceAgentGroupId, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now, Now, 15, 1, sourceAgentGroupId, policySnapshotId, 0));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now, Now, 14, 1, sourceAgentGroupId, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now, Now, 31, 1, sourceAgentGroupId, policySnapshotId, 1));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCause(causeId, probeId, authorityAgentId, sourceResultId, Now, DateTimeOffset.MaxValue.AddSeconds(-59), 15, 1, sourceAgentGroupId, policySnapshotId, 1));
+
+        var applied = ProbeHeartbeatExpiryCauseDisposition.Applied(causeId, probeId, policySnapshotId, 1, Now);
+        var noOps = new[]
+        {
+            ProbeHeartbeatExpiryCauseDisposition.ProjectionMissing(Guid.NewGuid(), probeId, policySnapshotId, 1, Now),
+            ProbeHeartbeatExpiryCauseDisposition.AuthorityWatermarkSuperseded(Guid.NewGuid(), probeId, policySnapshotId, 1, Now),
+            ProbeHeartbeatExpiryCauseDisposition.AuthorityHeartbeatAdvanced(Guid.NewGuid(), probeId, policySnapshotId, 1, Now),
+            ProbeHeartbeatExpiryCauseDisposition.VisibleAlreadyUnknown(Guid.NewGuid(), probeId, policySnapshotId, 1, Now),
+        };
+        Assert.Equal((ProbeHeartbeatExpiryCauseDispositionOutcome.Applied, "agent-heartbeat-expired", (DateTimeOffset?)Now), (applied.Outcome, applied.ReasonCode, applied.AppliedAt));
+        Assert.All(noOps, x => { Assert.Equal(ProbeHeartbeatExpiryCauseDispositionOutcome.NoOp, x.Outcome); Assert.Null(x.AppliedAt); });
+        Assert.Empty(typeof(ProbeHeartbeatExpiryCauseDisposition).GetConstructors());
+        var factories = typeof(ProbeHeartbeatExpiryCauseDisposition).GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(x => x.ReturnType == typeof(ProbeHeartbeatExpiryCauseDisposition)).Select(x => x.Name).Order().ToArray();
+        Assert.Equal(["Applied", "AuthorityHeartbeatAdvanced", "AuthorityWatermarkSuperseded", "ProjectionMissing", "VisibleAlreadyUnknown"], factories);
+        Assert.DoesNotContain(typeof(ProbeHeartbeatExpiryCauseDisposition).GetMethods(), x => x.Name == "NoOp" && x.IsPublic);
+        foreach (var factory in typeof(ProbeHeartbeatExpiryCauseDisposition).GetMethods(BindingFlags.Public | BindingFlags.Static).Where(x => x.ReturnType == typeof(ProbeHeartbeatExpiryCauseDisposition)))
+        {
+            var invalidIdArguments = new object?[] { Guid.Empty, probeId, policySnapshotId, 1, Now };
+            AssertFactoryValidation(factory, invalidIdArguments);
+            AssertFactoryValidation(factory, [causeId, Guid.Empty, policySnapshotId, 1, Now]);
+            AssertFactoryValidation(factory, [causeId, probeId, Guid.Empty, 1, Now]);
+            AssertFactoryValidation(factory, [causeId, probeId, policySnapshotId, 0, Now]);
+            AssertFactoryValidation(factory, [causeId, probeId, policySnapshotId, 1, Now.ToOffset(TimeSpan.FromHours(7))]);
+        }
+        var privateDispositionConstructor = typeof(ProbeHeartbeatExpiryCauseDisposition).GetConstructors(BindingFlags.NonPublic | BindingFlags.Instance).Single(x => x.GetParameters().Length == 8);
+        var invalidShape = Assert.Throws<TargetInvocationException>(() => privateDispositionConstructor.Invoke([causeId, probeId, policySnapshotId, 1, ProbeHeartbeatExpiryCauseDispositionOutcome.Applied, "wrong", Now, (DateTimeOffset?)null]));
+        Assert.IsType<DomainValidationException>(invalidShape.InnerException);
+        var invalidNoOpShape = Assert.Throws<TargetInvocationException>(() => privateDispositionConstructor.Invoke([causeId, probeId, policySnapshotId, 1, ProbeHeartbeatExpiryCauseDispositionOutcome.NoOp, ProbeHeartbeatExpiryCauseDisposition.ProjectionMissingReasonCode, Now, (DateTimeOffset?)Now]));
+        Assert.IsType<DomainValidationException>(invalidNoOpShape.InnerException);
+        var invalidOutcomeShape = Assert.Throws<TargetInvocationException>(() => privateDispositionConstructor.Invoke([causeId, probeId, policySnapshotId, 1, (ProbeHeartbeatExpiryCauseDispositionOutcome)999, "wrong", Now, (DateTimeOffset?)null]));
+        Assert.IsType<DomainValidationException>(invalidOutcomeShape.InnerException);
+
+        var transition = new ProbeHeartbeatExpiryCauseTransition(causeId, probeId, policySnapshotId, 1, ProbeStatus.Recovering, Now);
+        Assert.Equal((ProbeHeartbeatExpiryCauseDispositionOutcome.Applied, ProbeStatus.Recovering, ProbeStatus.Unknown, "agent-heartbeat-expired"), (transition.DispositionOutcome, transition.FromVisibleStatus, transition.ToVisibleStatus, transition.ReasonCode));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCauseTransition(causeId, probeId, policySnapshotId, 1, ProbeStatus.Unknown, Now));
+        // Maintenance is visual-only and not a ProbeStatus kernel enum member; its persisted enum value is invalid here too.
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCauseTransition(causeId, probeId, policySnapshotId, 1, (ProbeStatus)5, Now));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCauseTransition(causeId, probeId, policySnapshotId, 1, (ProbeStatus)999, Now));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCauseTransition(Guid.Empty, probeId, policySnapshotId, 1, ProbeStatus.Up, Now));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCauseTransition(causeId, Guid.Empty, policySnapshotId, 1, ProbeStatus.Up, Now));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCauseTransition(causeId, probeId, Guid.Empty, 1, ProbeStatus.Up, Now));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCauseTransition(causeId, probeId, policySnapshotId, 0, ProbeStatus.Up, Now));
+        Assert.Throws<DomainValidationException>(() => new ProbeHeartbeatExpiryCauseTransition(causeId, probeId, policySnapshotId, 1, ProbeStatus.Up, Now.ToOffset(TimeSpan.FromHours(7))));
+        var transitionConstructor = typeof(ProbeHeartbeatExpiryCauseTransition).GetConstructors().Single();
+        var transitionParameters = transitionConstructor.GetParameters();
+        Assert.All(transitionParameters, parameter => Assert.NotNull(parameter.Name));
+        var transitionParameterNames = transitionParameters.Select(parameter => parameter.Name).OfType<string>().ToArray();
+        Assert.Equal(transitionParameters.Length, transitionParameterNames.Length);
+        string[] expectedTransitionParameterNames = ["causeId", "probeId", "policySnapshotId", "policyVersion", "fromVisibleStatus", "appliedAt"];
+        Assert.True(expectedTransitionParameterNames.SequenceEqual(transitionParameterNames, StringComparer.Ordinal));
+        Assert.DoesNotContain(transitionConstructor.GetParameters(), x => x.Name is "dispositionOutcome" or "toVisibleStatus" or "reasonCode");
+
+        static void AssertFactoryValidation(MethodInfo factory, object?[] arguments)
+        {
+            var exception = Assert.Throws<TargetInvocationException>(() => factory.Invoke(null, arguments));
+            Assert.IsType<DomainValidationException>(exception.InnerException);
+        }
     }
 }

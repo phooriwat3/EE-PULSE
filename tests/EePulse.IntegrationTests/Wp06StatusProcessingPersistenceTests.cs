@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
+using System.Globalization;
 using System.Runtime.ExceptionServices;
 
 namespace EePulse.IntegrationTests;
@@ -177,13 +178,13 @@ public sealed class Wp06StatusProcessingPersistenceTests
         AssertSt04aModel(direct);
         var upEventId = Guid.NewGuid();
         await InsertLifecycleEventAsync(direct, upEventId, up, policy, "Resolved", "resolved", ProbeResultProcessingDispositionKind.StateDriving, ct);
-        await InsertSuppressionContextAsync(direct, upEventId, up.IncidentId, "resolved", policy.PolicyVersion, "Eligible", "confirmed-recovery", ct);
+        await InsertSuppressionContextAsync(direct, upEventId, up.IncidentId, "resolved", policy.PolicyVersion, "Eligible", "confirmed-recovery", null, ct);
         var degradedEventId = Guid.NewGuid();
         await InsertLifecycleEventAsync(direct, degradedEventId, degraded, policy, "Resolved", "resolved", ProbeResultProcessingDispositionKind.StateDriving, ct);
-        await InsertSuppressionContextAsync(direct, degradedEventId, degraded.IncidentId, "resolved", policy.PolicyVersion, "Eligible", "confirmed-recovery", ct);
+        await InsertSuppressionContextAsync(direct, degradedEventId, degraded.IncidentId, "resolved", policy.PolicyVersion, "Eligible", "confirmed-recovery", null, ct);
         var openedEventId = Guid.NewGuid();
         await InsertLifecycleEventAsync(direct, openedEventId, opened, policy, "Opened", "opened", ProbeResultProcessingDispositionKind.StateDriving, ct);
-        await InsertSuppressionContextAsync(direct, openedEventId, opened.IncidentId, "opened", policy.PolicyVersion, "Eligible", "availability-down", ct);
+        await InsertSuppressionContextAsync(direct, openedEventId, opened.IncidentId, "opened", policy.PolicyVersion, "Eligible", "availability-down", null, ct);
         var suppressionEventId = Guid.NewGuid();
         await InsertLifecycleEventAsync(direct, suppressionEventId, suppressionPair, policy, "Resolved", "resolved", ProbeResultProcessingDispositionKind.StateDriving, ct);
 
@@ -194,7 +195,7 @@ public sealed class Wp06StatusProcessingPersistenceTests
         // The policy-lineage BEFORE INSERT trigger rejects this shape before PostgreSQL evaluates the defense-in-depth check.
         await AssertPolicyLineageViolationAsync(() => InsertLifecycleEventAsync(direct, Guid.NewGuid(), nonStateDriving, policy, "Resolved", "resolved", ProbeResultProcessingDispositionKind.HistoricalOther, ct));
         await AssertPolicyLineageViolationAsync(() => InsertLifecycleEventAsync(direct, Guid.NewGuid(), mismatchPolicy, unrelatedPolicy, "Resolved", "resolved", ProbeResultProcessingDispositionKind.StateDriving, ct));
-        await AssertCheckViolationAsync(() => InsertSuppressionContextAsync(direct, suppressionEventId, suppressionPair.IncidentId, "resolved", policy.PolicyVersion, "Eligible", "availability-down", ct), "ck_notification_suppression_contexts_reason");
+        await AssertCheckViolationAsync(() => InsertSuppressionContextAsync(direct, suppressionEventId, suppressionPair.IncidentId, "resolved", policy.PolicyVersion, "Eligible", "availability-down", null, ct), "ck_notification_suppression_contexts_reason");
         await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE incident_lifecycle_events SET occurred_at = {seed.Now.AddSeconds(1)} WHERE event_id = {upEventId}", ct), "incident_lifecycle_events");
         await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM incident_lifecycle_events WHERE event_id = {upEventId}", ct), "incident_lifecycle_events");
         await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE notification_suppression_contexts SET reason_code = {"tampered"} WHERE event_id = {upEventId}", ct), "notification_suppression_contexts");
@@ -230,7 +231,7 @@ public sealed class Wp06StatusProcessingPersistenceTests
         await InsertLifecycleEventAsync(direct, occurrenceEventId, occurrence, policy, "Occurrence", occurrenceKey,
             ProbeResultProcessingDispositionKind.StateDriving, ct);
         await InsertSuppressionContextAsync(direct, occurrenceEventId, occurrence.IncidentId, occurrenceKey,
-            policy.PolicyVersion, "Suppressed", "recovery-failed", ct, seed.Now);
+            policy.PolicyVersion, "Suppressed", "recovery-failed", seed.Now, ct);
         await InsertLifecycleEventAsync(direct, Guid.NewGuid(), opened, policy, "Opened", "opened",
             ProbeResultProcessingDispositionKind.StateDriving, ct);
         await InsertLifecycleEventAsync(direct, Guid.NewGuid(), resolved, policy, "Resolved", "resolved",
@@ -272,13 +273,13 @@ public sealed class Wp06StatusProcessingPersistenceTests
         var eligibilityEventId = Guid.NewGuid();
         var eligibilityKey = $"occurrence:{eligibilitySource.ResultId:D}".ToLowerInvariant();
         await InsertLifecycleEventAsync(direct, eligibilityEventId, eligibilitySource, policy, "Occurrence", eligibilityKey, ProbeResultProcessingDispositionKind.StateDriving, ct);
-        await AssertCheckViolationAsync(() => InsertSuppressionContextAsync(direct, eligibilityEventId, eligibilitySource.IncidentId, eligibilityKey, policy.PolicyVersion, "Eligible", "recovery-failed", ct), "ck_notification_suppression_contexts_eligibility");
+        await AssertCheckViolationAsync(() => InsertSuppressionContextAsync(direct, eligibilityEventId, eligibilitySource.IncidentId, eligibilityKey, policy.PolicyVersion, "Eligible", "recovery-failed", null, ct), "ck_notification_suppression_contexts_eligibility");
 
         var reasonSource = await AddLifecycleSourceAsync(options, seed, policy, ProbeStatus.Recovering, ProbeStatus.Down, "recovery-failed", ct);
         var reasonEventId = Guid.NewGuid();
         var reasonKey = $"occurrence:{reasonSource.ResultId:D}".ToLowerInvariant();
         await InsertLifecycleEventAsync(direct, reasonEventId, reasonSource, policy, "Occurrence", reasonKey, ProbeResultProcessingDispositionKind.StateDriving, ct);
-        await AssertCheckViolationAsync(() => InsertSuppressionContextAsync(direct, reasonEventId, reasonSource.IncidentId, reasonKey, policy.PolicyVersion, "Suppressed", "availability-down", ct), "ck_notification_suppression_contexts_reason");
+        await AssertCheckViolationAsync(() => InsertSuppressionContextAsync(direct, reasonEventId, reasonSource.IncidentId, reasonKey, policy.PolicyVersion, "Suppressed", "availability-down", null, ct), "ck_notification_suppression_contexts_reason");
 
         var duplicateSourceIncidentId = Guid.NewGuid();
         await direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({duplicateSourceIncidentId}, {occurrence.ProbeId}, {"availability-down"}, {"Resolved"}, {occurrence.EventAt}, {occurrence.EventAt}, {"system-policy"}, {"confirmed-recovery"})", ct);
@@ -438,6 +439,21 @@ public sealed class Wp06StatusProcessingPersistenceTests
     private static Task<int> InsertFreshnessCauseAsync(EePulseDbContext db, FreshnessCause cause, DateTimeOffset requestedAt, CancellationToken ct) =>
         db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_freshness_expiry_causes (cause_id, probe_id, cause_type, source_agent_id, source_result_id, source_cursor_event_at, source_last_fresh_event_at, source_configuration_version, source_agent_group_id, source_disposition, policy_snapshot_id, policy_version, freshness_interval_seconds, freshness_grace_seconds, due_at, requested_at) VALUES ({cause.CauseId}, {cause.ProbeId}, {"ResultFreshnessExpiry"}, {cause.SourceAgentId}, {cause.SourceResultId}, {cause.SourceCursorEventAt}, {cause.SourceLastFreshEventAt}, {cause.SourceConfigurationVersion}, {cause.SourceAgentGroupId}, {"StateDriving"}, {cause.PolicySnapshotId}, {cause.PolicyVersion}, {cause.FreshnessIntervalSeconds}, {cause.FreshnessGraceSeconds}, {cause.DueAt}, {requestedAt})", ct);
 
+    private static Task<int> InsertHeartbeatCauseAsync(EePulseDbContext db, HeartbeatCause cause, DateTimeOffset requestedAt, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_heartbeat_expiry_causes (cause_id, probe_id, cause_type, authority_agent_id, source_result_id, source_cursor_event_at, source_last_heartbeat_received_at, source_heartbeat_interval_seconds, source_configuration_version, source_agent_group_id, source_disposition, policy_snapshot_id, policy_version, due_at, requested_at) VALUES ({cause.CauseId}, {cause.ProbeId}, {"AgentHeartbeatExpiry"}, {cause.AuthorityAgentId}, {cause.SourceResultId}, {cause.SourceCursorEventAt}, {cause.SourceLastHeartbeatReceivedAt}, {cause.SourceHeartbeatIntervalSeconds}, {cause.SourceConfigurationVersion}, {cause.SourceAgentGroupId}, {"StateDriving"}, {cause.PolicySnapshotId}, {cause.PolicyVersion}, {cause.DueAt}, {requestedAt})", ct);
+
+    private static Task<int> InsertHeartbeatCauseRawAsync(EePulseDbContext db, HeartbeatCause cause, string causeType,
+        string sourceDisposition, DateTimeOffset requestedAt, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_heartbeat_expiry_causes (cause_id, probe_id, cause_type, authority_agent_id, source_result_id, source_cursor_event_at, source_last_heartbeat_received_at, source_heartbeat_interval_seconds, source_configuration_version, source_agent_group_id, source_disposition, policy_snapshot_id, policy_version, due_at, requested_at) VALUES ({cause.CauseId}, {cause.ProbeId}, {causeType}, {cause.AuthorityAgentId}, {cause.SourceResultId}, {cause.SourceCursorEventAt}, {cause.SourceLastHeartbeatReceivedAt}, {cause.SourceHeartbeatIntervalSeconds}, {cause.SourceConfigurationVersion}, {cause.SourceAgentGroupId}, {sourceDisposition}, {cause.PolicySnapshotId}, {cause.PolicyVersion}, {cause.DueAt}, {requestedAt})", ct);
+
+    private static Task<int> InsertHeartbeatDispositionAsync(EePulseDbContext db, Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion,
+        string outcome, string reasonCode, DateTimeOffset expiryCutoffReceivedAt, DateTimeOffset? appliedAt, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_heartbeat_expiry_cause_dispositions (cause_id, probe_id, policy_snapshot_id, policy_version, outcome, reason_code, expiry_cutoff_received_at, applied_at) VALUES ({causeId}, {probeId}, {policySnapshotId}, {policyVersion}, {outcome}, {reasonCode}, {expiryCutoffReceivedAt}, {appliedAt})", ct);
+
+    private static Task<int> InsertHeartbeatTransitionAsync(EePulseDbContext db, Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion,
+        string dispositionOutcome, string fromVisibleStatus, string toVisibleStatus, string reasonCode, DateTimeOffset appliedAt, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_heartbeat_expiry_cause_transitions (cause_id, probe_id, policy_snapshot_id, policy_version, disposition_outcome, from_visible_status, to_visible_status, reason_code, applied_at) VALUES ({causeId}, {probeId}, {policySnapshotId}, {policyVersion}, {dispositionOutcome}, {fromVisibleStatus}, {toVisibleStatus}, {reasonCode}, {appliedAt})", ct);
+
     private static Task<int> InsertExpiryDispositionAsync(EePulseDbContext db, Guid causeId, Guid probeId,
         Guid policySnapshotId, int policyVersion, string outcome, string reasonCode,
         DateTimeOffset expiryCutoffReceivedAt, DateTimeOffset? appliedAt, CancellationToken ct) =>
@@ -486,6 +502,383 @@ public sealed class Wp06StatusProcessingPersistenceTests
         return new FreshnessSource(cause, policy, otherPolicy, otherVersionPolicy);
     }
 
+    private static async Task<HeartbeatSource> AddHeartbeatCauseSourceAsync(DbContextOptions<EePulseDbContext> options, Seed seed, CancellationToken ct)
+    {
+        var heartbeatAt = seed.Now.AddSeconds(10);
+        var policy = new ProbeStatusPolicySnapshot(Guid.NewGuid(), 1, 3, 2, 500, null, seed.Now);
+        var disposition = new ProbeResultProcessingDisposition(seed.AgentId, seed.ResultId, seed.ProbeId, seed.EventAt,
+            ProbeResultProcessingDispositionKind.StateDriving, "state-driving", policy.Id, policy.PolicyVersion, seed.Now);
+        var projection = new ProbeStatusProjection(seed.ProbeId, ProbeStatus.Up, 0, 1, seed.EventAt, seed.EventAt, seed.AgentId, seed.ResultId, null);
+        await using var write = new EePulseDbContext(options);
+        write.AddRange(policy, disposition, projection);
+        await write.SaveChangesAsync(ct);
+        await write.Database.ExecuteSqlInterpolatedAsync($"UPDATE agents SET last_heartbeat_at = {heartbeatAt} WHERE id = {seed.AgentId}", ct);
+        var cause = new HeartbeatCause(Guid.NewGuid(), seed.ProbeId, seed.AgentId, seed.ResultId, seed.EventAt, heartbeatAt,
+            20, 1, seed.AgentGroupId, policy.Id, policy.PolicyVersion, heartbeatAt.AddSeconds(60));
+        return new HeartbeatSource(cause, policy);
+    }
+
+    private static async Task<HeartbeatCause> InsertValidHeartbeatGenerationAsync(DbContextOptions<EePulseDbContext> options,
+        HeartbeatSource source, DateTimeOffset heartbeatAt, int intervalSeconds, CancellationToken ct)
+    {
+        var cause = source.Cause with
+        {
+            CauseId = Guid.NewGuid(),
+            SourceLastHeartbeatReceivedAt = heartbeatAt,
+            SourceHeartbeatIntervalSeconds = intervalSeconds,
+            DueAt = heartbeatAt.AddSeconds(Math.Max(60, 3 * intervalSeconds)),
+        };
+        await using var db = new EePulseDbContext(options);
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE agents SET last_heartbeat_at = {heartbeatAt}, heartbeat_interval_seconds = {intervalSeconds} WHERE id = {cause.AuthorityAgentId}", ct);
+        await InsertHeartbeatCauseAsync(db, cause, DateTimeOffset.UnixEpoch, ct);
+        return cause;
+    }
+
+    private static async Task<HeartbeatCause> AddAlternateHeartbeatSourceAsync(DbContextOptions<EePulseDbContext> options,
+        Seed seed, ProbeStatusPolicySnapshot policy, Guid agentId, Guid agentGroupId, Guid resultId, DateTimeOffset eventAt,
+        DateTimeOffset heartbeatAt, CancellationToken ct)
+    {
+        await using var db = new EePulseDbContext(options);
+        db.Add(new ProbeResultLedgerEntry(agentId, resultId, seed.ProbeId, 1, eventAt.AddSeconds(-1), eventAt,
+            1, 1, 0m, 1m, 1m, 1m, null, new byte[32], seed.Now));
+        db.Add(new ProbeResultProcessingDisposition(agentId, resultId, seed.ProbeId, eventAt,
+            ProbeResultProcessingDispositionKind.StateDriving, "state-driving", policy.Id, policy.PolicyVersion, seed.Now));
+        await db.SaveChangesAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE agents SET last_heartbeat_at = {heartbeatAt} WHERE id = {agentId}", ct);
+        return new HeartbeatCause(Guid.NewGuid(), seed.ProbeId, agentId, resultId, eventAt, heartbeatAt, 20, 1,
+            agentGroupId, policy.Id, policy.PolicyVersion, heartbeatAt.AddSeconds(60));
+    }
+
+    private static async Task AssertHeartbeatTriggerViolationAsync(Func<Task> action)
+    {
+        var exception = await Assert.ThrowsAsync<PostgresException>(action);
+        Assert.Equal(PostgresErrorCodes.RaiseException, exception.SqlState);
+        Assert.Equal("WP-06 heartbeat expiry cause source is invalid", exception.MessageText);
+        Assert.Null(exception.ConstraintName);
+    }
+
+    private static async Task AssertForeignKeyViolationAsync(Func<Task> action, string constraintName)
+    {
+        var exception = await Assert.ThrowsAsync<PostgresException>(action);
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
+        Assert.Equal(constraintName, exception.ConstraintName);
+    }
+
+    private static async Task AssertRestrictViolationAsync(Func<Task> action, string constraintName)
+    {
+        var exception = await Assert.ThrowsAsync<PostgresException>(action);
+        Assert.Equal("23001", exception.SqlState);
+        Assert.Equal(constraintName, exception.ConstraintName);
+    }
+
+    private static async Task<IReadOnlyList<string>> DisableForeignKeyEnforcementAsync(EePulseDbContext db, string tableName,
+        string constraintName, CancellationToken ct)
+    {
+        var triggers = await QueryForeignKeyTriggerNamesAsync(db, tableName, constraintName, ct);
+        Assert.NotEmpty(triggers);
+        var disabled = new List<string>();
+        try
+        {
+            foreach (var trigger in triggers)
+            {
+                await AlterValidatedTriggerAsync(db, tableName, trigger, false, ct);
+                disabled.Add(trigger);
+            }
+            return disabled;
+        }
+        catch (Exception primaryFailure)
+        {
+            try
+            {
+                await RestoreForeignKeyEnforcementAsync(db, tableName, disabled);
+            }
+            catch (Exception cleanupFailure)
+            {
+                primaryFailure.Data["FK trigger restoration failure"] = cleanupFailure;
+            }
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+            throw;
+        }
+    }
+
+    private static async Task RestoreForeignKeyEnforcementAsync(EePulseDbContext db, string tableName,
+        IReadOnlyList<string> triggers)
+    {
+        using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Exception? cleanupFailure = null;
+        foreach (var trigger in triggers.Reverse())
+        {
+            try
+            {
+                await AlterValidatedTriggerAsync(db, tableName, trigger, true, cleanupTimeout.Token);
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
+            }
+        }
+        if (cleanupFailure is not null) ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+    }
+
+    private static async Task WithForeignKeyEnforcementDisabledAsync(EePulseDbContext db, string tableName,
+        string constraintName, Func<Task> action, CancellationToken ct)
+    {
+        IReadOnlyList<string>? triggers = null;
+        Exception? primaryFailure = null;
+        try
+        {
+            triggers = await DisableForeignKeyEnforcementAsync(db, tableName, constraintName, ct);
+            await action();
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+            throw;
+        }
+        finally
+        {
+            if (triggers is not null)
+            {
+                try
+                {
+                    await RestoreForeignKeyEnforcementAsync(db, tableName, triggers);
+                }
+                catch (Exception cleanupFailure) when (primaryFailure is not null)
+                {
+                    primaryFailure.Data["FK trigger restoration failure"] = cleanupFailure;
+                }
+            }
+        }
+    }
+
+    private sealed record DisabledForeignKeyTriggers(string TableName, IReadOnlyList<string> Triggers);
+
+    private static async Task<IReadOnlyList<DisabledForeignKeyTriggers>> DisableCompetingDeleteForeignKeysAsync(
+        EePulseDbContext db, string principalTableName, string targetConstraintName, CancellationToken ct)
+    {
+        var constraints = await QueryCompetingDeleteForeignKeyNamesAsync(db, principalTableName, targetConstraintName, ct);
+        var disabled = new List<DisabledForeignKeyTriggers>();
+        try
+        {
+            foreach (var constraint in constraints)
+                disabled.Add(new DisabledForeignKeyTriggers(principalTableName,
+                    await DisableForeignKeyEnforcementAsync(db, principalTableName, constraint, ct)));
+            return disabled;
+        }
+        catch (Exception primaryFailure)
+        {
+            Exception? cleanupFailure = null;
+            foreach (var item in disabled.AsEnumerable().Reverse())
+            {
+                try { await RestoreForeignKeyEnforcementAsync(db, item.TableName, item.Triggers); }
+                catch (Exception exception) { cleanupFailure ??= exception; }
+            }
+            if (cleanupFailure is not null) primaryFailure.Data["Competing FK trigger restoration failure"] = cleanupFailure;
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+            throw;
+        }
+    }
+
+    private static async Task WithCompetingDeleteForeignKeysDisabledAsync(EePulseDbContext db, string principalTableName,
+        string targetConstraintName, Func<Task> action, CancellationToken ct)
+    {
+        IReadOnlyList<DisabledForeignKeyTriggers>? disabled = null;
+        Exception? primaryFailure = null;
+        try
+        {
+            disabled = await DisableCompetingDeleteForeignKeysAsync(db, principalTableName, targetConstraintName, ct);
+            await action();
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+            throw;
+        }
+        finally
+        {
+            if (disabled is not null)
+            {
+                Exception? cleanupFailure = null;
+                foreach (var item in disabled.Reverse())
+                {
+                    try { await RestoreForeignKeyEnforcementAsync(db, item.TableName, item.Triggers); }
+                    catch (Exception exception) { cleanupFailure ??= exception; }
+                }
+                if (primaryFailure is not null && cleanupFailure is not null)
+                    primaryFailure.Data["Competing FK trigger restoration failure"] = cleanupFailure;
+                if (primaryFailure is null && cleanupFailure is not null) ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+            }
+        }
+    }
+
+    private static async Task WithTriggerDisabledAsync(EePulseDbContext db, string tableName, string triggerName,
+        Func<Task> action, CancellationToken ct)
+    {
+        var disabled = false;
+        Exception? primaryFailure = null;
+        try
+        {
+            await ValidatePublicUserTriggerAsync(db, tableName, triggerName, ct);
+            await AlterValidatedTriggerAsync(db, tableName, triggerName, false, ct);
+            disabled = true;
+            await action();
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+            throw;
+        }
+        finally
+        {
+            if (disabled)
+            {
+                using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    await AlterValidatedTriggerAsync(db, tableName, triggerName, true, cleanupTimeout.Token);
+                }
+                catch (Exception cleanupFailure) when (primaryFailure is not null)
+                {
+                    primaryFailure.Data["Append-only trigger restoration failure"] = cleanupFailure;
+                }
+            }
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>> QueryForeignKeyTriggerNamesAsync(EePulseDbContext db,
+        string tableName, string constraintName, CancellationToken ct)
+    {
+        const string sql = """
+            SELECT t.tgname
+            FROM pg_trigger AS t
+            JOIN pg_constraint AS c ON c.oid = t.tgconstraint
+            JOIN pg_class AS r ON r.oid = t.tgrelid
+            JOIN pg_namespace AS n ON n.oid = r.relnamespace
+            WHERE n.nspname = 'public' AND r.relname = @tableName AND c.conname = @constraintName
+            ORDER BY t.tgname
+            """;
+        return await QueryCatalogStringsAsync(db, sql, [new NpgsqlParameter("tableName", tableName), new NpgsqlParameter("constraintName", constraintName)], ct);
+    }
+
+    private static async Task<IReadOnlyList<string>> QueryCompetingDeleteForeignKeyNamesAsync(EePulseDbContext db,
+        string principalTableName, string targetConstraintName, CancellationToken ct)
+    {
+        const string sql = """
+            SELECT c.conname
+            FROM pg_constraint AS c
+            JOIN pg_class AS r ON r.oid = c.confrelid
+            JOIN pg_namespace AS n ON n.oid = r.relnamespace
+            WHERE c.contype = 'f' AND n.nspname = 'public' AND r.relname = @principalTableName
+              AND c.conname <> @targetConstraintName
+            ORDER BY c.conname
+            """;
+        return await QueryCatalogStringsAsync(db, sql, [new NpgsqlParameter("principalTableName", principalTableName), new NpgsqlParameter("targetConstraintName", targetConstraintName)], ct);
+    }
+
+    private static async Task ValidatePublicUserTriggerAsync(EePulseDbContext db, string tableName, string triggerName,
+        CancellationToken ct)
+    {
+        const string sql = """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_trigger AS t
+                JOIN pg_class AS r ON r.oid = t.tgrelid
+                JOIN pg_namespace AS n ON n.oid = r.relnamespace
+                WHERE n.nspname = 'public' AND r.relname = @tableName AND t.tgname = @triggerName AND NOT t.tgisinternal)
+            """;
+        var exists = await QueryCatalogBooleanAsync(db, sql, [new NpgsqlParameter("tableName", tableName), new NpgsqlParameter("triggerName", triggerName)], ct);
+        Assert.True(exists, $"Expected public trigger {triggerName} on {tableName}.");
+    }
+
+    private static async Task AlterValidatedTriggerAsync(EePulseDbContext db, string tableName, string triggerName,
+        bool enable, CancellationToken ct)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var openedHere = connection.State != System.Data.ConnectionState.Open;
+        if (openedHere) await connection.OpenAsync(ct);
+        try
+        {
+            using var builder = new NpgsqlCommandBuilder();
+            await using var command = new NpgsqlCommand($"ALTER TABLE {builder.QuoteIdentifier(tableName)} {(enable ? "ENABLE" : "DISABLE")} TRIGGER {builder.QuoteIdentifier(triggerName)}", connection);
+            await command.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            if (openedHere) await connection.CloseAsync();
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>> QueryCatalogStringsAsync(EePulseDbContext db, string sql,
+        IReadOnlyList<NpgsqlParameter> parameters, CancellationToken ct)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var openedHere = connection.State != System.Data.ConnectionState.Open;
+        if (openedHere) await connection.OpenAsync(ct);
+        try
+        {
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddRange(parameters.ToArray());
+            var values = new List<string>();
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) values.Add(reader.GetString(0));
+            return values;
+        }
+        finally
+        {
+            if (openedHere) await connection.CloseAsync();
+        }
+    }
+
+    private static async Task<bool> QueryCatalogBooleanAsync(EePulseDbContext db, string sql,
+        IReadOnlyList<NpgsqlParameter> parameters, CancellationToken ct)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var openedHere = connection.State != System.Data.ConnectionState.Open;
+        if (openedHere) await connection.OpenAsync(ct);
+        try
+        {
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddRange(parameters.ToArray());
+            return (bool)(await command.ExecuteScalarAsync(ct))!;
+        }
+        finally
+        {
+            if (openedHere) await connection.CloseAsync();
+        }
+    }
+
+    private static async Task<DateTimeOffset> ReadDatabaseClockAsync(DbContextOptions<EePulseDbContext> options, CancellationToken ct)
+    {
+        await using var db = new EePulseDbContext(options);
+        return await db.Database.SqlQueryRaw<DateTimeOffset>("SELECT date_trunc('microseconds', clock_timestamp()) AS \"Value\"").SingleAsync(ct);
+    }
+
+    private static async Task<long> DatabaseObjectCountAsync(EePulseDbContext db, string sql,
+        IReadOnlyList<NpgsqlParameter> parameters, CancellationToken ct)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var openedHere = connection.State != System.Data.ConnectionState.Open;
+        if (openedHere) await connection.OpenAsync(ct);
+        try
+        {
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddRange(parameters.ToArray());
+            return Convert.ToInt64(await command.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            if (openedHere) await connection.CloseAsync();
+        }
+    }
+
+    private static Task<long> PublicNoArgumentFunctionCountAsync(EePulseDbContext db, string functionName,
+        CancellationToken ct) =>
+        DatabaseObjectCountAsync(db, "SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.oid = to_regprocedure(format('public.%I()', @functionName))", [new NpgsqlParameter("functionName", functionName)], ct);
+
+    private static Task<long> PublicTableTriggerCountAsync(EePulseDbContext db, string tableName, string triggerName,
+        CancellationToken ct) =>
+        // PostgreSQL stores identifiers normalized to its server-configured maximum length.
+        DatabaseObjectCountAsync(db, "SELECT count(*) FROM pg_trigger AS t JOIN pg_class AS c ON c.oid = t.tgrelid JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = @tableName AND t.tgname = left(@triggerName, current_setting('max_identifier_length')::integer) AND NOT t.tgisinternal", [new NpgsqlParameter("tableName", tableName), new NpgsqlParameter("triggerName", triggerName)], ct);
+
     private static string FreshnessPayload(Guid probeId, int intervalSeconds) =>
         $$"""{"probes":[{"probeId":"{{probeId:D}}","intervalSeconds":{{intervalSeconds}}}]}""";
 
@@ -511,13 +904,62 @@ public sealed class Wp06StatusProcessingPersistenceTests
         }
     }
 
+    private static async Task WaitForAgentLockBeforeProbeAdvisoryLockAsync(NpgsqlConnection observer, int backendProcessId,
+        Task insert, CancellationToken ct)
+    {
+        while (true)
+        {
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = @backendProcessId AND wait_event_type = 'Lock')
+                   AND EXISTS (SELECT 1 FROM pg_locks WHERE pid = @backendProcessId AND locktype = 'transactionid' AND NOT granted)
+                   AND NOT EXISTS (SELECT 1 FROM pg_locks WHERE pid = @backendProcessId AND locktype = 'advisory')
+                """, observer);
+            command.Parameters.AddWithValue("backendProcessId", backendProcessId);
+            if ((bool)(await command.ExecuteScalarAsync(ct))!) return;
+            if (insert.IsCompleted)
+            {
+                await insert;
+                throw new Xunit.Sdk.XunitException("Heartbeat cause insert did not wait on the authority Agent before requesting the Probe advisory lock.");
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(20), ct);
+        }
+    }
+
+    private static async Task InsertHeartbeatCauseOnConnectionAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+        HeartbeatCause cause, CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand("""
+            INSERT INTO probe_heartbeat_expiry_causes
+            (cause_id, probe_id, cause_type, authority_agent_id, source_result_id, source_cursor_event_at,
+             source_last_heartbeat_received_at, source_heartbeat_interval_seconds, source_configuration_version,
+             source_agent_group_id, source_disposition, policy_snapshot_id, policy_version, due_at, requested_at)
+            VALUES (@causeId, @probeId, 'AgentHeartbeatExpiry', @authorityAgentId, @sourceResultId, @sourceCursorEventAt,
+                    @sourceLastHeartbeatReceivedAt, @sourceHeartbeatIntervalSeconds, @sourceConfigurationVersion,
+                    @sourceAgentGroupId, 'StateDriving', @policySnapshotId, @policyVersion, @dueAt, @requestedAt)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("causeId", cause.CauseId);
+        command.Parameters.AddWithValue("probeId", cause.ProbeId);
+        command.Parameters.AddWithValue("authorityAgentId", cause.AuthorityAgentId);
+        command.Parameters.AddWithValue("sourceResultId", cause.SourceResultId);
+        command.Parameters.AddWithValue("sourceCursorEventAt", cause.SourceCursorEventAt);
+        command.Parameters.AddWithValue("sourceLastHeartbeatReceivedAt", cause.SourceLastHeartbeatReceivedAt);
+        command.Parameters.AddWithValue("sourceHeartbeatIntervalSeconds", cause.SourceHeartbeatIntervalSeconds);
+        command.Parameters.AddWithValue("sourceConfigurationVersion", cause.SourceConfigurationVersion);
+        command.Parameters.AddWithValue("sourceAgentGroupId", cause.SourceAgentGroupId);
+        command.Parameters.AddWithValue("policySnapshotId", cause.PolicySnapshotId);
+        command.Parameters.AddWithValue("policyVersion", cause.PolicyVersion);
+        command.Parameters.AddWithValue("dueAt", cause.DueAt);
+        command.Parameters.AddWithValue("requestedAt", DateTimeOffset.UnixEpoch);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     private static Task<int> InsertLifecycleEventAsync(EePulseDbContext db, Guid eventId, LifecycleSource source,
         ProbeStatusPolicySnapshot policy, string lifecycleEventType, string lifecycleEventKey,
         ProbeResultProcessingDispositionKind disposition, CancellationToken ct) =>
         db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO incident_lifecycle_events (event_id, incident_id, probe_id, source_agent_id, source_result_id, source_from_status, source_to_status, source_reason_code, policy_snapshot_id, policy_version, lifecycle_event_type, lifecycle_event_key, processing_disposition, occurred_at) VALUES ({eventId}, {source.IncidentId}, {source.ProbeId}, {source.AgentId}, {source.ResultId}, {source.FromStatus.ToString()}, {source.ToStatus.ToString()}, {source.ReasonCode}, {policy.Id}, {policy.PolicyVersion}, {lifecycleEventType}, {lifecycleEventKey}, {disposition.ToString()}, {source.EventAt})", ct);
 
     private static Task<int> InsertSuppressionContextAsync(EePulseDbContext db, Guid eventId, Guid incidentId,
-        string lifecycleEventKey, int policyVersion, string eligibility, string reasonCode, CancellationToken ct, DateTimeOffset? evaluatedAt = null)
+        string lifecycleEventKey, int policyVersion, string eligibility, string reasonCode, DateTimeOffset? evaluatedAt, CancellationToken ct)
     {
         var observedAt = evaluatedAt ?? DateTimeOffset.UnixEpoch;
         return db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO notification_suppression_contexts (event_id, incident_id, lifecycle_event_key, policy_version, eligibility, reason_code, evaluated_at) VALUES ({eventId}, {incidentId}, {lifecycleEventKey}, {policyVersion}, {eligibility}, {reasonCode}, {observedAt})", ct);
@@ -561,7 +1003,9 @@ public sealed class Wp06StatusProcessingPersistenceTests
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.ProbeId}, {seed.SecondEventAt.AddSeconds(1)}, {"HistoricalOther"}, {"late-order"}, {seed.Now})", ct));
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.OtherProbeId}, {seed.SecondEventAt}, {"HistoricalOther"}, {"late-order"}, {seed.Now})", ct));
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.ProbeId}, {seed.SecondEventAt}, {"HistoricalOther"}, {""}, {seed.Now})", ct));
-        await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.ProbeId}, {seed.SecondEventAt}, {"StateDriving"}, {"state-driving"}, {seed.Now})", ct));
+        var nullStateDrivingLineage = await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.ProbeId}, {seed.SecondEventAt}, {"StateDriving"}, {"state-driving"}, {seed.Now})", ct));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, nullStateDrivingLineage.SqlState);
+        Assert.Equal("ck_probe_result_processing_dispositions_state_driving", nullStateDrivingLineage.ConstraintName);
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, resolved_policy_snapshot_id, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.ProbeId}, {seed.SecondEventAt}, {"HistoricalOther"}, {"policy-lineage-unresolved"}, {policyId}, {seed.Now})", ct));
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_result_processing_dispositions (agent_id, result_id, probe_id, event_at, disposition, reason_code, resolved_policy_snapshot_id, resolved_policy_version, decided_at) VALUES ({seed.AgentId}, {seed.SecondResultId}, {seed.ProbeId}, {seed.SecondEventAt}, {"StateDriving"}, {"state-driving"}, {policyId}, {2}, {seed.Now})", ct));
     }
@@ -1042,6 +1486,781 @@ public sealed class Wp06StatusProcessingPersistenceTests
         }
     }
 
+    [Fact]
+    public async Task St10bPostgreSqlEnforcesHeartbeatExpiryCauseSourceContractAndAppendOnlyRows()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+        var beforeInsert = await ReadDatabaseClockAsync(options, ct);
+        await using var direct = new EePulseDbContext(options);
+        await InsertHeartbeatCauseAsync(direct, source.Cause, DateTimeOffset.UnixEpoch, ct);
+        var afterInsert = await ReadDatabaseClockAsync(options, ct);
+
+        await using (var read = new EePulseDbContext(options))
+        {
+            var cause = await read.ProbeHeartbeatExpiryCauses.AsNoTracking().SingleAsync(x => x.CauseId == source.Cause.CauseId, ct);
+            Assert.Equal((source.Cause.ProbeId, ProbeHeartbeatExpiryCauseType.AgentHeartbeatExpiry, source.Cause.AuthorityAgentId,
+                    source.Cause.SourceResultId, source.Cause.SourceCursorEventAt, source.Cause.SourceLastHeartbeatReceivedAt,
+                    source.Cause.SourceHeartbeatIntervalSeconds, source.Cause.SourceConfigurationVersion, source.Cause.SourceAgentGroupId,
+                    ProbeResultProcessingDispositionKind.StateDriving, source.Policy.Id, source.Policy.PolicyVersion, source.Cause.DueAt),
+                (cause.ProbeId, cause.CauseType, cause.AuthorityAgentId, cause.SourceResultId, cause.SourceCursorEventAt,
+                    cause.SourceLastHeartbeatReceivedAt, cause.SourceHeartbeatIntervalSeconds, cause.SourceConfigurationVersion,
+                    cause.SourceAgentGroupId, cause.SourceDisposition, cause.PolicySnapshotId, cause.PolicyVersion, cause.DueAt));
+            Assert.Equal(source.Cause.SourceLastHeartbeatReceivedAt.AddSeconds(60), cause.DueAt);
+            Assert.NotEqual(DateTimeOffset.UnixEpoch, cause.RequestedAt);
+            Assert.Equal(0, cause.RequestedAt.Ticks % 10);
+            Assert.InRange(cause.RequestedAt, beforeInsert.AddSeconds(-1), afterInsert.AddSeconds(1));
+        }
+
+        var cutoff = seed.Now.AddSeconds(90);
+        await InsertHeartbeatDispositionAsync(direct, source.Cause.CauseId, source.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", cutoff, cutoff, ct);
+        await InsertHeartbeatTransitionAsync(direct, source.Cause.CauseId, source.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "agent-heartbeat-expired", cutoff, ct);
+        await AssertUniqueViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with { CauseId = Guid.NewGuid() }, DateTimeOffset.UnixEpoch, ct), "ak_probe_heartbeat_expiry_causes_source");
+        await AssertTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with { CauseId = Guid.NewGuid(), DueAt = source.Cause.DueAt.AddTicks(10) }, DateTimeOffset.UnixEpoch, ct), "WP-06 heartbeat expiry cause source is invalid");
+
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_heartbeat_expiry_causes SET due_at = {source.Cause.DueAt} WHERE cause_id = {source.Cause.CauseId}", ct), "probe_heartbeat_expiry_causes");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_heartbeat_expiry_causes WHERE cause_id = {source.Cause.CauseId}", ct), "probe_heartbeat_expiry_causes");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_heartbeat_expiry_cause_dispositions SET reason_code = {"agent-heartbeat-expired"} WHERE cause_id = {source.Cause.CauseId}", ct), "probe_heartbeat_expiry_cause_dispositions");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_heartbeat_expiry_cause_dispositions WHERE cause_id = {source.Cause.CauseId}", ct), "probe_heartbeat_expiry_cause_dispositions");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_heartbeat_expiry_cause_transitions SET applied_at = {cutoff} WHERE cause_id = {source.Cause.CauseId}", ct), "probe_heartbeat_expiry_cause_transitions");
+        await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_heartbeat_expiry_cause_transitions WHERE cause_id = {source.Cause.CauseId}", ct), "probe_heartbeat_expiry_cause_transitions");
+    }
+
+    [Fact]
+    public async Task St10bPostgreSqlPersistsEveryHeartbeatNoOpAndKnownVisibleTransition()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+        await using var direct = new EePulseDbContext(options);
+
+        var noOpReasons = new[] { "projection-missing", "authority-watermark-superseded", "authority-heartbeat-advanced", "visible-already-unknown" };
+        var noOpRows = new List<(HeartbeatCause Cause, string ReasonCode, DateTimeOffset Cutoff)>();
+        foreach (var (reason, offset) in noOpReasons.Select((reason, index) => (reason, index + 1)))
+        {
+            var cause = await InsertValidHeartbeatGenerationAsync(options, source, source.Cause.SourceLastHeartbeatReceivedAt.AddMinutes(offset), 20, ct);
+            var cutoff = seed.Now.AddMinutes(offset);
+            await InsertHeartbeatDispositionAsync(direct, cause.CauseId, cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", reason, cutoff, null, ct);
+            noOpRows.Add((cause, reason, cutoff));
+        }
+
+        var statuses = new[] { "Up", "Degraded", "Down", "Recovering" };
+        var appliedRows = new List<(HeartbeatCause Cause, ProbeStatus FromStatus, DateTimeOffset AppliedAt)>();
+        foreach (var (fromStatus, offset) in statuses.Select((status, index) => (status, index + 10)))
+        {
+            var cause = await InsertValidHeartbeatGenerationAsync(options, source, source.Cause.SourceLastHeartbeatReceivedAt.AddMinutes(offset), 20, ct);
+            var appliedAt = seed.Now.AddMinutes(offset);
+            await InsertHeartbeatDispositionAsync(direct, cause.CauseId, cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", appliedAt, appliedAt, ct);
+            await InsertHeartbeatTransitionAsync(direct, cause.CauseId, cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", fromStatus, "Unknown", "agent-heartbeat-expired", appliedAt, ct);
+            appliedRows.Add((cause, Enum.Parse<ProbeStatus>(fromStatus), appliedAt));
+        }
+
+        foreach (var expected in noOpRows)
+        {
+            await using var read = new EePulseDbContext(options);
+            var row = await read.ProbeHeartbeatExpiryCauseDispositions.AsNoTracking().SingleAsync(x => x.CauseId == expected.Cause.CauseId, ct);
+            Assert.Equal((expected.Cause.CauseId, expected.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion,
+                ProbeHeartbeatExpiryCauseDispositionOutcome.NoOp, expected.ReasonCode, expected.Cutoff),
+                (row.CauseId, row.ProbeId, row.PolicySnapshotId, row.PolicyVersion, row.Outcome, row.ReasonCode, row.ExpiryCutoffReceivedAt));
+            Assert.Null(row.AppliedAt);
+        }
+        foreach (var expected in appliedRows)
+        {
+            await using var read = new EePulseDbContext(options);
+            var disposition = await read.ProbeHeartbeatExpiryCauseDispositions.AsNoTracking().SingleAsync(x => x.CauseId == expected.Cause.CauseId, ct);
+            var transition = await read.ProbeHeartbeatExpiryCauseTransitions.AsNoTracking().SingleAsync(x => x.CauseId == expected.Cause.CauseId, ct);
+            Assert.Equal((expected.Cause.CauseId, expected.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion,
+                ProbeHeartbeatExpiryCauseDispositionOutcome.Applied, "agent-heartbeat-expired", expected.AppliedAt, (DateTimeOffset?)expected.AppliedAt),
+                (disposition.CauseId, disposition.ProbeId, disposition.PolicySnapshotId, disposition.PolicyVersion, disposition.Outcome, disposition.ReasonCode, disposition.ExpiryCutoffReceivedAt, disposition.AppliedAt));
+            Assert.Equal((expected.Cause.CauseId, expected.Cause.ProbeId, source.Policy.Id, source.Policy.PolicyVersion,
+                ProbeHeartbeatExpiryCauseDispositionOutcome.Applied, expected.FromStatus, ProbeStatus.Unknown, "agent-heartbeat-expired", expected.AppliedAt),
+                (transition.CauseId, transition.ProbeId, transition.PolicySnapshotId, transition.PolicyVersion, transition.DispositionOutcome, transition.FromVisibleStatus, transition.ToVisibleStatus, transition.ReasonCode, transition.AppliedAt));
+        }
+    }
+
+    [Fact]
+    public async Task St10bPostgreSqlTriggerRejectsIndependentMutableSourceMismatches()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+        await using var direct = new EePulseDbContext(options);
+
+        await direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_status_projections WHERE probe_id = {source.Cause.ProbeId}", ct);
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause, DateTimeOffset.UnixEpoch, ct));
+        await direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO probe_status_projections (probe_id, underlying_status, visible_status, consecutive_failure_count, consecutive_success_count, watermark_event_at, watermark_agent_id, watermark_result_id, state_version) VALUES ({source.Cause.ProbeId}, {"Up"}, {"Up"}, {0}, {1}, {source.Cause.SourceCursorEventAt}, {source.Cause.AuthorityAgentId}, {source.Cause.SourceResultId}, {0L})", ct);
+        await direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_projections SET watermark_event_at = {source.Cause.SourceCursorEventAt.AddTicks(10)} WHERE probe_id = {source.Cause.ProbeId}", ct);
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with { CauseId = Guid.NewGuid() }, DateTimeOffset.UnixEpoch, ct));
+        await direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_projections SET watermark_event_at = {source.Cause.SourceCursorEventAt} WHERE probe_id = {source.Cause.ProbeId}", ct);
+        await direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE agents SET last_heartbeat_at = NULL WHERE id = {source.Cause.AuthorityAgentId}", ct);
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with { CauseId = Guid.NewGuid() }, DateTimeOffset.UnixEpoch, ct));
+        await direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE agents SET last_heartbeat_at = {source.Cause.SourceLastHeartbeatReceivedAt} WHERE id = {source.Cause.AuthorityAgentId}", ct);
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with { CauseId = Guid.NewGuid(), SourceLastHeartbeatReceivedAt = source.Cause.SourceLastHeartbeatReceivedAt.AddTicks(10), DueAt = source.Cause.DueAt.AddTicks(10) }, DateTimeOffset.UnixEpoch, ct));
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with { CauseId = Guid.NewGuid(), SourceHeartbeatIntervalSeconds = 21, DueAt = source.Cause.SourceLastHeartbeatReceivedAt.AddSeconds(63) }, DateTimeOffset.UnixEpoch, ct));
+    }
+
+    [Fact]
+    public async Task St10bPostgreSqlDistinguishesSameHeartbeatGenerationByInterval()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+        var heartbeatAt = source.Cause.SourceLastHeartbeatReceivedAt.AddMinutes(5);
+        var interval15 = await InsertValidHeartbeatGenerationAsync(options, source, heartbeatAt, 15, ct);
+        await using (var firstRead = new EePulseDbContext(options))
+        {
+            var agent = await firstRead.Agents.AsNoTracking().SingleAsync(x => x.Id == source.Cause.AuthorityAgentId, ct);
+            Assert.Equal((heartbeatAt, 15), (agent.LastHeartbeatAt, agent.HeartbeatIntervalSeconds));
+        }
+        var interval16 = await InsertValidHeartbeatGenerationAsync(options, source, heartbeatAt, 16, ct);
+        await using (var secondRead = new EePulseDbContext(options))
+        {
+            var agent = await secondRead.Agents.AsNoTracking().SingleAsync(x => x.Id == source.Cause.AuthorityAgentId, ct);
+            Assert.Equal((heartbeatAt, 16), (agent.LastHeartbeatAt, agent.HeartbeatIntervalSeconds));
+        }
+
+        await using var read = new EePulseDbContext(options);
+        var rows = await read.ProbeHeartbeatExpiryCauses.AsNoTracking()
+            .Where(x => x.CauseId == interval15.CauseId || x.CauseId == interval16.CauseId)
+            .OrderBy(x => x.SourceHeartbeatIntervalSeconds).ToListAsync(ct);
+        Assert.Collection(rows,
+            row => Assert.Equal((interval15.CauseId, heartbeatAt, 15, heartbeatAt.AddSeconds(60)), (row.CauseId, row.SourceLastHeartbeatReceivedAt, row.SourceHeartbeatIntervalSeconds, row.DueAt)),
+            row => Assert.Equal((interval16.CauseId, heartbeatAt, 16, heartbeatAt.AddSeconds(60)), (row.CauseId, row.SourceLastHeartbeatReceivedAt, row.SourceHeartbeatIntervalSeconds, row.DueAt)));
+        Assert.NotEqual(interval15.CauseId, interval16.CauseId);
+        Assert.All(rows, row =>
+        {
+            Assert.Equal(source.Cause.ProbeId, row.ProbeId);
+            Assert.Equal(source.Cause.AuthorityAgentId, row.AuthorityAgentId);
+            Assert.Equal(source.Cause.SourceResultId, row.SourceResultId);
+            Assert.Equal(source.Cause.SourceCursorEventAt, row.SourceCursorEventAt);
+            Assert.Equal(heartbeatAt, row.SourceLastHeartbeatReceivedAt);
+        });
+    }
+
+    [Fact]
+    public async Task St10bPostgreSqlTriggerRejectsRemainingIndependentHeartbeatSourceMismatches()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var sourceA = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+        var sourceB = await AddAlternateHeartbeatSourceAsync(options, seed, sourceA.Policy, seed.SecondaryAgentId, seed.AgentGroupId,
+            Guid.NewGuid(), seed.EventAt, sourceA.Cause.SourceLastHeartbeatReceivedAt, ct);
+        await using var direct = new EePulseDbContext(options);
+
+        // Both B principals/FKs are valid; the projection still belongs to A, so watermark authority is the first failure.
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, sourceB, DateTimeOffset.UnixEpoch, ct));
+
+        var sameAgentResultB = await AddAlternateHeartbeatSourceAsync(options, seed, sourceA.Policy, seed.AgentId, seed.AgentGroupId,
+            Guid.NewGuid(), seed.EventAt, sourceA.Cause.SourceLastHeartbeatReceivedAt, ct);
+        // Both result sources share the same Agent and cursor event; only the persisted watermark result remains A.
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, sameAgentResultB, DateTimeOffset.UnixEpoch, ct));
+
+        // Projection/Agent checks pass for this synthetic watermark, then the exact ledger lookup is the first trigger guard before its later FK.
+        var missingLedgerResultId = Guid.NewGuid();
+        await direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_projections SET watermark_result_id = {missingLedgerResultId} WHERE probe_id = {sourceA.Cause.ProbeId}", ct);
+        var authoritySourceMismatch = sourceA.Cause with { CauseId = Guid.NewGuid(), SourceResultId = missingLedgerResultId };
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, authoritySourceMismatch, DateTimeOffset.UnixEpoch, ct));
+        await direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_projections SET watermark_result_id = {sourceA.Cause.SourceResultId} WHERE probe_id = {sourceA.Cause.ProbeId}", ct);
+
+        var otherGroup = new AgentGroup(Guid.NewGuid(), "ST10B Other", null, seed.Now);
+        var policyB = new ProbeStatusPolicySnapshot(Guid.NewGuid(), 1, 3, 2, 500, null, seed.Now);
+        var policyV2 = new ProbeStatusPolicySnapshot(Guid.NewGuid(), 2, 3, 2, 500, null, seed.Now);
+        await using (var write = new EePulseDbContext(options))
+        {
+            write.AddRange(otherGroup, new AgentConfigurationSnapshot(otherGroup.Id, 1, FreshnessPayload(seed.ProbeId, 30), new byte[32], seed.Now, null),
+                new AgentConfigurationSnapshot(seed.AgentGroupId, 2, FreshnessPayload(seed.ProbeId, 30), new byte[32], seed.Now, null), policyB, policyV2);
+            await write.SaveChangesAsync(ct);
+        }
+
+        // SourceAgentGroupId is both the Agent-equality field and the configuration FK group; the valid group-B snapshot proves this is the Agent/source-group guard, not a missing FK.
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, sourceA.Cause with { CauseId = Guid.NewGuid(), SourceAgentGroupId = otherGroup.Id }, DateTimeOffset.UnixEpoch, ct));
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, sourceA.Cause with { CauseId = Guid.NewGuid(), SourceConfigurationVersion = 2 }, DateTimeOffset.UnixEpoch, ct));
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, sourceA.Cause with { CauseId = Guid.NewGuid(), PolicySnapshotId = policyB.Id }, DateTimeOffset.UnixEpoch, ct));
+
+        // Snapshot identity is a primary key, so an independent same-ID V1/V2 fixture is impossible; V2 remains a valid principal and exercises the policy-version lineage guard.
+        await AssertHeartbeatTriggerViolationAsync(() => InsertHeartbeatCauseAsync(direct, sourceA.Cause with { CauseId = Guid.NewGuid(), PolicySnapshotId = policyV2.Id, PolicyVersion = policyV2.PolicyVersion }, DateTimeOffset.UnixEpoch, ct));
+    }
+
+    [Fact]
+    public async Task St10bPostgreSqlIsolatesHeartbeatExpiryDeclarativeCheckConstraints()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+        await using var direct = new EePulseDbContext(options);
+
+        var historicalResultId = Guid.NewGuid();
+        await using (var write = new EePulseDbContext(options))
+        {
+            write.Add(new ProbeResultLedgerEntry(seed.AgentId, historicalResultId, seed.ProbeId, 1,
+                seed.EventAt.AddSeconds(-1), seed.EventAt, 1, 1, 0m, 1m, 1m, 1m, null, new byte[32], seed.Now));
+            write.Add(new ProbeResultProcessingDisposition(seed.AgentId, historicalResultId, seed.ProbeId, seed.EventAt,
+                ProbeResultProcessingDispositionKind.HistoricalOther, "late-order", null, null, seed.Now));
+            await write.SaveChangesAsync(ct);
+        }
+
+        await direct.Database.ExecuteSqlRawAsync("ALTER TABLE probe_heartbeat_expiry_causes DISABLE TRIGGER tr_probe_heartbeat_expiry_causes_validate", ct);
+        try
+        {
+            await AssertCheckViolationAsync(() => InsertHeartbeatCauseRawAsync(direct, source.Cause with { CauseId = Guid.NewGuid() }, "Invalid", "StateDriving", DateTimeOffset.UnixEpoch, ct), "ck_probe_heartbeat_expiry_causes_type");
+            await AssertCheckViolationAsync(() => InsertHeartbeatCauseRawAsync(direct, source.Cause with { CauseId = Guid.NewGuid(), SourceResultId = historicalResultId }, "AgentHeartbeatExpiry", "HistoricalOther", DateTimeOffset.UnixEpoch, ct), "ck_probe_heartbeat_expiry_causes_source_disposition");
+            await AssertCheckViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with { CauseId = Guid.NewGuid(), SourceHeartbeatIntervalSeconds = 14 }, DateTimeOffset.UnixEpoch, ct), "ck_probe_heartbeat_expiry_causes_heartbeat_interval");
+            await AssertCheckViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with { CauseId = Guid.NewGuid(), SourceHeartbeatIntervalSeconds = 31, DueAt = source.Cause.SourceLastHeartbeatReceivedAt.AddSeconds(93) }, DateTimeOffset.UnixEpoch, ct), "ck_probe_heartbeat_expiry_causes_heartbeat_interval");
+        }
+        finally
+        {
+            await direct.Database.ExecuteSqlRawAsync("ALTER TABLE probe_heartbeat_expiry_causes ENABLE TRIGGER tr_probe_heartbeat_expiry_causes_validate", CancellationToken.None);
+        }
+
+        var causes = new List<HeartbeatCause>();
+        for (var offset = 1; offset <= 9; offset++)
+            causes.Add(await InsertValidHeartbeatGenerationAsync(options, source, source.Cause.SourceLastHeartbeatReceivedAt.AddMinutes(offset), 20, ct));
+        var cutoff = seed.Now.AddHours(1);
+
+        await AssertCheckViolationAsync(() => InsertHeartbeatDispositionAsync(direct, causes[0].CauseId, causes[0].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Invalid", "agent-heartbeat-expired", cutoff, cutoff, ct), "ck_probe_heartbeat_expiry_cause_dispositions_outcome");
+        await AssertCheckViolationAsync(() => InsertHeartbeatDispositionAsync(direct, causes[1].CauseId, causes[1].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "wrong", cutoff, cutoff, ct), "ck_probe_heartbeat_expiry_cause_dispositions_shape");
+        // A null applied_at yields SQL UNKNOWN for "applied_at = expiry_cutoff_received_at", which CHECK accepts;
+        // a distinct non-null timestamp makes the Applied branch definitively false.
+        await AssertCheckViolationAsync(() => InsertHeartbeatDispositionAsync(direct, causes[2].CauseId, causes[2].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", cutoff, cutoff.AddTicks(10), ct), "ck_probe_heartbeat_expiry_cause_dispositions_shape");
+        await AssertCheckViolationAsync(() => InsertHeartbeatDispositionAsync(direct, causes[3].CauseId, causes[3].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "wrong", cutoff, null, ct), "ck_probe_heartbeat_expiry_cause_dispositions_shape");
+        await AssertCheckViolationAsync(() => InsertHeartbeatDispositionAsync(direct, causes[4].CauseId, causes[4].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "projection-missing", cutoff, cutoff, ct), "ck_probe_heartbeat_expiry_cause_dispositions_shape");
+
+        await InsertHeartbeatDispositionAsync(direct, causes[5].CauseId, causes[5].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "projection-missing", cutoff, null, ct);
+        await InsertHeartbeatDispositionAsync(direct, causes[6].CauseId, causes[6].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", cutoff, cutoff, ct);
+        await InsertHeartbeatDispositionAsync(direct, causes[7].CauseId, causes[7].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", cutoff, cutoff, ct);
+        await InsertHeartbeatDispositionAsync(direct, causes[8].CauseId, causes[8].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", cutoff, cutoff, ct);
+        await AssertCheckViolationAsync(() => InsertHeartbeatTransitionAsync(direct, causes[5].CauseId, causes[5].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "NoOp", "Up", "Unknown", "agent-heartbeat-expired", cutoff, ct), "ck_probe_heartbeat_expiry_cause_transitions_disposition_outcome");
+        await AssertCheckViolationAsync(() => InsertHeartbeatTransitionAsync(direct, causes[6].CauseId, causes[6].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Unknown", "Unknown", "agent-heartbeat-expired", cutoff, ct), "ck_probe_heartbeat_expiry_cause_transitions_from_visible_status");
+        await AssertCheckViolationAsync(() => InsertHeartbeatTransitionAsync(direct, causes[7].CauseId, causes[7].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Up", "agent-heartbeat-expired", cutoff, ct), "ck_probe_heartbeat_expiry_cause_transitions_to_visible_status");
+        await AssertCheckViolationAsync(() => InsertHeartbeatTransitionAsync(direct, causes[8].CauseId, causes[8].ProbeId, source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "wrong", cutoff, ct), "ck_probe_heartbeat_expiry_cause_transitions_reason_code");
+    }
+
+    [Fact]
+    public async Task St10bPostgreSqlIsolatesReachableHeartbeatExpiryForeignKeys()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+        await using var direct = new EePulseDbContext(options);
+
+        await direct.Database.ExecuteSqlRawAsync("ALTER TABLE probe_heartbeat_expiry_causes DISABLE TRIGGER tr_probe_heartbeat_expiry_causes_validate", ct);
+        try
+        {
+            IReadOnlyList<string>? sourceLedgerTriggers = null;
+            IReadOnlyList<string>? sourceDispositionTriggers = null;
+            Exception? authorityPrimaryFailure = null;
+            try
+            {
+                sourceLedgerTriggers = await DisableForeignKeyEnforcementAsync(direct, "probe_heartbeat_expiry_causes", "FK_probe_heartbeat_expiry_causes_probe_result_ledger_authority~", ct);
+                sourceDispositionTriggers = await DisableForeignKeyEnforcementAsync(direct, "probe_heartbeat_expiry_causes", "FK_probe_heartbeat_expiry_causes_probe_result_processing_dispo~", ct);
+                // A non-existent Agent cannot own a valid ledger/disposition row; only those two competing FK checks are disabled.
+                await AssertForeignKeyViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with
+                {
+                    CauseId = Guid.NewGuid(),
+                    AuthorityAgentId = Guid.NewGuid(),
+                }, DateTimeOffset.UnixEpoch, ct), "FK_probe_heartbeat_expiry_causes_agents_authority_agent_id");
+            }
+            catch (Exception exception)
+            {
+                authorityPrimaryFailure = exception;
+                throw;
+            }
+            finally
+            {
+                Exception? cleanupFailure = null;
+                if (sourceDispositionTriggers is not null)
+                {
+                    try { await RestoreForeignKeyEnforcementAsync(direct, "probe_heartbeat_expiry_causes", sourceDispositionTriggers); }
+                    catch (Exception exception) { cleanupFailure ??= exception; }
+                }
+                if (sourceLedgerTriggers is not null)
+                {
+                    try { await RestoreForeignKeyEnforcementAsync(direct, "probe_heartbeat_expiry_causes", sourceLedgerTriggers); }
+                    catch (Exception exception) { cleanupFailure ??= exception; }
+                }
+                if (authorityPrimaryFailure is not null && cleanupFailure is not null)
+                    authorityPrimaryFailure.Data["FK trigger restoration failure"] = cleanupFailure;
+                if (authorityPrimaryFailure is null && cleanupFailure is not null) ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+            }
+
+            await WithForeignKeyEnforcementDisabledAsync(direct, "probe_heartbeat_expiry_causes", "FK_probe_heartbeat_expiry_causes_probe_result_ledger_authority~", async () =>
+            {
+                // probe_id is part of the source-ledger identity, so retain that competing composite FK only for this direct Probe-FK assertion.
+                await AssertForeignKeyViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with
+                {
+                    CauseId = Guid.NewGuid(),
+                    ProbeId = Guid.NewGuid(),
+                }, DateTimeOffset.UnixEpoch, ct), "FK_probe_heartbeat_expiry_causes_probes_probe_id");
+            }, ct);
+            await AssertForeignKeyViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with
+            {
+                CauseId = Guid.NewGuid(),
+                SourceCursorEventAt = source.Cause.SourceCursorEventAt.AddMinutes(1),
+            }, DateTimeOffset.UnixEpoch, ct), "FK_probe_heartbeat_expiry_causes_probe_result_ledger_authority~");
+
+            var historicalResultId = Guid.NewGuid();
+            await using (var write = new EePulseDbContext(options))
+            {
+                write.Add(new ProbeResultLedgerEntry(seed.AgentId, historicalResultId, seed.ProbeId, 1,
+                    seed.EventAt.AddSeconds(-1), seed.EventAt, 1, 1, 0m, 1m, 1m, 1m, null, new byte[32], seed.Now));
+                write.Add(new ProbeResultProcessingDisposition(seed.AgentId, historicalResultId, seed.ProbeId, seed.EventAt,
+                    ProbeResultProcessingDispositionKind.HistoricalOther, "late-order", null, null, seed.Now));
+                await write.SaveChangesAsync(ct);
+            }
+            await AssertForeignKeyViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with
+            {
+                CauseId = Guid.NewGuid(),
+                SourceResultId = historicalResultId,
+            }, DateTimeOffset.UnixEpoch, ct), "FK_probe_heartbeat_expiry_causes_probe_result_processing_dispo~");
+            await AssertForeignKeyViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with
+            {
+                CauseId = Guid.NewGuid(),
+                SourceConfigurationVersion = 2,
+            }, DateTimeOffset.UnixEpoch, ct), "FK_probe_heartbeat_expiry_causes_agent_configuration_snapshots~");
+            await AssertForeignKeyViolationAsync(() => InsertHeartbeatCauseAsync(direct, source.Cause with
+            {
+                CauseId = Guid.NewGuid(),
+                PolicySnapshotId = Guid.NewGuid(),
+            }, DateTimeOffset.UnixEpoch, ct), "FK_probe_heartbeat_expiry_causes_probe_status_policy_snapshots~");
+        }
+        finally
+        {
+            await direct.Database.ExecuteSqlRawAsync("ALTER TABLE probe_heartbeat_expiry_causes ENABLE TRIGGER tr_probe_heartbeat_expiry_causes_validate", CancellationToken.None);
+        }
+
+        var parent = await InsertValidHeartbeatGenerationAsync(options, source, source.Cause.SourceLastHeartbeatReceivedAt.AddMinutes(1), 20, ct);
+        await AssertForeignKeyViolationAsync(() => InsertHeartbeatDispositionAsync(direct, Guid.NewGuid(), parent.ProbeId,
+            source.Policy.Id, source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", seed.Now, seed.Now, ct),
+            "FK_probe_heartbeat_expiry_cause_dispositions_probe_heartbeat_e~");
+
+        await WithForeignKeyEnforcementDisabledAsync(direct, "probe_heartbeat_expiry_cause_dispositions", "FK_probe_heartbeat_expiry_cause_dispositions_probe_heartbeat_e~", async () =>
+        {
+            await AssertForeignKeyViolationAsync(() => InsertHeartbeatDispositionAsync(direct, parent.CauseId, parent.ProbeId,
+                Guid.NewGuid(), source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", seed.Now, seed.Now, ct),
+                "FK_probe_heartbeat_expiry_cause_dispositions_probe_status_poli~");
+            await AssertForeignKeyViolationAsync(() => InsertHeartbeatDispositionAsync(direct, parent.CauseId, Guid.NewGuid(),
+                source.Policy.Id, source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", seed.Now, seed.Now, ct),
+                "FK_probe_heartbeat_expiry_cause_dispositions_probes_probe_id");
+        }, ct);
+
+        await InsertHeartbeatDispositionAsync(direct, parent.CauseId, parent.ProbeId, source.Policy.Id, source.Policy.PolicyVersion,
+            "Applied", "agent-heartbeat-expired", seed.Now, seed.Now, ct);
+        await AssertForeignKeyViolationAsync(() => InsertHeartbeatTransitionAsync(direct, parent.CauseId, seed.OtherProbeId,
+            source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "agent-heartbeat-expired", seed.Now, ct),
+            "FK_probe_heartbeat_expiry_cause_transitions_probe_heartbeat_e~1");
+
+        await WithForeignKeyEnforcementDisabledAsync(direct, "probe_heartbeat_expiry_cause_transitions", "FK_probe_heartbeat_expiry_cause_transitions_probe_heartbeat_e~1", async () =>
+        {
+            await AssertForeignKeyViolationAsync(() => InsertHeartbeatTransitionAsync(direct, parent.CauseId, parent.ProbeId,
+                Guid.NewGuid(), source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "agent-heartbeat-expired", seed.Now, ct),
+                "FK_probe_heartbeat_expiry_cause_transitions_probe_status_polic~");
+            await AssertForeignKeyViolationAsync(() => InsertHeartbeatTransitionAsync(direct, parent.CauseId, Guid.NewGuid(),
+                source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "agent-heartbeat-expired", seed.Now, ct),
+                "FK_probe_heartbeat_expiry_cause_transitions_probes_probe_id");
+        }, ct);
+
+        var noOpParent = await InsertValidHeartbeatGenerationAsync(options, source, source.Cause.SourceLastHeartbeatReceivedAt.AddMinutes(2), 20, ct);
+        await InsertHeartbeatDispositionAsync(direct, noOpParent.CauseId, noOpParent.ProbeId, source.Policy.Id, source.Policy.PolicyVersion,
+            "NoOp", "projection-missing", seed.Now, null, ct);
+        await AssertForeignKeyViolationAsync(() => InsertHeartbeatTransitionAsync(direct, noOpParent.CauseId, noOpParent.ProbeId,
+            source.Policy.Id, source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "agent-heartbeat-expired", seed.Now, ct),
+            "FK_probe_heartbeat_expiry_cause_transitions_probe_heartbeat_ex~");
+    }
+
+    [Fact]
+    public async Task St10bPostgreSqlRestrictsDeletionOfHeartbeatExpiryPrincipals()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+        await using var direct = new EePulseDbContext(options);
+        await InsertHeartbeatCauseAsync(direct, source.Cause, DateTimeOffset.UnixEpoch, ct);
+
+        await WithCompetingDeleteForeignKeysDisabledAsync(direct, "probes", "FK_probe_heartbeat_expiry_causes_probes_probe_id",
+            () => AssertRestrictViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probes WHERE id = {source.Cause.ProbeId}", ct), "FK_probe_heartbeat_expiry_causes_probes_probe_id"), ct);
+        await WithCompetingDeleteForeignKeysDisabledAsync(direct, "agents", "FK_probe_heartbeat_expiry_causes_agents_authority_agent_id",
+            () => AssertRestrictViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM agents WHERE id = {source.Cause.AuthorityAgentId}", ct), "FK_probe_heartbeat_expiry_causes_agents_authority_agent_id"), ct);
+        await WithCompetingDeleteForeignKeysDisabledAsync(direct, "probe_result_ledger", "FK_probe_heartbeat_expiry_causes_probe_result_ledger_authority~",
+            () => AssertRestrictViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_result_ledger WHERE agent_id = {source.Cause.AuthorityAgentId} AND result_id = {source.Cause.SourceResultId}", ct), "FK_probe_heartbeat_expiry_causes_probe_result_ledger_authority~"), ct);
+
+        await WithTriggerDisabledAsync(direct, "probe_result_processing_dispositions", "tr_probe_result_processing_dispositions_append_only",
+            () => WithCompetingDeleteForeignKeysDisabledAsync(direct, "probe_result_processing_dispositions", "FK_probe_heartbeat_expiry_causes_probe_result_processing_dispo~",
+                () => AssertRestrictViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_result_processing_dispositions WHERE agent_id = {source.Cause.AuthorityAgentId} AND result_id = {source.Cause.SourceResultId}", ct), "FK_probe_heartbeat_expiry_causes_probe_result_processing_dispo~"), ct), ct);
+        await WithCompetingDeleteForeignKeysDisabledAsync(direct, "agent_configuration_snapshots", "FK_probe_heartbeat_expiry_causes_agent_configuration_snapshots~",
+            () => AssertRestrictViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM agent_configuration_snapshots WHERE agent_group_id = {source.Cause.SourceAgentGroupId} AND version = {source.Cause.SourceConfigurationVersion}", ct), "FK_probe_heartbeat_expiry_causes_agent_configuration_snapshots~"), ct);
+        await WithTriggerDisabledAsync(direct, "probe_status_policy_snapshots", "tr_probe_status_policy_snapshots_append_only",
+            () => WithCompetingDeleteForeignKeysDisabledAsync(direct, "probe_status_policy_snapshots", "FK_probe_heartbeat_expiry_causes_probe_status_policy_snapshots~",
+                () => AssertRestrictViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_status_policy_snapshots WHERE id = {source.Policy.Id}", ct), "FK_probe_heartbeat_expiry_causes_probe_status_policy_snapshots~"), ct), ct);
+
+        await InsertHeartbeatDispositionAsync(direct, source.Cause.CauseId, source.Cause.ProbeId, source.Policy.Id,
+            source.Policy.PolicyVersion, "NoOp", "projection-missing", seed.Now, null, ct);
+        await WithTriggerDisabledAsync(direct, "probe_heartbeat_expiry_causes", "tr_probe_heartbeat_expiry_causes_append_only",
+            () => WithCompetingDeleteForeignKeysDisabledAsync(direct, "probe_heartbeat_expiry_causes", "FK_probe_heartbeat_expiry_cause_dispositions_probe_heartbeat_e~",
+                () => AssertRestrictViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_heartbeat_expiry_causes WHERE cause_id = {source.Cause.CauseId}", ct), "FK_probe_heartbeat_expiry_cause_dispositions_probe_heartbeat_e~"), ct), ct);
+
+        var transitionCause = await InsertValidHeartbeatGenerationAsync(options, source, source.Cause.SourceLastHeartbeatReceivedAt.AddMinutes(1), 20, ct);
+        await InsertHeartbeatDispositionAsync(direct, transitionCause.CauseId, transitionCause.ProbeId, source.Policy.Id,
+            source.Policy.PolicyVersion, "Applied", "agent-heartbeat-expired", seed.Now, seed.Now, ct);
+        await InsertHeartbeatTransitionAsync(direct, transitionCause.CauseId, transitionCause.ProbeId, source.Policy.Id,
+            source.Policy.PolicyVersion, "Applied", "Up", "Unknown", "agent-heartbeat-expired", seed.Now, ct);
+        await WithTriggerDisabledAsync(direct, "probe_heartbeat_expiry_cause_dispositions", "tr_probe_heartbeat_expiry_cause_dispositions_append_only",
+            () => WithCompetingDeleteForeignKeysDisabledAsync(direct, "probe_heartbeat_expiry_cause_dispositions", "FK_probe_heartbeat_expiry_cause_transitions_probe_heartbeat_ex~",
+                () => AssertRestrictViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_heartbeat_expiry_cause_dispositions WHERE cause_id = {transitionCause.CauseId}", ct), "FK_probe_heartbeat_expiry_cause_transitions_probe_heartbeat_ex~"), ct), ct);
+
+        await using var read = new EePulseDbContext(options);
+        Assert.True(await read.Probes.AsNoTracking().AnyAsync(x => x.Id == source.Cause.ProbeId, ct));
+        Assert.True(await read.Agents.AsNoTracking().AnyAsync(x => x.Id == source.Cause.AuthorityAgentId, ct));
+        Assert.True(await read.ProbeResultLedgerEntries.AsNoTracking().AnyAsync(x => x.AgentId == source.Cause.AuthorityAgentId && x.ResultId == source.Cause.SourceResultId, ct));
+        Assert.True(await read.ProbeResultProcessingDispositions.AsNoTracking().AnyAsync(x => x.AgentId == source.Cause.AuthorityAgentId && x.ResultId == source.Cause.SourceResultId, ct));
+        Assert.True(await read.AgentConfigurationSnapshots.AsNoTracking().AnyAsync(x => x.AgentGroupId == source.Cause.SourceAgentGroupId && x.Version == source.Cause.SourceConfigurationVersion, ct));
+        Assert.True(await read.ProbeStatusPolicySnapshots.AsNoTracking().AnyAsync(x => x.Id == source.Policy.Id, ct));
+        Assert.True(await read.ProbeHeartbeatExpiryCauses.AsNoTracking().AnyAsync(x => x.CauseId == source.Cause.CauseId, ct));
+        Assert.True(await read.ProbeHeartbeatExpiryCauseDispositions.AsNoTracking().AnyAsync(x => x.CauseId == source.Cause.CauseId, ct));
+        Assert.True(await read.ProbeHeartbeatExpiryCauseDispositions.AsNoTracking().AnyAsync(x => x.CauseId == transitionCause.CauseId, ct));
+        Assert.True(await read.ProbeHeartbeatExpiryCauseTransitions.AsNoTracking().AnyAsync(x => x.CauseId == transitionCause.CauseId, ct));
+    }
+
+    [Fact]
+    public async Task St10bPostgreSqlCauseInsertWaitsForAuthorityAgentBeforeProbeAdvisoryLock()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken, timeout.Token);
+        var ct = cancellation.Token;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+
+        await using var holder = new NpgsqlConnection(postgres.ConnectionString);
+        await using var blocked = new NpgsqlConnection(postgres.ConnectionString);
+        await using var observer = new NpgsqlConnection(postgres.ConnectionString);
+        await holder.OpenAsync(ct);
+        await blocked.OpenAsync(ct);
+        await observer.OpenAsync(ct);
+        await using var holderTransaction = await holder.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        await using var blockedTransaction = await blocked.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        Task? blockedInsert = null;
+        var holderCompleted = false;
+        var blockedCompleted = false;
+        Exception? primaryFailure = null;
+        try
+        {
+            await using (var lockAgent = new NpgsqlCommand("SELECT id FROM agents WHERE id = @agentId FOR UPDATE", holder, holderTransaction))
+            {
+                lockAgent.Parameters.AddWithValue("agentId", source.Cause.AuthorityAgentId);
+                await lockAgent.ExecuteScalarAsync(ct);
+            }
+            int blockedBackendPid;
+            await using (var pid = new NpgsqlCommand("SELECT pg_backend_pid()", blocked, blockedTransaction))
+                blockedBackendPid = Convert.ToInt32(await pid.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+            blockedInsert = InsertHeartbeatCauseOnConnectionAsync(blocked, blockedTransaction, source.Cause, ct);
+            await WaitForAgentLockBeforeProbeAdvisoryLockAsync(observer, blockedBackendPid, blockedInsert, ct);
+
+            await holderTransaction.RollbackAsync(ct);
+            holderCompleted = true;
+            await blockedInsert;
+            await blockedTransaction.CommitAsync(ct);
+            blockedCompleted = true;
+            await using var read = new EePulseDbContext(options);
+            Assert.Equal(1, await read.ProbeHeartbeatExpiryCauses.AsNoTracking().CountAsync(x => x.CauseId == source.Cause.CauseId, ct));
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+            throw;
+        }
+        finally
+        {
+            using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            Exception? cleanupFailure = null;
+            if (!holderCompleted)
+            {
+                try { await holderTransaction.RollbackAsync(cleanupTimeout.Token); }
+                catch (Exception exception) { cleanupFailure ??= exception; }
+            }
+            if (blockedInsert is not null && !blockedInsert.IsCompleted)
+            {
+                try { await blockedInsert.WaitAsync(cleanupTimeout.Token); }
+                catch (Exception exception) { cleanupFailure ??= exception; }
+            }
+            if (!blockedCompleted)
+            {
+                try { await blockedTransaction.RollbackAsync(cleanupTimeout.Token); }
+                catch (Exception exception) { cleanupFailure ??= exception; }
+            }
+            if (primaryFailure is not null && cleanupFailure is not null) primaryFailure.Data["Concurrency cleanup failure"] = cleanupFailure;
+            if (primaryFailure is null && cleanupFailure is not null) ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+        }
+    }
+
+    [Fact]
+    public async Task St10bPostgreSqlCauseInsertReachesProbeAdvisoryLockAfterAgentShare()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken, timeout.Token);
+        var ct = cancellation.Token;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using (var migration = new EePulseDbContext(options)) await migration.Database.MigrateAsync(ct);
+        var seed = await SeedAsync(options, ct);
+        var source = await AddHeartbeatCauseSourceAsync(options, seed, ct);
+
+        await using var holder = new NpgsqlConnection(postgres.ConnectionString);
+        await using var blocked = new NpgsqlConnection(postgres.ConnectionString);
+        await using var observer = new NpgsqlConnection(postgres.ConnectionString);
+        await holder.OpenAsync(ct);
+        await blocked.OpenAsync(ct);
+        await observer.OpenAsync(ct);
+        await using var holderTransaction = await holder.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        await using var blockedTransaction = await blocked.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+        Task? blockedInsert = null;
+        var holderCompleted = false;
+        var blockedCompleted = false;
+        Exception? primaryFailure = null;
+        try
+        {
+            await using (var lockAgent = new NpgsqlCommand("SELECT id FROM agents WHERE id = @agentId FOR SHARE", holder, holderTransaction))
+            {
+                lockAgent.Parameters.AddWithValue("agentId", source.Cause.AuthorityAgentId);
+                await lockAgent.ExecuteScalarAsync(ct);
+            }
+            await using (var lockProbe = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@probeId, 0))", holder, holderTransaction))
+            {
+                lockProbe.Parameters.AddWithValue("probeId", source.Cause.ProbeId.ToString("D"));
+                await lockProbe.ExecuteNonQueryAsync(ct);
+            }
+            int blockedBackendPid;
+            await using (var pid = new NpgsqlCommand("SELECT pg_backend_pid()", blocked, blockedTransaction))
+                blockedBackendPid = Convert.ToInt32(await pid.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+            blockedInsert = InsertHeartbeatCauseOnConnectionAsync(blocked, blockedTransaction, source.Cause, ct);
+            // FOR SHARE is compatible with the holder's Agent share lock; the ungranted canonical advisory request proves B passed that stage.
+            await WaitForCauseAdvisoryLockAsync(observer, blockedBackendPid, source.Cause.ProbeId, blockedInsert, ct);
+
+            await holderTransaction.RollbackAsync(ct);
+            holderCompleted = true;
+            await blockedInsert;
+            await blockedTransaction.CommitAsync(ct);
+            blockedCompleted = true;
+            await using var read = new EePulseDbContext(options);
+            Assert.Equal(1, await read.ProbeHeartbeatExpiryCauses.AsNoTracking().CountAsync(x => x.CauseId == source.Cause.CauseId, ct));
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+            throw;
+        }
+        finally
+        {
+            using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            Exception? cleanupFailure = null;
+            if (!holderCompleted)
+            {
+                try { await holderTransaction.RollbackAsync(cleanupTimeout.Token); }
+                catch (Exception exception) { cleanupFailure ??= exception; }
+            }
+            if (blockedInsert is not null && !blockedInsert.IsCompleted)
+            {
+                try { await blockedInsert.WaitAsync(cleanupTimeout.Token); }
+                catch (Exception exception) { cleanupFailure ??= exception; }
+            }
+            if (!blockedCompleted)
+            {
+                try { await blockedTransaction.RollbackAsync(cleanupTimeout.Token); }
+                catch (Exception exception) { cleanupFailure ??= exception; }
+            }
+            if (primaryFailure is not null && cleanupFailure is not null) primaryFailure.Data["Concurrency cleanup failure"] = cleanupFailure;
+            if (primaryFailure is null && cleanupFailure is not null) ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+        }
+    }
+
+    [Fact]
+    public async Task St10bMigrationLifecycleCreatesAndRemovesOnlyHeartbeatPersistenceObjects()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(postgres.ConnectionString).Options;
+        await using var db = new EePulseDbContext(options);
+        var migrator = db.GetService<IMigrator>();
+        await migrator.MigrateAsync("20260827132616_WP06St10FreshnessExpiryApplication", ct);
+        Assert.Equal(0L, await DatabaseObjectCountAsync(db, "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('probe_heartbeat_expiry_causes', 'probe_heartbeat_expiry_cause_dispositions', 'probe_heartbeat_expiry_cause_transitions')", [], ct));
+        Assert.Equal(0L, await PublicNoArgumentFunctionCountAsync(db, "fn_validate_probe_heartbeat_expiry_cause", ct));
+        Assert.Equal(0L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_causes", "tr_probe_heartbeat_expiry_causes_validate", ct));
+        Assert.Equal(0L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_causes", "tr_probe_heartbeat_expiry_causes_append_only", ct));
+        Assert.Equal(0L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_cause_dispositions", "tr_probe_heartbeat_expiry_cause_dispositions_append_only", ct));
+        Assert.Equal(0L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_cause_transitions", "tr_probe_heartbeat_expiry_cause_transitions_append_only", ct));
+        Assert.Equal(1L, await PublicNoArgumentFunctionCountAsync(db, "wp06_status_processing_reject_append_only_mutation", ct));
+        Assert.Equal(1L, await PublicNoArgumentFunctionCountAsync(db, "wp06_probe_freshness_expiry_cause_validate_source", ct));
+        Assert.Equal(1L, await PublicNoArgumentFunctionCountAsync(db, "wp06_probe_freshness_expiry_cause_transition_validate_disposition_timestamp", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_causes", "tr_probe_freshness_expiry_causes_validate_source", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_causes", "tr_probe_freshness_expiry_causes_append_only", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_cause_transitions", "tr_probe_freshness_expiry_cause_transitions_validate_disposition_timestamp", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_cause_dispositions", "tr_probe_freshness_expiry_cause_dispositions_append_only", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_cause_transitions", "tr_probe_freshness_expiry_cause_transitions_append_only", ct));
+
+        await migrator.MigrateAsync("20260828024353_WP06St10bHeartbeatExpiryPersistence", ct);
+        Assert.Equal(3L, await DatabaseObjectCountAsync(db, "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('probe_heartbeat_expiry_causes', 'probe_heartbeat_expiry_cause_dispositions', 'probe_heartbeat_expiry_cause_transitions')", [], ct));
+        Assert.Equal(1L, await PublicNoArgumentFunctionCountAsync(db, "fn_validate_probe_heartbeat_expiry_cause", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_causes", "tr_probe_heartbeat_expiry_causes_validate", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_causes", "tr_probe_heartbeat_expiry_causes_append_only", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_cause_dispositions", "tr_probe_heartbeat_expiry_cause_dispositions_append_only", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_cause_transitions", "tr_probe_heartbeat_expiry_cause_transitions_append_only", ct));
+
+        await migrator.MigrateAsync("20260827132616_WP06St10FreshnessExpiryApplication", ct);
+        Assert.Equal(0L, await DatabaseObjectCountAsync(db, "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('probe_heartbeat_expiry_causes', 'probe_heartbeat_expiry_cause_dispositions', 'probe_heartbeat_expiry_cause_transitions')", [], ct));
+        Assert.Equal(0L, await PublicNoArgumentFunctionCountAsync(db, "fn_validate_probe_heartbeat_expiry_cause", ct));
+        Assert.Equal(0L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_causes", "tr_probe_heartbeat_expiry_causes_validate", ct));
+        Assert.Equal(0L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_causes", "tr_probe_heartbeat_expiry_causes_append_only", ct));
+        Assert.Equal(0L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_cause_dispositions", "tr_probe_heartbeat_expiry_cause_dispositions_append_only", ct));
+        Assert.Equal(0L, await PublicTableTriggerCountAsync(db, "probe_heartbeat_expiry_cause_transitions", "tr_probe_heartbeat_expiry_cause_transitions_append_only", ct));
+        Assert.Equal(1L, await PublicNoArgumentFunctionCountAsync(db, "wp06_status_processing_reject_append_only_mutation", ct));
+        Assert.Equal(1L, await PublicNoArgumentFunctionCountAsync(db, "wp06_probe_freshness_expiry_cause_validate_source", ct));
+        Assert.Equal(1L, await PublicNoArgumentFunctionCountAsync(db, "wp06_probe_freshness_expiry_cause_transition_validate_disposition_timestamp", ct));
+        Assert.Equal(3L, await DatabaseObjectCountAsync(db, "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('probe_freshness_expiry_causes', 'probe_freshness_expiry_cause_dispositions', 'probe_freshness_expiry_cause_transitions')", [], ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_causes", "tr_probe_freshness_expiry_causes_validate_source", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_causes", "tr_probe_freshness_expiry_causes_append_only", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_cause_transitions", "tr_probe_freshness_expiry_cause_transitions_validate_disposition_timestamp", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_cause_dispositions", "tr_probe_freshness_expiry_cause_dispositions_append_only", ct));
+        Assert.Equal(1L, await PublicTableTriggerCountAsync(db, "probe_freshness_expiry_cause_transitions", "tr_probe_freshness_expiry_cause_transitions_append_only", ct));
+    }
+
+    [Fact]
+    public async Task St10bSourceModelDefinesHeartbeatExpiryPersistenceContract()
+    {
+        var options = new DbContextOptionsBuilder<EePulseDbContext>()
+            .UseNpgsql("Host=localhost;Database=ee_pulse_st10b_contract;Username=unused;Password=unused")
+            .Options;
+        await using var db = new EePulseDbContext(options);
+        var model = db.GetService<IDesignTimeModel>().Model;
+        var policySnapshot = model.FindEntityType(typeof(ProbeStatusPolicySnapshot))!;
+        var cause = model.FindEntityType(typeof(ProbeHeartbeatExpiryCause))!;
+        var disposition = model.FindEntityType(typeof(ProbeHeartbeatExpiryCauseDisposition))!;
+        var transition = model.FindEntityType(typeof(ProbeHeartbeatExpiryCauseTransition))!;
+
+        var policyPrimaryKey = policySnapshot.FindPrimaryKey()!;
+        Assert.True(policyPrimaryKey.Properties.Select(x => x.Name).SequenceEqual([nameof(ProbeStatusPolicySnapshot.Id)]));
+        Assert.DoesNotContain(nameof(ProbeStatusPolicySnapshot.PolicyVersion), policyPrimaryKey.Properties.Select(x => x.Name));
+        var policyIdentityKey = policySnapshot.GetKeys().Single(key => key != policyPrimaryKey && key.Properties.Select(x => x.Name)
+            .SequenceEqual([nameof(ProbeStatusPolicySnapshot.Id), nameof(ProbeStatusPolicySnapshot.PolicyVersion)]));
+        Assert.True(policyIdentityKey.Properties.Select(x => x.Name)
+            .SequenceEqual([nameof(ProbeStatusPolicySnapshot.Id), nameof(ProbeStatusPolicySnapshot.PolicyVersion)]));
+        // The alternate identity exists, but the Id-only primary key still prevents two rows sharing an Id at different versions.
+
+        Assert.Equal("probe_heartbeat_expiry_causes", cause.GetTableName());
+        Assert.True(cause.FindPrimaryKey()!.Properties.Select(x => x.Name).SequenceEqual([nameof(ProbeHeartbeatExpiryCause.CauseId)]));
+        var causeLineageKey = cause.GetKeys().Single(key => key.Properties.Select(x => x.Name).SequenceEqual([nameof(ProbeHeartbeatExpiryCause.CauseId), nameof(ProbeHeartbeatExpiryCause.ProbeId), nameof(ProbeHeartbeatExpiryCause.PolicySnapshotId), nameof(ProbeHeartbeatExpiryCause.PolicyVersion)]));
+        Assert.Equal("ak_probe_heartbeat_expiry_causes_lineage", causeLineageKey.GetName());
+        var causeSourceKey = cause.GetKeys().Single(key => key.Properties.Select(x => x.Name).SequenceEqual([nameof(ProbeHeartbeatExpiryCause.ProbeId), nameof(ProbeHeartbeatExpiryCause.AuthorityAgentId), nameof(ProbeHeartbeatExpiryCause.SourceResultId), nameof(ProbeHeartbeatExpiryCause.SourceCursorEventAt), nameof(ProbeHeartbeatExpiryCause.SourceLastHeartbeatReceivedAt), nameof(ProbeHeartbeatExpiryCause.SourceHeartbeatIntervalSeconds)]));
+        Assert.Equal("ak_probe_heartbeat_expiry_causes_source", causeSourceKey.GetName());
+        foreach (var column in new (string Property, string Column, int? Length, bool Converted)[]
+                 {
+                     (nameof(ProbeHeartbeatExpiryCause.CauseId), "cause_id", null, false), (nameof(ProbeHeartbeatExpiryCause.ProbeId), "probe_id", null, false),
+                     (nameof(ProbeHeartbeatExpiryCause.CauseType), "cause_type", 32, true), (nameof(ProbeHeartbeatExpiryCause.AuthorityAgentId), "authority_agent_id", null, false),
+                     (nameof(ProbeHeartbeatExpiryCause.SourceResultId), "source_result_id", null, false), (nameof(ProbeHeartbeatExpiryCause.SourceCursorEventAt), "source_cursor_event_at", null, false),
+                     (nameof(ProbeHeartbeatExpiryCause.SourceLastHeartbeatReceivedAt), "source_last_heartbeat_received_at", null, false), (nameof(ProbeHeartbeatExpiryCause.SourceHeartbeatIntervalSeconds), "source_heartbeat_interval_seconds", null, false),
+                     (nameof(ProbeHeartbeatExpiryCause.SourceConfigurationVersion), "source_configuration_version", null, false), (nameof(ProbeHeartbeatExpiryCause.SourceAgentGroupId), "source_agent_group_id", null, false),
+                     (nameof(ProbeHeartbeatExpiryCause.SourceDisposition), "source_disposition", 32, true), (nameof(ProbeHeartbeatExpiryCause.PolicySnapshotId), "policy_snapshot_id", null, false),
+                     (nameof(ProbeHeartbeatExpiryCause.PolicyVersion), "policy_version", null, false), (nameof(ProbeHeartbeatExpiryCause.DueAt), "due_at", null, false), (nameof(ProbeHeartbeatExpiryCause.RequestedAt), "requested_at", null, false),
+                 }) AssertRequiredColumn(cause, column.Property, column.Column, column.Length, column.Converted);
+        Assert.Equal(ValueGenerated.OnAdd, cause.FindProperty(nameof(ProbeHeartbeatExpiryCause.RequestedAt))!.ValueGenerated);
+        Assert.Equal("clock_timestamp()", cause.FindProperty(nameof(ProbeHeartbeatExpiryCause.RequestedAt))!.GetDefaultValueSql());
+        Assert.Contains(cause.GetIndexes(), x => x.Properties.Select(p => p.Name).SequenceEqual([nameof(ProbeHeartbeatExpiryCause.DueAt), nameof(ProbeHeartbeatExpiryCause.ProbeId)]) && x.GetDatabaseName() == "ix_probe_heartbeat_expiry_causes_due_probe");
+        Assert.Contains(cause.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_causes_type" && x.Sql == "cause_type = 'AgentHeartbeatExpiry'");
+        Assert.Contains(cause.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_causes_source_disposition" && x.Sql == "source_disposition = 'StateDriving'");
+        Assert.Contains(cause.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_causes_versions" && x.Sql == "source_configuration_version >= 1 AND policy_version >= 1");
+        Assert.Contains(cause.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_causes_heartbeat_interval" && x.Sql == "source_heartbeat_interval_seconds BETWEEN 15 AND 30");
+        Assert.Contains(cause.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_causes_due_at" && x.Sql == "due_at >= source_last_heartbeat_received_at");
+        AssertRestrictiveForeignKey(cause, [nameof(ProbeHeartbeatExpiryCause.ProbeId)], typeof(Probe), [nameof(Probe.Id)]);
+        AssertRestrictiveForeignKey(cause, [nameof(ProbeHeartbeatExpiryCause.AuthorityAgentId)], typeof(EePulse.Domain.Agents.Agent), [nameof(EePulse.Domain.Agents.Agent.Id)]);
+        AssertRestrictiveForeignKey(cause, [nameof(ProbeHeartbeatExpiryCause.AuthorityAgentId), nameof(ProbeHeartbeatExpiryCause.SourceResultId), nameof(ProbeHeartbeatExpiryCause.ProbeId), nameof(ProbeHeartbeatExpiryCause.SourceCursorEventAt)], typeof(ProbeResultLedgerEntry), [nameof(ProbeResultLedgerEntry.AgentId), nameof(ProbeResultLedgerEntry.ResultId), nameof(ProbeResultLedgerEntry.ProbeId), nameof(ProbeResultLedgerEntry.EndedAt)]);
+        AssertRestrictiveForeignKey(cause, [nameof(ProbeHeartbeatExpiryCause.AuthorityAgentId), nameof(ProbeHeartbeatExpiryCause.SourceResultId), nameof(ProbeHeartbeatExpiryCause.SourceDisposition)], typeof(ProbeResultProcessingDisposition), [nameof(ProbeResultProcessingDisposition.AgentId), nameof(ProbeResultProcessingDisposition.ResultId), nameof(ProbeResultProcessingDisposition.Disposition)]);
+        AssertRestrictiveForeignKey(cause, [nameof(ProbeHeartbeatExpiryCause.SourceAgentGroupId), nameof(ProbeHeartbeatExpiryCause.SourceConfigurationVersion)], typeof(AgentConfigurationSnapshot), [nameof(AgentConfigurationSnapshot.AgentGroupId), nameof(AgentConfigurationSnapshot.Version)]);
+        AssertRestrictiveForeignKey(cause, [nameof(ProbeHeartbeatExpiryCause.PolicySnapshotId), nameof(ProbeHeartbeatExpiryCause.PolicyVersion)], typeof(ProbeStatusPolicySnapshot), [nameof(ProbeStatusPolicySnapshot.Id), nameof(ProbeStatusPolicySnapshot.PolicyVersion)]);
+        Assert.DoesNotContain(cause.GetForeignKeys(), foreignKey => foreignKey.Properties.Any(property => property.Name is nameof(ProbeHeartbeatExpiryCause.SourceLastHeartbeatReceivedAt) or nameof(ProbeHeartbeatExpiryCause.SourceHeartbeatIntervalSeconds)));
+
+        Assert.Equal("probe_heartbeat_expiry_cause_dispositions", disposition.GetTableName());
+        Assert.True(disposition.FindPrimaryKey()!.Properties.Select(x => x.Name).SequenceEqual([nameof(ProbeHeartbeatExpiryCauseDisposition.CauseId)]));
+        var dispositionOutcomeKey = disposition.GetKeys().Single(key => key.Properties.Select(x => x.Name).SequenceEqual([nameof(ProbeHeartbeatExpiryCauseDisposition.CauseId), nameof(ProbeHeartbeatExpiryCauseDisposition.Outcome)]));
+        Assert.Equal("ak_probe_heartbeat_expiry_cause_dispositions_cause_outcome", dispositionOutcomeKey.GetName());
+        AssertRequiredColumn(disposition, nameof(ProbeHeartbeatExpiryCauseDisposition.CauseId), "cause_id", null, false);
+        AssertRequiredColumn(disposition, nameof(ProbeHeartbeatExpiryCauseDisposition.ProbeId), "probe_id", null, false);
+        AssertRequiredColumn(disposition, nameof(ProbeHeartbeatExpiryCauseDisposition.PolicySnapshotId), "policy_snapshot_id", null, false);
+        AssertRequiredColumn(disposition, nameof(ProbeHeartbeatExpiryCauseDisposition.PolicyVersion), "policy_version", null, false);
+        AssertRequiredColumn(disposition, nameof(ProbeHeartbeatExpiryCauseDisposition.Outcome), "outcome", 16, true, "varchar(16)");
+        AssertRequiredColumn(disposition, nameof(ProbeHeartbeatExpiryCauseDisposition.ReasonCode), "reason_code", 64, false);
+        AssertRequiredColumn(disposition, nameof(ProbeHeartbeatExpiryCauseDisposition.ExpiryCutoffReceivedAt), "expiry_cutoff_received_at", null, false);
+        Assert.Equal("applied_at", disposition.FindProperty(nameof(ProbeHeartbeatExpiryCauseDisposition.AppliedAt))!.GetColumnName());
+        Assert.True(disposition.FindProperty(nameof(ProbeHeartbeatExpiryCauseDisposition.AppliedAt))!.IsNullable);
+        Assert.Contains(disposition.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_cause_dispositions_outcome" && x.Sql == "outcome IN ('Applied', 'NoOp')");
+        Assert.Contains(disposition.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_cause_dispositions_shape" && x.Sql == "(outcome = 'Applied' AND reason_code = 'agent-heartbeat-expired' AND applied_at = expiry_cutoff_received_at) OR (outcome = 'NoOp' AND reason_code IN ('projection-missing', 'authority-watermark-superseded', 'authority-heartbeat-advanced', 'visible-already-unknown') AND applied_at IS NULL)");
+        AssertRestrictiveForeignKey(disposition, [nameof(ProbeHeartbeatExpiryCauseDisposition.CauseId), nameof(ProbeHeartbeatExpiryCauseDisposition.ProbeId), nameof(ProbeHeartbeatExpiryCauseDisposition.PolicySnapshotId), nameof(ProbeHeartbeatExpiryCauseDisposition.PolicyVersion)], typeof(ProbeHeartbeatExpiryCause), [nameof(ProbeHeartbeatExpiryCause.CauseId), nameof(ProbeHeartbeatExpiryCause.ProbeId), nameof(ProbeHeartbeatExpiryCause.PolicySnapshotId), nameof(ProbeHeartbeatExpiryCause.PolicyVersion)]);
+        AssertRestrictiveForeignKey(disposition, [nameof(ProbeHeartbeatExpiryCauseDisposition.ProbeId)], typeof(Probe), [nameof(Probe.Id)]);
+        AssertRestrictiveForeignKey(disposition, [nameof(ProbeHeartbeatExpiryCauseDisposition.PolicySnapshotId), nameof(ProbeHeartbeatExpiryCauseDisposition.PolicyVersion)], typeof(ProbeStatusPolicySnapshot), [nameof(ProbeStatusPolicySnapshot.Id), nameof(ProbeStatusPolicySnapshot.PolicyVersion)]);
+
+        Assert.Equal("probe_heartbeat_expiry_cause_transitions", transition.GetTableName());
+        Assert.True(transition.FindPrimaryKey()!.Properties.Select(x => x.Name).SequenceEqual([nameof(ProbeHeartbeatExpiryCauseTransition.CauseId)]));
+        AssertRequiredColumn(transition, nameof(ProbeHeartbeatExpiryCauseTransition.CauseId), "cause_id", null, false);
+        AssertRequiredColumn(transition, nameof(ProbeHeartbeatExpiryCauseTransition.ProbeId), "probe_id", null, false);
+        AssertRequiredColumn(transition, nameof(ProbeHeartbeatExpiryCauseTransition.PolicySnapshotId), "policy_snapshot_id", null, false);
+        AssertRequiredColumn(transition, nameof(ProbeHeartbeatExpiryCauseTransition.PolicyVersion), "policy_version", null, false);
+        AssertRequiredColumn(transition, nameof(ProbeHeartbeatExpiryCauseTransition.DispositionOutcome), "disposition_outcome", 16, true, "varchar(16)");
+        AssertRequiredColumn(transition, nameof(ProbeHeartbeatExpiryCauseTransition.FromVisibleStatus), "from_visible_status", 20, true);
+        AssertRequiredColumn(transition, nameof(ProbeHeartbeatExpiryCauseTransition.ToVisibleStatus), "to_visible_status", 20, true);
+        AssertRequiredColumn(transition, nameof(ProbeHeartbeatExpiryCauseTransition.ReasonCode), "reason_code", 64, false);
+        AssertRequiredColumn(transition, nameof(ProbeHeartbeatExpiryCauseTransition.AppliedAt), "applied_at", null, false);
+        Assert.Contains(transition.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_cause_transitions_disposition_outcome" && x.Sql == "disposition_outcome = 'Applied'");
+        Assert.Contains(transition.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_cause_transitions_from_visible_status" && x.Sql == "from_visible_status IN ('Up', 'Degraded', 'Down', 'Recovering')");
+        Assert.Contains(transition.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_cause_transitions_to_visible_status" && x.Sql == "to_visible_status = 'Unknown'");
+        Assert.Contains(transition.GetCheckConstraints(), x => x.Name == "ck_probe_heartbeat_expiry_cause_transitions_reason_code" && x.Sql == "reason_code = 'agent-heartbeat-expired'");
+        AssertRestrictiveForeignKey(transition, [nameof(ProbeHeartbeatExpiryCauseTransition.CauseId), nameof(ProbeHeartbeatExpiryCauseTransition.ProbeId), nameof(ProbeHeartbeatExpiryCauseTransition.PolicySnapshotId), nameof(ProbeHeartbeatExpiryCauseTransition.PolicyVersion)], typeof(ProbeHeartbeatExpiryCause), [nameof(ProbeHeartbeatExpiryCause.CauseId), nameof(ProbeHeartbeatExpiryCause.ProbeId), nameof(ProbeHeartbeatExpiryCause.PolicySnapshotId), nameof(ProbeHeartbeatExpiryCause.PolicyVersion)]);
+        AssertRestrictiveForeignKey(transition, [nameof(ProbeHeartbeatExpiryCauseTransition.CauseId), nameof(ProbeHeartbeatExpiryCauseTransition.DispositionOutcome)], typeof(ProbeHeartbeatExpiryCauseDisposition), [nameof(ProbeHeartbeatExpiryCauseDisposition.CauseId), nameof(ProbeHeartbeatExpiryCauseDisposition.Outcome)]);
+        AssertRestrictiveForeignKey(transition, [nameof(ProbeHeartbeatExpiryCauseTransition.ProbeId)], typeof(Probe), [nameof(Probe.Id)]);
+        AssertRestrictiveForeignKey(transition, [nameof(ProbeHeartbeatExpiryCauseTransition.PolicySnapshotId), nameof(ProbeHeartbeatExpiryCauseTransition.PolicyVersion)], typeof(ProbeStatusPolicySnapshot), [nameof(ProbeStatusPolicySnapshot.Id), nameof(ProbeStatusPolicySnapshot.PolicyVersion)]);
+
+        foreach (var entity in new object[]
+                 {
+                     new ProbeHeartbeatExpiryCause(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero), 20, 1, Guid.NewGuid(), Guid.NewGuid(), 1),
+                     ProbeHeartbeatExpiryCauseDisposition.Applied(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 1, new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero)),
+                     new ProbeHeartbeatExpiryCauseTransition(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 1, ProbeStatus.Up, new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero)),
+                 })
+        {
+            foreach (var state in new[] { EntityState.Modified, EntityState.Deleted })
+            {
+                db.Entry(entity).State = state;
+                await Assert.ThrowsAsync<InvalidOperationException>(() => db.SaveChangesAsync(TestContext.Current.CancellationToken));
+                db.Entry(entity).State = EntityState.Detached;
+            }
+        }
+
+        // Phase 2 follow-on: direct PostgreSQL insert/trigger validation of source heartbeat values, due calculation, and restrictive deletes.
+        // Phase 3 follow-on: coordinator lock ordering and H1/H2 successor-cause races. This Phase 1 test asserts source-model metadata only.
+    }
+
     private static void AssertRequiredColumn(IEntityType entity, string propertyName, string columnName, int? maxLength, bool requiresConversion, string? columnType = null)
     {
         var property = entity.FindProperty(propertyName)!;
@@ -1136,6 +2355,12 @@ public sealed class Wp06StatusProcessingPersistenceTests
         Guid SourceAgentGroupId, Guid PolicySnapshotId, int PolicyVersion, int FreshnessIntervalSeconds,
         int FreshnessGraceSeconds, DateTimeOffset DueAt);
 
+    private sealed record HeartbeatCause(Guid CauseId, Guid ProbeId, Guid AuthorityAgentId, Guid SourceResultId,
+        DateTimeOffset SourceCursorEventAt, DateTimeOffset SourceLastHeartbeatReceivedAt, int SourceHeartbeatIntervalSeconds,
+        long SourceConfigurationVersion, Guid SourceAgentGroupId, Guid PolicySnapshotId, int PolicyVersion, DateTimeOffset DueAt);
+
     private sealed record FreshnessSource(FreshnessCause Cause, ProbeStatusPolicySnapshot Policy,
         ProbeStatusPolicySnapshot OtherPolicy, ProbeStatusPolicySnapshot OtherVersionPolicy);
+
+    private sealed record HeartbeatSource(HeartbeatCause Cause, ProbeStatusPolicySnapshot Policy);
 }

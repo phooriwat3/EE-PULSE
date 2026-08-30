@@ -27,12 +27,37 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
     {
         ArgumentOutOfRangeException.ThrowIfEqual(probeId, Guid.Empty);
 
-        await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
-        await ProbeTransactionLock.AcquireAsync(db, probeId, cancellationToken);
+        // The first selection is advisory only.  A different earlier row may commit before
+        // the Probe lock is acquired, so never turn that replacement into NoPending.
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var candidate = await NextLedgerAsync(probeId, null, cancellationToken);
+            if (candidate is null) return new(ProbeResultStatusProcessorOutcomeKind.NoPending);
 
-        var outcome = await ProcessNextInTransactionAsync(probeId, null, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return outcome ?? new(ProbeResultStatusProcessorOutcomeKind.NoPending);
+            await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
+            try
+            {
+                var agent = await LockAgentForShareAsync(candidate.AgentId, cancellationToken);
+                await ProbeTransactionLock.AcquireAsync(db, probeId, cancellationToken);
+                var stable = await NextLedgerAsync(probeId, null, cancellationToken);
+                if (stable is null || stable.AgentId != candidate.AgentId || stable.ResultId != candidate.ResultId)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    db.ChangeTracker.Clear();
+                    continue;
+                }
+
+                var outcome = await ProcessNextInTransactionAsync(probeId, null, agent, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return outcome ?? throw new InvalidOperationException("A stable Probe result selection disappeared while its locks were held.");
+            }
+            catch
+            {
+                if (db.Database.CurrentTransaction is not null) await transaction.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        }
     }
 
     // The freshness-expiry worker shares this transaction-local path so its cutoff is
@@ -40,24 +65,21 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
     internal async Task<ProbeResultStatusProcessorOutcome?> ProcessNextInTransactionAsync(
         Guid probeId,
         DateTimeOffset? receivedAtCutoff,
+        Agent? lockedSourceAgent,
         CancellationToken cancellationToken)
     {
         if (db.Database.CurrentTransaction is null)
             throw new InvalidOperationException("An active EePulseDbContext database transaction is required to process a Probe result.");
 
-        var ledger = await db.ProbeResultLedgerEntries
-            .Where(row => row.ProbeId == probeId && !db.ProbeResultProcessingDispositions
-                .Any(disposition => disposition.AgentId == row.AgentId && disposition.ResultId == row.ResultId) &&
-                (!receivedAtCutoff.HasValue || row.ReceivedAt <= receivedAtCutoff.Value))
-            .OrderBy(row => row.EndedAt)
-            .ThenBy(row => row.AgentId)
-            .ThenBy(row => row.ResultId)
-            .FirstOrDefaultAsync(cancellationToken);
+        var ledger = await NextLedgerAsync(probeId, receivedAtCutoff, cancellationToken);
 
         if (ledger is null)
         {
             return null;
         }
+        if (lockedSourceAgent is null || lockedSourceAgent.Id != ledger.AgentId)
+            throw new InvalidOperationException("The result processor requires its explicitly prelocked source Agent.");
+        var sourceAgent = lockedSourceAgent;
 
         var projection = await db.ProbeStatusProjections
             .FromSqlInterpolated($"SELECT * FROM probe_status_projections WHERE probe_id = {probeId} FOR UPDATE")
@@ -101,7 +123,7 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
                 new(ledger.SuccessfulAttemptCount == ledger.AttemptCount, ledger.AverageRttMilliseconds, ledger.PacketLossRatio));
             projection.ApplyResult(evaluation.State, ledger.EndedAt, ledger.AgentId, ledger.ResultId);
             if (addedProjection) db.Add(projection);
-            freshnessCauseInputs = await ResolveFreshnessCauseInputsAsync(ledger, snapshot, projection, cancellationToken);
+            freshnessCauseInputs = await ResolveFreshnessCauseInputsAsync(ledger, snapshot, projection, sourceAgent, cancellationToken);
         }
 
         var processingDisposition = new ProbeResultProcessingDisposition(
@@ -240,6 +262,14 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
             // Keep this separate from the result flush: ST-09B validates the source through
             // transactionally persisted rows, not EF's pending change tracker.
             await db.SaveChangesAsync(cancellationToken);
+
+            if (sourceAgent.LastHeartbeatAt is { } heartbeatAt)
+            {
+                db.Add(new ProbeHeartbeatExpiryCause(Guid.NewGuid(), ledger.ProbeId, ledger.AgentId,
+                    ledger.ResultId, ledger.EndedAt, heartbeatAt, sourceAgent.HeartbeatIntervalSeconds,
+                    ledger.ConfigurationVersion, freshnessCauseInputs.AgentGroupId, snapshot!.Id, snapshot.PolicyVersion));
+                await db.SaveChangesAsync(cancellationToken);
+            }
         }
 
         return new(ProbeResultStatusProcessorOutcomeKind.Processed, ledger.AgentId, ledger.ResultId, disposition.Kind);
@@ -314,11 +344,10 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
     private async Task<FreshnessCauseInputs> ResolveFreshnessCauseInputsAsync(
         ProbeResultLedgerEntry ledger,
         ProbeStatusPolicySnapshot snapshot,
-        ProbeStatusProjection projection,
+        ProbeStatusProjection projection, Agent lockedSourceAgent,
         CancellationToken cancellationToken)
     {
-        var agent = await db.Agents.SingleOrDefaultAsync(row => row.Id == ledger.AgentId, cancellationToken)
-            ?? throw new InvalidOperationException("WP-06 freshness cause source Agent is missing.");
+        var agent = lockedSourceAgent;
         var configuration = await db.AgentConfigurationSnapshots.SingleOrDefaultAsync(row =>
             row.AgentGroupId == agent.AgentGroupId && row.Version == ledger.ConfigurationVersion, cancellationToken)
             ?? throw new InvalidOperationException("WP-06 freshness cause source configuration snapshot is missing.");
@@ -330,6 +359,18 @@ public sealed class ProbeResultStatusProcessor(EePulseDbContext db, IUtcClock cl
         var freshnessSeconds = Math.Max(checked(2 * intervalSeconds), graceSeconds);
         return new(agent.AgentGroupId, intervalSeconds, graceSeconds, lastFreshEventAt.AddSeconds(freshnessSeconds));
     }
+
+    internal Task<ProbeResultLedgerEntry?> NextLedgerAsync(Guid probeId, DateTimeOffset? receivedAtCutoff, CancellationToken cancellationToken) =>
+        db.ProbeResultLedgerEntries.AsNoTracking()
+            .Where(row => row.ProbeId == probeId && !db.ProbeResultProcessingDispositions
+                .Any(disposition => disposition.AgentId == row.AgentId && disposition.ResultId == row.ResultId) &&
+                (!receivedAtCutoff.HasValue || row.ReceivedAt <= receivedAtCutoff.Value))
+            .OrderBy(row => row.EndedAt).ThenBy(row => row.AgentId).ThenBy(row => row.ResultId)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    internal async Task<Agent> LockAgentForShareAsync(Guid agentId, CancellationToken cancellationToken) =>
+        await db.Agents.FromSqlInterpolated($"SELECT * FROM agents WHERE id = {agentId} FOR SHARE")
+            .SingleAsync(cancellationToken);
 
     private static int ReadSourceIntervalSeconds(string payload, Guid probeId)
     {

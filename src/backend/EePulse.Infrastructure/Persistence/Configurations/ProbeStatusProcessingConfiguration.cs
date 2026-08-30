@@ -268,6 +268,128 @@ internal sealed class ProbeFreshnessExpiryCauseTransitionConfiguration : IEntity
     }
 }
 
+internal sealed class ProbeHeartbeatExpiryCauseConfiguration : IEntityTypeConfiguration<ProbeHeartbeatExpiryCause>
+{
+    public void Configure(EntityTypeBuilder<ProbeHeartbeatExpiryCause> b)
+    {
+        b.ToTable("probe_heartbeat_expiry_causes", t =>
+        {
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_type", "cause_type = 'AgentHeartbeatExpiry'");
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_source_disposition", "source_disposition = 'StateDriving'");
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_versions", "source_configuration_version >= 1 AND policy_version >= 1");
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_heartbeat_interval", "source_heartbeat_interval_seconds BETWEEN 15 AND 30");
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_due_at", "due_at >= source_last_heartbeat_received_at");
+        });
+        b.HasKey(x => x.CauseId);
+        b.HasAlternateKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .HasName("ak_probe_heartbeat_expiry_causes_lineage");
+        b.HasAlternateKey(x => new { x.ProbeId, x.AuthorityAgentId, x.SourceResultId, x.SourceCursorEventAt, x.SourceLastHeartbeatReceivedAt, x.SourceHeartbeatIntervalSeconds })
+            .HasName("ak_probe_heartbeat_expiry_causes_source");
+        b.Property(x => x.CauseId).HasColumnName("cause_id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id");
+        b.Property(x => x.CauseType).HasColumnName("cause_type").HasConversion<string>().HasMaxLength(32);
+        b.Property(x => x.AuthorityAgentId).HasColumnName("authority_agent_id");
+        b.Property(x => x.SourceResultId).HasColumnName("source_result_id");
+        b.Property(x => x.SourceCursorEventAt).HasColumnName("source_cursor_event_at");
+        b.Property(x => x.SourceLastHeartbeatReceivedAt).HasColumnName("source_last_heartbeat_received_at");
+        b.Property(x => x.SourceHeartbeatIntervalSeconds).HasColumnName("source_heartbeat_interval_seconds");
+        b.Property(x => x.SourceConfigurationVersion).HasColumnName("source_configuration_version");
+        b.Property(x => x.SourceAgentGroupId).HasColumnName("source_agent_group_id");
+        b.Property(x => x.SourceDisposition).HasColumnName("source_disposition").HasConversion<string>().HasMaxLength(32);
+        b.Property(x => x.PolicySnapshotId).HasColumnName("policy_snapshot_id");
+        b.Property(x => x.PolicyVersion).HasColumnName("policy_version");
+        b.Property(x => x.DueAt).HasColumnName("due_at");
+        b.Property(x => x.RequestedAt).HasColumnName("requested_at").ValueGeneratedOnAdd().HasDefaultValueSql("clock_timestamp()");
+        b.HasIndex(x => new { x.DueAt, x.ProbeId }).HasDatabaseName("ix_probe_heartbeat_expiry_causes_due_probe");
+        b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Agent>().WithMany().HasForeignKey(x => x.AuthorityAgentId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeResultLedgerEntry>().WithMany()
+            .HasForeignKey(x => new { AgentId = x.AuthorityAgentId, x.SourceResultId, x.ProbeId, EndedAt = x.SourceCursorEventAt })
+            .HasPrincipalKey(x => new { x.AgentId, x.ResultId, x.ProbeId, x.EndedAt })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeResultProcessingDisposition>().WithMany()
+            .HasForeignKey(x => new { AgentId = x.AuthorityAgentId, ResultId = x.SourceResultId, Disposition = x.SourceDisposition })
+            .HasPrincipalKey(x => new { x.AgentId, x.ResultId, x.Disposition })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<AgentConfigurationSnapshot>().WithMany()
+            .HasForeignKey(x => new { AgentGroupId = x.SourceAgentGroupId, Version = x.SourceConfigurationVersion })
+            .HasPrincipalKey(x => new { x.AgentGroupId, x.Version })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeStatusPolicySnapshot>().WithMany()
+            .HasForeignKey(x => new { x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.Id, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+internal sealed class ProbeHeartbeatExpiryCauseDispositionConfiguration : IEntityTypeConfiguration<ProbeHeartbeatExpiryCauseDisposition>
+{
+    public void Configure(EntityTypeBuilder<ProbeHeartbeatExpiryCauseDisposition> b)
+    {
+        b.ToTable("probe_heartbeat_expiry_cause_dispositions", t =>
+        {
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_dispositions_outcome", "outcome IN ('Applied', 'NoOp')");
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_dispositions_shape", "(outcome = 'Applied' AND reason_code = 'agent-heartbeat-expired' AND applied_at = expiry_cutoff_received_at) OR (outcome = 'NoOp' AND reason_code IN ('projection-missing', 'authority-watermark-superseded', 'authority-heartbeat-advanced', 'visible-already-unknown') AND applied_at IS NULL)");
+        });
+        b.HasKey(x => x.CauseId);
+        b.HasAlternateKey(x => new { x.CauseId, x.Outcome }).HasName("ak_probe_heartbeat_expiry_cause_dispositions_cause_outcome");
+        b.Property(x => x.CauseId).HasColumnName("cause_id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id");
+        b.Property(x => x.PolicySnapshotId).HasColumnName("policy_snapshot_id");
+        b.Property(x => x.PolicyVersion).HasColumnName("policy_version");
+        b.Property(x => x.Outcome).HasColumnName("outcome").HasConversion<string>().HasColumnType("varchar(16)").HasMaxLength(16).IsRequired();
+        b.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(64).IsRequired();
+        b.Property(x => x.ExpiryCutoffReceivedAt).HasColumnName("expiry_cutoff_received_at");
+        b.Property(x => x.AppliedAt).HasColumnName("applied_at");
+        b.HasOne<ProbeHeartbeatExpiryCause>().WithMany()
+            .HasForeignKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeStatusPolicySnapshot>().WithMany()
+            .HasForeignKey(x => new { x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.Id, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+internal sealed class ProbeHeartbeatExpiryCauseTransitionConfiguration : IEntityTypeConfiguration<ProbeHeartbeatExpiryCauseTransition>
+{
+    public void Configure(EntityTypeBuilder<ProbeHeartbeatExpiryCauseTransition> b)
+    {
+        b.ToTable("probe_heartbeat_expiry_cause_transitions", t =>
+        {
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_transitions_disposition_outcome", "disposition_outcome = 'Applied'");
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_transitions_from_visible_status", "from_visible_status IN ('Up', 'Degraded', 'Down', 'Recovering')");
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_transitions_to_visible_status", "to_visible_status = 'Unknown'");
+            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_transitions_reason_code", "reason_code = 'agent-heartbeat-expired'");
+        });
+        b.HasKey(x => x.CauseId);
+        b.Property(x => x.CauseId).HasColumnName("cause_id");
+        b.Property(x => x.ProbeId).HasColumnName("probe_id");
+        b.Property(x => x.PolicySnapshotId).HasColumnName("policy_snapshot_id");
+        b.Property(x => x.PolicyVersion).HasColumnName("policy_version");
+        b.Property(x => x.DispositionOutcome).HasColumnName("disposition_outcome").HasConversion<string>().HasColumnType("varchar(16)").HasMaxLength(16).IsRequired();
+        b.Property(x => x.FromVisibleStatus).HasColumnName("from_visible_status").HasConversion<string>().HasMaxLength(20).IsRequired();
+        b.Property(x => x.ToVisibleStatus).HasColumnName("to_visible_status").HasConversion<string>().HasMaxLength(20).IsRequired();
+        b.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(64).IsRequired();
+        b.Property(x => x.AppliedAt).HasColumnName("applied_at");
+        b.HasOne<ProbeHeartbeatExpiryCause>().WithMany()
+            .HasForeignKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeHeartbeatExpiryCauseDisposition>().WithMany()
+            .HasForeignKey(x => new { x.CauseId, Outcome = x.DispositionOutcome })
+            .HasPrincipalKey(x => new { x.CauseId, x.Outcome })
+            .OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<ProbeStatusPolicySnapshot>().WithMany()
+            .HasForeignKey(x => new { x.PolicySnapshotId, x.PolicyVersion })
+            .HasPrincipalKey(x => new { x.Id, x.PolicyVersion })
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 internal sealed class AvailabilityIncidentConfiguration : IEntityTypeConfiguration<AvailabilityIncident>
 {
     public void Configure(EntityTypeBuilder<AvailabilityIncident> b)

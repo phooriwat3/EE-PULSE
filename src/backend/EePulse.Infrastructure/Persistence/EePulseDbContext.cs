@@ -33,6 +33,9 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
     public DbSet<ProbeFreshnessExpiryCause> ProbeFreshnessExpiryCauses => Set<ProbeFreshnessExpiryCause>();
     public DbSet<ProbeFreshnessExpiryCauseDisposition> ProbeFreshnessExpiryCauseDispositions => Set<ProbeFreshnessExpiryCauseDisposition>();
     public DbSet<ProbeFreshnessExpiryCauseTransition> ProbeFreshnessExpiryCauseTransitions => Set<ProbeFreshnessExpiryCauseTransition>();
+    public DbSet<ProbeHeartbeatExpiryCause> ProbeHeartbeatExpiryCauses => Set<ProbeHeartbeatExpiryCause>();
+    public DbSet<ProbeHeartbeatExpiryCauseDisposition> ProbeHeartbeatExpiryCauseDispositions => Set<ProbeHeartbeatExpiryCauseDisposition>();
+    public DbSet<ProbeHeartbeatExpiryCauseTransition> ProbeHeartbeatExpiryCauseTransitions => Set<ProbeHeartbeatExpiryCauseTransition>();
     public DbSet<ProbeResultStatusTransition> ProbeResultStatusTransitions => Set<ProbeResultStatusTransition>();
     public DbSet<AvailabilityIncident> AvailabilityIncidents => Set<AvailabilityIncident>();
     public DbSet<IncidentLifecycleEvent> IncidentLifecycleEvents => Set<IncidentLifecycleEvent>();
@@ -76,6 +79,9 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         RejectChanges(ChangeTracker.Entries<ProbeFreshnessExpiryCause>(), "Probe freshness expiry causes are immutable.");
         RejectChanges(ChangeTracker.Entries<ProbeFreshnessExpiryCauseDisposition>(), "Probe freshness expiry cause dispositions are immutable.");
         RejectChanges(ChangeTracker.Entries<ProbeFreshnessExpiryCauseTransition>(), "Probe freshness expiry cause transitions are immutable.");
+        RejectChanges(ChangeTracker.Entries<ProbeHeartbeatExpiryCause>(), "Probe heartbeat expiry causes are immutable.");
+        RejectChanges(ChangeTracker.Entries<ProbeHeartbeatExpiryCauseDisposition>(), "Probe heartbeat expiry cause dispositions are immutable.");
+        RejectChanges(ChangeTracker.Entries<ProbeHeartbeatExpiryCauseTransition>(), "Probe heartbeat expiry cause transitions are immutable.");
         RejectChanges(ChangeTracker.Entries<ProbeResultStatusTransition>(), "Probe result status transitions are immutable.");
         RejectChanges(ChangeTracker.Entries<IncidentLifecycleEvent>(), "Incident lifecycle events are immutable.");
         RejectChanges(ChangeTracker.Entries<NotificationSuppressionContext>(), "Notification suppression contexts are immutable.");

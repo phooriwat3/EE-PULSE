@@ -24,6 +24,17 @@ public enum ProbeFreshnessExpiryCauseDispositionOutcome
     NoOp,
 }
 
+public enum ProbeHeartbeatExpiryCauseType
+{
+    AgentHeartbeatExpiry,
+}
+
+public enum ProbeHeartbeatExpiryCauseDispositionOutcome
+{
+    Applied,
+    NoOp,
+}
+
 public enum AvailabilityIncidentStatus
 {
     Open,
@@ -612,6 +623,175 @@ public sealed class ProbeFreshnessExpiryCauseTransition
     public Guid PolicySnapshotId { get; private set; }
     public int PolicyVersion { get; private set; }
     public ProbeFreshnessExpiryCauseDispositionOutcome DispositionOutcome { get; private set; }
+    public ProbeStatus FromVisibleStatus { get; private set; }
+    public ProbeStatus ToVisibleStatus { get; private set; }
+    public string ReasonCode { get; private set; } = string.Empty;
+    public DateTimeOffset AppliedAt { get; private set; }
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+}
+
+public sealed class ProbeHeartbeatExpiryCause
+{
+    private ProbeHeartbeatExpiryCause() { }
+
+    public ProbeHeartbeatExpiryCause(
+        Guid causeId,
+        Guid probeId,
+        Guid authorityAgentId,
+        Guid sourceResultId,
+        DateTimeOffset sourceCursorEventAt,
+        DateTimeOffset sourceLastHeartbeatReceivedAt,
+        int sourceHeartbeatIntervalSeconds,
+        long sourceConfigurationVersion,
+        Guid sourceAgentGroupId,
+        Guid policySnapshotId,
+        int policyVersion)
+    {
+        CauseId = Required(causeId, nameof(causeId));
+        ProbeId = Required(probeId, nameof(probeId));
+        CauseType = ProbeHeartbeatExpiryCauseType.AgentHeartbeatExpiry;
+        AuthorityAgentId = Required(authorityAgentId, nameof(authorityAgentId));
+        SourceResultId = Required(sourceResultId, nameof(sourceResultId));
+        SourceCursorEventAt = Guard.Utc(sourceCursorEventAt, nameof(sourceCursorEventAt));
+        SourceLastHeartbeatReceivedAt = Guard.Utc(sourceLastHeartbeatReceivedAt, nameof(sourceLastHeartbeatReceivedAt));
+        SourceHeartbeatIntervalSeconds = Guard.Range(sourceHeartbeatIntervalSeconds, nameof(sourceHeartbeatIntervalSeconds), 15, 30);
+        SourceConfigurationVersion = sourceConfigurationVersion < 1 ? throw new DomainValidationException(nameof(sourceConfigurationVersion), "Source configuration version must be positive.") : sourceConfigurationVersion;
+        SourceAgentGroupId = Required(sourceAgentGroupId, nameof(sourceAgentGroupId));
+        SourceDisposition = ProbeResultProcessingDispositionKind.StateDriving;
+        PolicySnapshotId = Required(policySnapshotId, nameof(policySnapshotId));
+        PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
+        DueAt = CalculateDueAt(SourceLastHeartbeatReceivedAt, SourceHeartbeatIntervalSeconds);
+    }
+
+    public Guid CauseId { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public ProbeHeartbeatExpiryCauseType CauseType { get; private set; }
+    public Guid AuthorityAgentId { get; private set; }
+    public Guid SourceResultId { get; private set; }
+    public DateTimeOffset SourceCursorEventAt { get; private set; }
+    public DateTimeOffset SourceLastHeartbeatReceivedAt { get; private set; }
+    public int SourceHeartbeatIntervalSeconds { get; private set; }
+    public long SourceConfigurationVersion { get; private set; }
+    public Guid SourceAgentGroupId { get; private set; }
+    public ProbeResultProcessingDispositionKind SourceDisposition { get; private set; }
+    public Guid PolicySnapshotId { get; private set; }
+    public int PolicyVersion { get; private set; }
+    public DateTimeOffset DueAt { get; private set; }
+    public DateTimeOffset RequestedAt { get; private set; }
+
+    private static DateTimeOffset CalculateDueAt(DateTimeOffset sourceLastHeartbeatReceivedAt, int sourceHeartbeatIntervalSeconds)
+    {
+        try
+        {
+            var intervalSeconds = checked((long)sourceHeartbeatIntervalSeconds * 3);
+            var dueSeconds = Math.Max(60L, intervalSeconds);
+            return sourceLastHeartbeatReceivedAt.AddSeconds(dueSeconds);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            throw new DomainValidationException(nameof(sourceLastHeartbeatReceivedAt), "Heartbeat expiry due time overflows the supported timestamp range.");
+        }
+    }
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+}
+
+public sealed class ProbeHeartbeatExpiryCauseDisposition
+{
+    public const string AgentHeartbeatExpiredReasonCode = "agent-heartbeat-expired";
+    public const string ProjectionMissingReasonCode = "projection-missing";
+    public const string AuthorityWatermarkSupersededReasonCode = "authority-watermark-superseded";
+    public const string AuthorityHeartbeatAdvancedReasonCode = "authority-heartbeat-advanced";
+    public const string VisibleAlreadyUnknownReasonCode = "visible-already-unknown";
+
+    private ProbeHeartbeatExpiryCauseDisposition() { }
+
+    private ProbeHeartbeatExpiryCauseDisposition(Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion,
+        ProbeHeartbeatExpiryCauseDispositionOutcome outcome, string reasonCode, DateTimeOffset expiryCutoffReceivedAt, DateTimeOffset? appliedAt)
+    {
+        CauseId = Required(causeId, nameof(causeId));
+        ProbeId = Required(probeId, nameof(probeId));
+        PolicySnapshotId = Required(policySnapshotId, nameof(policySnapshotId));
+        PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
+        Outcome = outcome;
+        ReasonCode = Guard.Required(reasonCode, nameof(reasonCode), 64);
+        ExpiryCutoffReceivedAt = Guard.Utc(expiryCutoffReceivedAt, nameof(expiryCutoffReceivedAt));
+        AppliedAt = appliedAt.HasValue ? Guard.Utc(appliedAt.Value, nameof(appliedAt)) : null;
+        ValidateShape();
+    }
+
+    public static ProbeHeartbeatExpiryCauseDisposition Applied(Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion, DateTimeOffset expiryCutoffReceivedAt) =>
+        new(causeId, probeId, policySnapshotId, policyVersion, ProbeHeartbeatExpiryCauseDispositionOutcome.Applied,
+            AgentHeartbeatExpiredReasonCode, expiryCutoffReceivedAt, expiryCutoffReceivedAt);
+
+    public static ProbeHeartbeatExpiryCauseDisposition ProjectionMissing(Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion, DateTimeOffset expiryCutoffReceivedAt) =>
+        NoOp(causeId, probeId, policySnapshotId, policyVersion, ProjectionMissingReasonCode, expiryCutoffReceivedAt);
+
+    public static ProbeHeartbeatExpiryCauseDisposition AuthorityWatermarkSuperseded(Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion, DateTimeOffset expiryCutoffReceivedAt) =>
+        NoOp(causeId, probeId, policySnapshotId, policyVersion, AuthorityWatermarkSupersededReasonCode, expiryCutoffReceivedAt);
+
+    public static ProbeHeartbeatExpiryCauseDisposition AuthorityHeartbeatAdvanced(Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion, DateTimeOffset expiryCutoffReceivedAt) =>
+        NoOp(causeId, probeId, policySnapshotId, policyVersion, AuthorityHeartbeatAdvancedReasonCode, expiryCutoffReceivedAt);
+
+    public static ProbeHeartbeatExpiryCauseDisposition VisibleAlreadyUnknown(Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion, DateTimeOffset expiryCutoffReceivedAt) =>
+        NoOp(causeId, probeId, policySnapshotId, policyVersion, VisibleAlreadyUnknownReasonCode, expiryCutoffReceivedAt);
+
+    public Guid CauseId { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public Guid PolicySnapshotId { get; private set; }
+    public int PolicyVersion { get; private set; }
+    public ProbeHeartbeatExpiryCauseDispositionOutcome Outcome { get; private set; }
+    public string ReasonCode { get; private set; } = string.Empty;
+    public DateTimeOffset ExpiryCutoffReceivedAt { get; private set; }
+    public DateTimeOffset? AppliedAt { get; private set; }
+
+    private void ValidateShape()
+    {
+        if (!Enum.IsDefined(Outcome)) throw new DomainValidationException(nameof(Outcome), "Heartbeat expiry disposition outcome is invalid.");
+        if (Outcome == ProbeHeartbeatExpiryCauseDispositionOutcome.Applied &&
+            (ReasonCode != AgentHeartbeatExpiredReasonCode || AppliedAt != ExpiryCutoffReceivedAt))
+            throw new DomainValidationException(nameof(Outcome), "Applied heartbeat expiry dispositions require the fixed reason and cutoff timestamp.");
+        if (Outcome == ProbeHeartbeatExpiryCauseDispositionOutcome.NoOp &&
+            (AppliedAt.HasValue || ReasonCode is not (ProjectionMissingReasonCode or AuthorityWatermarkSupersededReasonCode or AuthorityHeartbeatAdvancedReasonCode or VisibleAlreadyUnknownReasonCode)))
+            throw new DomainValidationException(nameof(Outcome), "No-op heartbeat expiry dispositions require an approved reason and no applied timestamp.");
+    }
+
+    private static ProbeHeartbeatExpiryCauseDisposition NoOp(Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion,
+        string reasonCode, DateTimeOffset expiryCutoffReceivedAt) =>
+        new(causeId, probeId, policySnapshotId, policyVersion, ProbeHeartbeatExpiryCauseDispositionOutcome.NoOp,
+            reasonCode, expiryCutoffReceivedAt, null);
+
+    private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;
+}
+
+public sealed class ProbeHeartbeatExpiryCauseTransition
+{
+    public const string AgentHeartbeatExpiredReasonCode = ProbeHeartbeatExpiryCauseDisposition.AgentHeartbeatExpiredReasonCode;
+
+    private ProbeHeartbeatExpiryCauseTransition() { }
+
+    public ProbeHeartbeatExpiryCauseTransition(Guid causeId, Guid probeId, Guid policySnapshotId, int policyVersion,
+        ProbeStatus fromVisibleStatus, DateTimeOffset appliedAt)
+    {
+        CauseId = Required(causeId, nameof(causeId));
+        ProbeId = Required(probeId, nameof(probeId));
+        PolicySnapshotId = Required(policySnapshotId, nameof(policySnapshotId));
+        PolicyVersion = Guard.Range(policyVersion, nameof(policyVersion), 1, int.MaxValue);
+        if (fromVisibleStatus is not (ProbeStatus.Up or ProbeStatus.Degraded or ProbeStatus.Down or ProbeStatus.Recovering))
+            throw new DomainValidationException(nameof(fromVisibleStatus), "Heartbeat expiry must transition a known visible status to Unknown.");
+        DispositionOutcome = ProbeHeartbeatExpiryCauseDispositionOutcome.Applied;
+        FromVisibleStatus = fromVisibleStatus;
+        ToVisibleStatus = ProbeStatus.Unknown;
+        ReasonCode = AgentHeartbeatExpiredReasonCode;
+        AppliedAt = Guard.Utc(appliedAt, nameof(appliedAt));
+    }
+
+    public Guid CauseId { get; private set; }
+    public Guid ProbeId { get; private set; }
+    public Guid PolicySnapshotId { get; private set; }
+    public int PolicyVersion { get; private set; }
+    public ProbeHeartbeatExpiryCauseDispositionOutcome DispositionOutcome { get; private set; }
     public ProbeStatus FromVisibleStatus { get; private set; }
     public ProbeStatus ToVisibleStatus { get; private set; }
     public string ReasonCode { get; private set; } = string.Empty;
