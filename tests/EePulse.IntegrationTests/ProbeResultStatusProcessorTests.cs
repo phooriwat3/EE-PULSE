@@ -2030,12 +2030,12 @@ public sealed class ProbeResultStatusProcessorTests
         var projection = await db.ProbeStatusProjections.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId)
             .Select(x => new St10ProjectionSnapshot(x.ProbeId, x.UnderlyingStatus, x.VisibleStatus, x.ConsecutiveFailureCount, x.ConsecutiveSuccessCount, x.LastFreshEventAt, x.WatermarkEventAt, x.WatermarkAgentId, x.WatermarkResultId, x.StateVersion, x.OpenIncidentId)).SingleOrDefaultAsync(TestContext.Current.CancellationToken);
         var ledger = (await db.ProbeResultLedgerEntries.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.AgentId).ThenBy(x => x.ResultId).ToArrayAsync(TestContext.Current.CancellationToken)).Select(x => new H1LedgerFullSnapshot(x.AgentId, x.ResultId, x.ProbeId, x.ConfigurationVersion, x.StartedAt, x.EndedAt, x.AttemptCount, x.SuccessfulAttemptCount, x.PacketLossRatio, x.MinRttMilliseconds, x.AverageRttMilliseconds, x.MaxRttMilliseconds, x.ErrorCategory, Convert.ToHexString(x.ImmutablePayloadDigest), x.ReceivedAt)).ToArray();
-        var resultDispositions = await db.ProbeResultProcessingDispositions.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.AgentId).ThenBy(x => x.ResultId).Select(x => new St10ResultDispositionSnapshot(x.AgentId,x.ResultId,x.ProbeId,x.EventAt,x.Disposition,x.ReasonCode,x.ResolvedPolicySnapshotId,x.ResolvedPolicyVersion,x.DecidedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
-        var resultTransitions = await db.ProbeResultStatusTransitions.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.AgentId).ThenBy(x => x.ResultId).Select(x => new St10ResultTransitionSnapshot(x.AgentId,x.ResultId,x.ProbeId,x.FromStatus,x.ToStatus,x.ReasonCode,x.EventAt,x.ReceivedAt,x.ProcessingDisposition)).ToArrayAsync(TestContext.Current.CancellationToken);
-        var freshness = await db.ProbeFreshnessExpiryCauses.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.CauseId).Select(x => new FreshnessFullSnapshot(x.CauseId,x.ProbeId,x.CauseType,x.SourceAgentId,x.SourceResultId,x.SourceCursorEventAt,x.SourceLastFreshEventAt,x.SourceConfigurationVersion,x.SourceAgentGroupId,x.SourceDisposition,x.PolicySnapshotId,x.PolicyVersion,x.FreshnessIntervalSeconds,x.FreshnessGraceSeconds,x.DueAt,x.RequestedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
-        var heartbeat = await db.ProbeHeartbeatExpiryCauses.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.CauseId).Select(x => new HeartbeatFullSnapshot(x.CauseId,x.ProbeId,x.CauseType,x.AuthorityAgentId,x.SourceResultId,x.SourceCursorEventAt,x.SourceLastHeartbeatReceivedAt,x.SourceHeartbeatIntervalSeconds,x.SourceConfigurationVersion,x.SourceAgentGroupId,x.SourceDisposition,x.PolicySnapshotId,x.PolicyVersion,x.DueAt,x.RequestedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
-        var dispositions = await db.ProbeHeartbeatExpiryCauseDispositions.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.CauseId).Select(x => new HeartbeatDispositionFullSnapshot(x.CauseId,x.ProbeId,x.PolicySnapshotId,x.PolicyVersion,x.Outcome,x.ReasonCode,x.ExpiryCutoffReceivedAt,x.AppliedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
-        var transitions = await db.ProbeHeartbeatExpiryCauseTransitions.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.CauseId).Select(x => new HeartbeatTransitionFullSnapshot(x.CauseId,x.ProbeId,x.PolicySnapshotId,x.PolicyVersion,x.DispositionOutcome,x.FromVisibleStatus,x.ToVisibleStatus,x.ReasonCode,x.AppliedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
+        var resultDispositions = await db.ProbeResultProcessingDispositions.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.AgentId).ThenBy(x => x.ResultId).Select(x => new St10ResultDispositionSnapshot(x.AgentId, x.ResultId, x.ProbeId, x.EventAt, x.Disposition, x.ReasonCode, x.ResolvedPolicySnapshotId, x.ResolvedPolicyVersion, x.DecidedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
+        var resultTransitions = await db.ProbeResultStatusTransitions.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.AgentId).ThenBy(x => x.ResultId).Select(x => new St10ResultTransitionSnapshot(x.AgentId, x.ResultId, x.ProbeId, x.FromStatus, x.ToStatus, x.ReasonCode, x.EventAt, x.ReceivedAt, x.ProcessingDisposition)).ToArrayAsync(TestContext.Current.CancellationToken);
+        var freshness = await db.ProbeFreshnessExpiryCauses.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.CauseId).Select(x => new FreshnessFullSnapshot(x.CauseId, x.ProbeId, x.CauseType, x.SourceAgentId, x.SourceResultId, x.SourceCursorEventAt, x.SourceLastFreshEventAt, x.SourceConfigurationVersion, x.SourceAgentGroupId, x.SourceDisposition, x.PolicySnapshotId, x.PolicyVersion, x.FreshnessIntervalSeconds, x.FreshnessGraceSeconds, x.DueAt, x.RequestedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
+        var heartbeat = await db.ProbeHeartbeatExpiryCauses.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.CauseId).Select(x => new HeartbeatFullSnapshot(x.CauseId, x.ProbeId, x.CauseType, x.AuthorityAgentId, x.SourceResultId, x.SourceCursorEventAt, x.SourceLastHeartbeatReceivedAt, x.SourceHeartbeatIntervalSeconds, x.SourceConfigurationVersion, x.SourceAgentGroupId, x.SourceDisposition, x.PolicySnapshotId, x.PolicyVersion, x.DueAt, x.RequestedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
+        var dispositions = await db.ProbeHeartbeatExpiryCauseDispositions.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.CauseId).Select(x => new HeartbeatDispositionFullSnapshot(x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion, x.Outcome, x.ReasonCode, x.ExpiryCutoffReceivedAt, x.AppliedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
+        var transitions = await db.ProbeHeartbeatExpiryCauseTransitions.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).OrderBy(x => x.CauseId).Select(x => new HeartbeatTransitionFullSnapshot(x.CauseId, x.ProbeId, x.PolicySnapshotId, x.PolicyVersion, x.DispositionOutcome, x.FromVisibleStatus, x.ToVisibleStatus, x.ReasonCode, x.AppliedAt)).ToArrayAsync(TestContext.Current.CancellationToken);
         return new(projection, ledger, resultDispositions, resultTransitions, freshness, heartbeat, dispositions, transitions, await ReadProbeArtifactsAsync(fixture));
     }
 
@@ -3001,9 +3001,15 @@ public sealed class ProbeResultStatusProcessorTests
             Assert.Equal(expectedSuccessorProjection, successorProjection);
             evidence = evidence with
             {
-                SuccessorResultId = successor, SuccessorEventAt = at, SuccessorReceiptAt = at, SuccessorLastFreshEventAt = at,
-                SuccessorCauseId = successorCauseId, SuccessorRequestedAtLowerBound = successorCreatedBefore, SuccessorRequestedAtUpperBound = successorCreatedAfter,
-                AdvancedHeartbeatAt = advancedHeartbeatAt, AdvancedHeartbeatIntervalSeconds = heartbeatIntervalSeconds,
+                SuccessorResultId = successor,
+                SuccessorEventAt = at,
+                SuccessorReceiptAt = at,
+                SuccessorLastFreshEventAt = at,
+                SuccessorCauseId = successorCauseId,
+                SuccessorRequestedAtLowerBound = successorCreatedBefore,
+                SuccessorRequestedAtUpperBound = successorCreatedAfter,
+                AdvancedHeartbeatAt = advancedHeartbeatAt,
+                AdvancedHeartbeatIntervalSeconds = heartbeatIntervalSeconds,
                 ExpectedPreH1Projection = expectedSuccessorProjection
             };
         }
@@ -3698,7 +3704,11 @@ public sealed class ProbeResultStatusProcessorTests
     private static async Task WaitForH1ProbeBlockedByAsync(NpgsqlConnection observer, T4B3BackendIdentity waitingBackend, int blockerPid, Guid probeId, Task task, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow; var attempts = 0; var last = "<none>"; var canonical = probeId.ToString("D"); using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        try { while (true) { attempts++; await using var command = new NpgsqlCommand("""
+        try
+        {
+            while (true)
+            {
+                attempts++; await using var command = new NpgsqlCommand("""
             SELECT a.state, a.wait_event_type, a.wait_event,
                    EXISTS (SELECT 1 FROM pg_locks WHERE pid=@pid AND locktype='advisory' AND NOT granted AND ((CASE WHEN classid::bigint >= 2147483648 THEN classid::bigint-4294967296 ELSE classid::bigint END)*4294967296)+objid::bigint=hashtextextended(@probeId,0)),
                    @blocker=ANY(pg_blocking_pids(@pid)),
@@ -3706,9 +3716,12 @@ public sealed class ProbeResultStatusProcessorTests
                    COALESCE(array_to_string(pg_blocking_pids(@pid),','),'<none>'), hashtextextended(@probeId,0)
             FROM pg_stat_activity a WHERE a.pid=@pid
             """, observer); command.Parameters.AddWithValue("pid", waitingBackend.Pid); command.Parameters.AddWithValue("blocker", blockerPid); command.Parameters.AddWithValue("probeId", canonical); await using var reader = await command.ExecuteReaderAsync(timeout.Token);
-            if (await reader.ReadAsync(timeout.Token)) { last=$"backend={waitingBackend};state={reader.GetString(0)};wait={reader.IsDBNull(1)?"<null>":reader.GetString(1)}/{(reader.IsDBNull(2)?"<null>":reader.GetString(2))};blocking={reader.GetString(6)};expectedAdvisoryIdentity={reader.GetInt64(7)};observedAdvisoryRows={reader.GetString(5)}"; if (string.Equals(reader.IsDBNull(1)?null:reader.GetString(1),"Lock",StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4)) return; } else last="<missing>";
-            if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"T4B4 H1 completed before waiting on the exact Probe advisory lock. backend={waitingBackend};blocker={blockerPid};probe={canonical};{last};attempts={attempts};elapsed={DateTimeOffset.UtcNow-started}."); } await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token); } }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for T4B4 H1 Probe-lock evidence. backend={waitingBackend};blocker={blockerPid};probe={canonical};{last};attempts={attempts};elapsed={DateTimeOffset.UtcNow-started}."); }
+                if (await reader.ReadAsync(timeout.Token)) { last = $"backend={waitingBackend};state={reader.GetString(0)};wait={reader.IsDBNull(1) ? "<null>":reader.GetString(1)}/{(reader.IsDBNull(2) ? "<null>" : reader.GetString(2))};blocking={reader.GetString(6)};expectedAdvisoryIdentity={reader.GetInt64(7)};observedAdvisoryRows={reader.GetString(5)}"; if (string.Equals(reader.IsDBNull(1) ? null : reader.GetString(1), "Lock", StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4)) return; } else last = "<missing>";
+                if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"T4B4 H1 completed before waiting on the exact Probe advisory lock. backend={waitingBackend};blocker={blockerPid};probe={canonical};{last};attempts={attempts};elapsed={DateTimeOffset.UtcNow - started}."); }
+                await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for T4B4 H1 Probe-lock evidence. backend={waitingBackend};blocker={blockerPid};probe={canonical};{last};attempts={attempts};elapsed={DateTimeOffset.UtcNow - started}."); }
     }
 
     private sealed record T4B3BackendIdentity(int Pid, string ApplicationName, string BackendStartedAt, string DatabaseName);
@@ -3728,30 +3741,37 @@ public sealed class ProbeResultStatusProcessorTests
     private static async Task<T4B3BackendIdentity> CaptureT4B3BackendIdentityAsync(NpgsqlConnection observer, string applicationName, Task task, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow; var attempts = 0; var last = "<none>"; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        try { while (true) { attempts++; await using var command = new NpgsqlCommand("SELECT pid, application_name, backend_start::text, datname FROM pg_stat_activity WHERE application_name=@name AND state <> 'idle' ORDER BY pid", observer); command.Parameters.AddWithValue("name", applicationName); await using var reader = await command.ExecuteReaderAsync(timeout.Token); var rows = new List<T4B3BackendIdentity>(); while (await reader.ReadAsync(timeout.Token)) rows.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3))); last = rows.Count == 0 ? "<none>" : string.Join(" | ", rows.Select(x => $"pid={x.Pid},application={x.ApplicationName},backend_start={x.BackendStartedAt},database={x.DatabaseName}")); if (rows.Count == 1) return rows[0]; if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"T4B3 processor completed before one backend identity was observable. application={applicationName}; backends={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow-started}."); } await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token); } }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for T4B3 backend identity. application={applicationName}; backends={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow-started}."); }
+        try { while (true) { attempts++; await using var command = new NpgsqlCommand("SELECT pid, application_name, backend_start::text, datname FROM pg_stat_activity WHERE application_name=@name AND state <> 'idle' ORDER BY pid", observer); command.Parameters.AddWithValue("name", applicationName); await using var reader = await command.ExecuteReaderAsync(timeout.Token); var rows = new List<T4B3BackendIdentity>(); while (await reader.ReadAsync(timeout.Token)) rows.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3))); last = rows.Count == 0 ? "<none>" : string.Join(" | ", rows.Select(x => $"pid={x.Pid},application={x.ApplicationName},backend_start={x.BackendStartedAt},database={x.DatabaseName}")); if (rows.Count == 1) return rows[0]; if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"T4B3 processor completed before one backend identity was observable. application={applicationName}; backends={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); } await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token); } }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for T4B3 backend identity. application={applicationName}; backends={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); }
     }
 
     private static async Task<T4B3BackendIdentity> CaptureT4B3IdleBackendIdentityAsync(NpgsqlConnection observer, string applicationName, int pid, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow; var attempts = 0; var last = "<none>"; var commandStage = "not-started"; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(10));
         try { while (true) { attempts++; commandStage = "started"; await using var command = new NpgsqlCommand("SELECT pid, application_name, backend_start::text, datname, state FROM pg_stat_activity WHERE pid=@pid", observer); command.Parameters.AddWithValue("pid", pid); await using var reader = await command.ExecuteReaderAsync(timeout.Token); commandStage = "reader-opened"; if (await reader.ReadAsync(timeout.Token)) { commandStage = "row-read"; var observedPid = reader.GetInt32(0); var observedApplication = reader.GetString(1); var observedStarted = reader.GetString(2); var observedDatabase = reader.GetString(3); var observedState = reader.GetString(4); last = $"pid={observedPid};application={observedApplication};backend_start={observedStarted};database={observedDatabase};state={observedState}"; if (observedPid == pid && observedApplication == applicationName && observedState == "idle in transaction") return new(observedPid, observedApplication, observedStarted, observedDatabase); } else { commandStage = "completed-without-row"; last = "<absent>"; } await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token); } }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out capturing idle T4B4 waiter E backend identity. expectedPid={pid}; expectedApplication={applicationName}; lastObserved={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow-started}; observerCommandStage={commandStage}."); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out capturing idle T4B4 waiter E backend identity. expectedPid={pid}; expectedApplication={applicationName}; lastObserved={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}; observerCommandStage={commandStage}."); }
     }
 
     private static async Task WaitForT4B4WaiterEAsync(NpgsqlConnection observer, T4B3BackendIdentity waiter, T4B3BackendIdentity blocker, int excludedProbeBlocker, Guid probeId, Task waiterTask, Task h1Task, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow; var attempts = 0; var last = "<none>"; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        try { while (true) { attempts++; await using var command = new NpgsqlCommand("""
+        try
+        {
+            while (true)
+            {
+                attempts++; await using var command = new NpgsqlCommand("""
             SELECT a.application_name, a.backend_start::text, a.datname, a.state, a.wait_event_type, a.wait_event,
                    EXISTS(SELECT 1 FROM pg_locks WHERE pid=@pid AND locktype='transactionid' AND NOT granted),
                    @blocker=ANY(pg_blocking_pids(@pid)), NOT(@excluded=ANY(pg_blocking_pids(@pid))),
                    COALESCE(array_to_string(pg_blocking_pids(@pid),','),'<none>')
             FROM pg_stat_activity a WHERE a.pid=@pid
             """, observer); command.Parameters.AddWithValue("pid", waiter.Pid); command.Parameters.AddWithValue("blocker", blocker.Pid); command.Parameters.AddWithValue("excluded", excludedProbeBlocker); await using var reader = await command.ExecuteReaderAsync(timeout.Token);
-            if (await reader.ReadAsync(timeout.Token)) { var identity = reader.GetString(0) == waiter.ApplicationName && reader.GetString(1) == waiter.BackendStartedAt && reader.GetString(2) == waiter.DatabaseName; last=$"expected={waiter};observed={reader.GetString(0)}|{reader.GetString(1)}|{reader.GetString(2)};state={reader.GetString(3)};wait={reader.IsDBNull(4)?"<null>":reader.GetString(4)}/{(reader.IsDBNull(5)?"<null>":reader.GetString(5)};blocking={reader.GetString(9)}"; if (identity && string.Equals(reader.IsDBNull(4)?null:reader.GetString(4),"Lock",StringComparison.Ordinal) && reader.GetBoolean(6) && reader.GetBoolean(7) && reader.GetBoolean(8)) return; } else last="<missing>";
-            if (waiterTask.IsCompleted || h1Task.IsCompleted) { if (waiterTask.IsCompleted) await waiterTask; if (h1Task.IsCompleted) await h1Task; throw new Xunit.Sdk.XunitException($"T4B4 waiter E lock evidence was not observed. {last};attempts={attempts};elapsed={DateTimeOffset.UtcNow-started}."); } await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token); } }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for T4B4 waiter E identity/lock evidence. {last};attempts={attempts};elapsed={DateTimeOffset.UtcNow-started}."); }
+                if (await reader.ReadAsync(timeout.Token)) { var identity = reader.GetString(0) == waiter.ApplicationName && reader.GetString(1) == waiter.BackendStartedAt && reader.GetString(2) == waiter.DatabaseName; last = $"expected={waiter};observed={reader.GetString(0)}|{reader.GetString(1)}|{reader.GetString(2)};state={reader.GetString(3)};wait={reader.IsDBNull(4) ? "<null>":reader.GetString(4)}/{(reader.IsDBNull(5) ? "<null>" : reader.GetString(5)};blocking={reader.GetString(9)}"; if (identity && string.Equals(reader.IsDBNull(4) ? null : reader.GetString(4), "Lock", StringComparison.Ordinal) && reader.GetBoolean(6) && reader.GetBoolean(7) && reader.GetBoolean(8)) return; } else last = "<missing>";
+                if (waiterTask.IsCompleted || h1Task.IsCompleted) { if (waiterTask.IsCompleted) await waiterTask; if (h1Task.IsCompleted) await h1Task; throw new Xunit.Sdk.XunitException($"T4B4 waiter E lock evidence was not observed. {last};attempts={attempts};elapsed={DateTimeOffset.UtcNow - started}."); }
+                await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for T4B4 waiter E identity/lock evidence. {last};attempts={attempts};elapsed={DateTimeOffset.UtcNow - started}."); }
     }
 
     private static async Task<bool> SettleT4B3TaskAsync(string name, Task? task, CancellationTokenSource cancellation, T4B3BackendIdentity? backend, NpgsqlConnection observer, List<Exception> failures)
@@ -3793,7 +3813,11 @@ public sealed class ProbeResultStatusProcessorTests
     private static async Task WaitForGrantedProbeAndProjectionWaitAsync(NpgsqlConnection observer, T4B3BackendIdentity waitingBackend, int blockerPid, Guid probeId, Task task, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow; var attempts = 0; var last = "<none>"; var canonical = probeId.ToString("D"); using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        try { while (true) { attempts++; await using var command = new NpgsqlCommand("""
+        try
+        {
+            while (true)
+            {
+                attempts++; await using var command = new NpgsqlCommand("""
             SELECT a.state, a.wait_event_type, a.wait_event,
                    EXISTS (SELECT 1 FROM pg_locks WHERE pid=@pid AND locktype='advisory' AND granted AND (lpad(to_hex(classid::bigint),8,'0') || lpad(to_hex(objid::bigint),8,'0'))=lpad(to_hex(hashtextextended(@probeId,0)),16,'0')),
                    EXISTS (SELECT 1 FROM pg_locks WHERE pid=@pid AND locktype='transactionid' AND NOT granted),
@@ -3804,15 +3828,22 @@ public sealed class ProbeResultStatusProcessorTests
                    COALESCE((SELECT string_agg(format('classid=%s,objid=%s,objsubid=%s,mode=%s,granted=%s,identity=%s', classid::bigint, objid::bigint, objsubid, mode, granted, ((CASE WHEN classid::bigint >= 2147483648 THEN classid::bigint - 4294967296 ELSE classid::bigint END) * 4294967296) + objid::bigint), ' | ' ORDER BY classid,objid,objsubid,mode,granted) FROM pg_locks WHERE pid=@pid AND locktype='advisory'),'<none>')
             FROM pg_stat_activity a WHERE a.pid=@pid
             """, observer); command.Parameters.AddWithValue("pid", waitingBackend.Pid); command.Parameters.AddWithValue("blocker", blockerPid); command.Parameters.AddWithValue("probeId", canonical); await using var reader = await command.ExecuteReaderAsync(timeout.Token);
-            if (await reader.ReadAsync(timeout.Token)) { last=$"backend={waitingBackend};state={reader.GetString(0)},wait={reader.GetString(1)},event={reader.GetString(2)},locks={reader.GetString(6)},blocking={reader.GetString(7)},expectedAdvisoryIdentity={reader.GetInt64(8)},observedAdvisoryRows={reader.GetString(9)}"; if (string.Equals(reader.IsDBNull(1)?null:reader.GetString(1),"Lock",StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4) && reader.GetBoolean(5)) return; } else last="<missing>";
-            if(task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"Result processor did not retain the exact Probe advisory lock while waiting on the projection. backend={waitingBackend}; blocker={blockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow-started}."); } await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token); } }
-        catch(OperationCanceledException) when(!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for result-processor Probe ownership and projection wait. backend={waitingBackend}; blocker={blockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow-started}."); }
+                if (await reader.ReadAsync(timeout.Token)) { last = $"backend={waitingBackend};state={reader.GetString(0)},wait={reader.GetString(1)},event={reader.GetString(2)},locks={reader.GetString(6)},blocking={reader.GetString(7)},expectedAdvisoryIdentity={reader.GetInt64(8)},observedAdvisoryRows={reader.GetString(9)}"; if (string.Equals(reader.IsDBNull(1) ? null : reader.GetString(1), "Lock", StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4) && reader.GetBoolean(5)) return; } else last = "<missing>";
+                if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"Result processor did not retain the exact Probe advisory lock while waiting on the projection. backend={waitingBackend}; blocker={blockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); }
+                await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for result-processor Probe ownership and projection wait. backend={waitingBackend}; blocker={blockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); }
     }
 
     private static async Task WaitForProbeAdvisoryBlockedByAsync(NpgsqlConnection observer, T4B3BackendIdentity waitingBackend, T4B3BackendIdentity blockerBackend, int excludedBlockerPid, Guid probeId, Task task, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow; var attempts = 0; var last = "<none>"; var canonical = probeId.ToString("D"); using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        try { while (true) { attempts++; await using var command = new NpgsqlCommand("""
+        try
+        {
+            while (true)
+            {
+                attempts++; await using var command = new NpgsqlCommand("""
             SELECT a.state, a.wait_event_type, a.wait_event,
                    EXISTS (SELECT 1 FROM pg_locks WHERE pid=@pid AND locktype='advisory' AND NOT granted AND (lpad(to_hex(classid::bigint),8,'0') || lpad(to_hex(objid::bigint),8,'0'))=lpad(to_hex(hashtextextended(@probeId,0)),16,'0')),
                    @blocker = ANY(pg_blocking_pids(@pid)), NOT (@excluded = ANY(pg_blocking_pids(@pid))),
@@ -3821,9 +3852,12 @@ public sealed class ProbeResultStatusProcessorTests
                    COALESCE((SELECT string_agg(format('classid=%s,objid=%s,objsubid=%s,mode=%s,granted=%s,identity=%s', classid::bigint, objid::bigint, objsubid, mode, granted, ((CASE WHEN classid::bigint >= 2147483648 THEN classid::bigint - 4294967296 ELSE classid::bigint END) * 4294967296) + objid::bigint), ' | ' ORDER BY classid,objid,objsubid,mode,granted) FROM pg_locks WHERE pid=@pid AND locktype='advisory'),'<none>')
             FROM pg_stat_activity a WHERE a.pid=@pid
             """, observer); command.Parameters.AddWithValue("pid", waitingBackend.Pid); command.Parameters.AddWithValue("blocker", blockerBackend.Pid); command.Parameters.AddWithValue("excluded", excludedBlockerPid); command.Parameters.AddWithValue("probeId", canonical); await using var reader = await command.ExecuteReaderAsync(timeout.Token);
-            if (await reader.ReadAsync(timeout.Token)) { last=$"backend={waitingBackend};blocker={blockerBackend};state={reader.GetString(0)},wait={reader.GetString(1)},event={reader.GetString(2)},locks={reader.GetString(6)},blocking={reader.GetString(7)},expectedAdvisoryIdentity={reader.GetInt64(8)},observedAdvisoryRows={reader.GetString(9)}"; if(string.Equals(reader.IsDBNull(1)?null:reader.GetString(1),"Lock",StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4) && reader.GetBoolean(5)) return; } else last="<missing>";
-            if(task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"H1 did not wait on result processor's exact Probe advisory lock. backend={waitingBackend}; blocker={blockerBackend}; excluded={excludedBlockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow-started}."); } await Task.Delay(TimeSpan.FromMilliseconds(20),timeout.Token); } }
-        catch(OperationCanceledException) when(!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for H1 Probe advisory evidence. backend={waitingBackend}; blocker={blockerBackend}; excluded={excludedBlockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow-started}."); }
+                if (await reader.ReadAsync(timeout.Token)) { last = $"backend={waitingBackend};blocker={blockerBackend};state={reader.GetString(0)},wait={reader.GetString(1)},event={reader.GetString(2)},locks={reader.GetString(6)},blocking={reader.GetString(7)},expectedAdvisoryIdentity={reader.GetInt64(8)},observedAdvisoryRows={reader.GetString(9)}"; if (string.Equals(reader.IsDBNull(1) ? null : reader.GetString(1), "Lock", StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4) && reader.GetBoolean(5)) return; } else last = "<missing>";
+                if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"H1 did not wait on result processor's exact Probe advisory lock. backend={waitingBackend}; blocker={blockerBackend}; excluded={excludedBlockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); }
+                await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for H1 Probe advisory evidence. backend={waitingBackend}; blocker={blockerBackend}; excluded={excludedBlockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); }
     }
 
     private static async Task<int> LockAgentForUpdateAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, Guid agentId, CancellationToken cancellationToken)

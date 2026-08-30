@@ -503,7 +503,7 @@ public sealed class AgentApiTests
         await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", h2ConnectionString));
         using var client = factory.CreateClient();
         var fixture = await CreateSt10bHeartbeatFixtureAsync(factory, client, true, ct, eligibleProjectionCount: 1);
-        var source = Assert.Single(fixture.Probes.Where(x => x.HasProjection));
+        var source = Assert.Single(fixture.Probes, x => x.HasProjection);
         var baseline = await ReadSt10bHeartbeatSnapshotAsync(factory, fixture.AgentId, ct);
         St10bProjectionSnapshot projectionBefore;
         await using (var scope = factory.Services.CreateAsyncScope())
@@ -577,7 +577,7 @@ public sealed class AgentApiTests
         Assert.NotEqual(Guid.Empty, cause.CauseId); Assert.Equal((ProbeHeartbeatExpiryCauseType.AgentHeartbeatExpiry, ProbeResultProcessingDispositionKind.StateDriving, source.ProbeId, fixture.AgentId, source.ResultId, source.EventAt, response.ReceivedAt, 20, 100L, fixture.GroupId, fixture.PolicyId, 1), (cause.CauseType, cause.SourceDisposition, cause.ProbeId, cause.AuthorityAgentId, cause.SourceResultId, cause.SourceCursorEventAt, cause.SourceLastHeartbeatAt, cause.SourceHeartbeatIntervalSeconds, cause.SourceConfigurationVersion, cause.SourceAgentGroupId, cause.PolicySnapshotId, cause.PolicyVersion)); Assert.Equal(response.ReceivedAt.AddSeconds(60), cause.DueAt); Assert.InRange(cause.RequestedAt, before, after);
         await using var verifyScope = factory.Services.CreateAsyncScope(); var verifyDb = verifyScope.ServiceProvider.GetRequiredService<EePulseDbContext>();
         var projectionAfter = await verifyDb.ProbeStatusProjections.AsNoTracking().Where(x => x.ProbeId == source.ProbeId).Select(x => new St10bProjectionSnapshot(x.ProbeId, x.UnderlyingStatus, x.VisibleStatus, x.ConsecutiveFailureCount, x.ConsecutiveSuccessCount, x.StateVersion, x.WatermarkAgentId, x.WatermarkResultId, x.WatermarkEventAt, x.LastFreshEventAt, x.OpenIncidentId)).SingleAsync(ct);
-        Assert.Equal(projectionBefore, projectionAfter); Assert.Equal(1, post.Receipts.Length); Assert.Equal(1, post.Causes.Length); Assert.True(baseline.Receipts.SequenceEqual(post.Receipts.Where(x => x.HeartbeatId != heartbeatId))); Assert.True(baseline.Causes.SequenceEqual(post.Causes.Where(x => x.SourceLastHeartbeatAt != response.ReceivedAt)));
+        Assert.Equal(projectionBefore, projectionAfter); Assert.Single(post.Receipts); Assert.Single(post.Causes); Assert.True(baseline.Receipts.SequenceEqual(post.Receipts.Where(x => x.HeartbeatId != heartbeatId))); Assert.True(baseline.Causes.SequenceEqual(post.Causes.Where(x => x.SourceLastHeartbeatAt != response.ReceivedAt)));
     }
 
     [Fact]
@@ -588,7 +588,7 @@ public sealed class AgentApiTests
         var h1ConnectionString = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { ApplicationName = h1ApplicationName }.ConnectionString;
         var h2ConnectionString = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { ApplicationName = h2ApplicationName }.ConnectionString;
         await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", h2ConnectionString)); using var client = factory.CreateClient();
-        var fixture = await CreateSt10bHeartbeatFixtureAsync(factory, client, true, ct, eligibleProjectionCount: 1); var initialSource = Assert.Single(fixture.Probes.Where(x => x.HasProjection));
+        var fixture = await CreateSt10bHeartbeatFixtureAsync(factory, client, true, ct, eligibleProjectionCount: 1); var initialSource = Assert.Single(fixture.Probes, x => x.HasProjection);
         var oldHeartbeat = (await ReadPostgresClockAsync(postgres.ConnectionString, ct)).AddMinutes(-2); var sourceResultId = Guid.Parse("93000000-0000-0000-0000-000000000001"); var sourceEventAt = oldHeartbeat.AddSeconds(30);
         var causeCreatedBefore = await ReadPostgresClockAsync(postgres.ConnectionString, ct);
         await using (var setupScope = factory.Services.CreateAsyncScope())
@@ -655,7 +655,7 @@ public sealed class AgentApiTests
     {
         var ct = TestContext.Current.CancellationToken; await using var postgres = await PostgresTestDatabase.StartAsync(ct); var h2Name = $"t4b2-h2-{Guid.NewGuid():N}"; var h1Name = $"t4b2-h1-{Guid.NewGuid():N}";
         var h2Connection = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { ApplicationName = h2Name }.ConnectionString; var h1Connection = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { ApplicationName = h1Name }.ConnectionString;
-        var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b => b.UseSetting("ConnectionStrings:Postgres", h2Connection)); var client = factory.CreateClient(); var fixture = await CreateSt10bHeartbeatFixtureAsync(factory, client, true, ct, eligibleProjectionCount: 1); var source = Assert.Single(fixture.Probes.Where(x => x.HasProjection));
+        var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b => b.UseSetting("ConnectionStrings:Postgres", h2Connection)); var client = factory.CreateClient(); var fixture = await CreateSt10bHeartbeatFixtureAsync(factory, client, true, ct, eligibleProjectionCount: 1); var source = Assert.Single(fixture.Probes, x => x.HasProjection);
         var oldHeartbeat = (await ReadPostgresClockAsync(postgres.ConnectionString, ct)).AddMinutes(-2); var sourceResultId = Guid.Parse("94000000-0000-0000-0000-000000000001"); var sourceEventAt = oldHeartbeat.AddSeconds(30); var createdBefore = await ReadPostgresClockAsync(postgres.ConnectionString, ct);
         await using (var setup = factory.Services.CreateAsyncScope()) { var db = setup.ServiceProvider.GetRequiredService<EePulseDbContext>(); var agent = await db.Agents.SingleAsync(x => x.Id == fixture.AgentId, ct); agent.Heartbeat(agent.AgentVersion, agent.MachineName, agent.QueueDepth, agent.SelfHealth, agent.DesiredConfigurationVersion, oldHeartbeat, oldHeartbeat); db.Add(new ProbeResultLedgerEntry(fixture.AgentId, sourceResultId, source.ProbeId, 100, sourceEventAt.AddSeconds(-1), sourceEventAt, 1, 1, 0m, 1m, 1m, 1m, null, new byte[32], sourceEventAt)); await db.SaveChangesAsync(ct); await new ProbeResultStatusProcessor(db, new FixedClock(sourceEventAt)).ProcessNextAsync(source.ProbeId, ct); }
         var createdAfter = await ReadPostgresClockAsync(postgres.ConnectionString, ct); var baseline = await ReadSt10bHeartbeatSnapshotAsync(factory, fixture.AgentId, ct); var original = Assert.Single(baseline.Causes); var before = await ReadPostgresClockAsync(postgres.ConnectionString, ct); Assert.True(original.DueAt <= before); Assert.InRange(original.RequestedAt, createdBefore, createdAfter);
