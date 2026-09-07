@@ -4,6 +4,7 @@ using System.Net;
 using EePulse.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace EePulse.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(EePulseDbContext))]
-    partial class EePulseDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260826075019_WP06St04aIncidentResolution")]
+    partial class WP06St04aIncidentResolution
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -977,10 +980,6 @@ namespace EePulse.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("acknowledgement_comment");
 
-                    b.Property<int>("OccurrenceCount")
-                        .HasColumnType("integer")
-                        .HasColumnName("occurrence_count");
-
                     b.Property<DateTimeOffset>("OpenedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("opened_at");
@@ -1028,8 +1027,6 @@ namespace EePulse.Infrastructure.Persistence.Migrations
                     b.ToTable("availability_incidents", null, t =>
                         {
                             t.HasCheckConstraint("ck_availability_incidents_lifecycle", "(acknowledged_at IS NULL AND acknowledged_by IS NULL AND acknowledgement_comment IS NULL) OR (acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledgement_comment IS NOT NULL)");
-
-                            t.HasCheckConstraint("ck_availability_incidents_occurrence_count", "occurrence_count >= 1");
 
                             t.HasCheckConstraint("ck_availability_incidents_resolution", "(resolved_at IS NULL AND resolved_by IS NULL AND resolution_note IS NULL) OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution_note IS NOT NULL)");
 
@@ -1139,11 +1136,11 @@ namespace EePulse.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_incident_lifecycle_events_disposition", "processing_disposition = 'StateDriving'");
 
-                            t.HasCheckConstraint("ck_incident_lifecycle_events_key", "lifecycle_event_key IN ('opened', 'resolved') OR lifecycle_event_key = ('occurrence:' || lower(source_result_id::text))");
+                            t.HasCheckConstraint("ck_incident_lifecycle_events_key", "lifecycle_event_key IN ('opened', 'resolved')");
 
-                            t.HasCheckConstraint("ck_incident_lifecycle_events_source", "(lifecycle_event_type = 'Opened' AND lifecycle_event_key = 'opened' AND source_from_status <> 'Down' AND source_to_status = 'Down' AND source_reason_code = 'failure-threshold-met') OR (lifecycle_event_type = 'Resolved' AND lifecycle_event_key = 'resolved' AND source_from_status = 'Recovering' AND source_to_status IN ('Up', 'Degraded') AND source_reason_code = 'recovery-threshold-met') OR (lifecycle_event_type = 'Occurrence' AND lifecycle_event_key = ('occurrence:' || lower(source_result_id::text)) AND source_from_status = 'Recovering' AND source_to_status = 'Down' AND source_reason_code = 'recovery-failed')");
+                            t.HasCheckConstraint("ck_incident_lifecycle_events_source", "(lifecycle_event_type = 'Opened' AND lifecycle_event_key = 'opened' AND source_from_status <> 'Down' AND source_to_status = 'Down' AND source_reason_code = 'failure-threshold-met') OR (lifecycle_event_type = 'Resolved' AND lifecycle_event_key = 'resolved' AND source_from_status = 'Recovering' AND source_to_status IN ('Up', 'Degraded') AND source_reason_code = 'recovery-threshold-met')");
 
-                            t.HasCheckConstraint("ck_incident_lifecycle_events_type", "lifecycle_event_type IN ('Opened', 'Resolved', 'Occurrence')");
+                            t.HasCheckConstraint("ck_incident_lifecycle_events_type", "lifecycle_event_type IN ('Opened', 'Resolved')");
                         });
                 });
 
@@ -1193,471 +1190,9 @@ namespace EePulse.Infrastructure.Persistence.Migrations
 
                     b.ToTable("notification_suppression_contexts", null, t =>
                         {
-                            t.HasCheckConstraint("ck_notification_suppression_contexts_eligibility", "(lifecycle_event_key IN ('opened', 'resolved') AND eligibility = 'Eligible') OR (lifecycle_event_key LIKE 'occurrence:%' AND eligibility = 'Suppressed')");
+                            t.HasCheckConstraint("ck_notification_suppression_contexts_eligibility", "eligibility = 'Eligible'");
 
-                            t.HasCheckConstraint("ck_notification_suppression_contexts_reason", "(lifecycle_event_key = 'opened' AND reason_code = 'availability-down') OR (lifecycle_event_key = 'resolved' AND reason_code = 'confirmed-recovery') OR (lifecycle_event_key LIKE 'occurrence:%' AND reason_code = 'recovery-failed')");
-                        });
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeFreshnessExpiryCause", b =>
-                {
-                    b.Property<Guid>("CauseId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("cause_id");
-
-                    b.Property<string>("CauseType")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("cause_type");
-
-                    b.Property<DateTimeOffset>("DueAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("due_at");
-
-                    b.Property<int>("FreshnessGraceSeconds")
-                        .HasColumnType("integer")
-                        .HasColumnName("freshness_grace_seconds");
-
-                    b.Property<int>("FreshnessIntervalSeconds")
-                        .HasColumnType("integer")
-                        .HasColumnName("freshness_interval_seconds");
-
-                    b.Property<Guid>("PolicySnapshotId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("policy_snapshot_id");
-
-                    b.Property<int>("PolicyVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("policy_version");
-
-                    b.Property<Guid>("ProbeId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("probe_id");
-
-                    b.Property<DateTimeOffset>("RequestedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("requested_at")
-                        .HasDefaultValueSql("clock_timestamp()");
-
-                    b.Property<Guid>("SourceAgentGroupId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("source_agent_group_id");
-
-                    b.Property<Guid>("SourceAgentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("source_agent_id");
-
-                    b.Property<long>("SourceConfigurationVersion")
-                        .HasColumnType("bigint")
-                        .HasColumnName("source_configuration_version");
-
-                    b.Property<DateTimeOffset>("SourceCursorEventAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("source_cursor_event_at");
-
-                    b.Property<string>("SourceDisposition")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("source_disposition");
-
-                    b.Property<DateTimeOffset>("SourceLastFreshEventAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("source_last_fresh_event_at");
-
-                    b.Property<Guid>("SourceResultId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("source_result_id");
-
-                    b.HasKey("CauseId");
-
-                    b.HasAlternateKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .HasName("ak_probe_freshness_expiry_causes_lineage");
-
-                    b.HasAlternateKey("ProbeId", "SourceAgentId", "SourceResultId", "SourceCursorEventAt")
-                        .HasName("ak_probe_freshness_expiry_causes_source");
-
-                    b.HasIndex("DueAt", "ProbeId")
-                        .HasDatabaseName("ix_probe_freshness_expiry_causes_due_probe");
-
-                    b.HasIndex("PolicySnapshotId", "PolicyVersion");
-
-                    b.HasIndex("SourceAgentGroupId", "SourceConfigurationVersion");
-
-                    b.HasIndex("SourceAgentId", "SourceResultId", "SourceDisposition");
-
-                    b.HasIndex("SourceAgentId", "SourceResultId", "ProbeId", "SourceCursorEventAt")
-                        .HasDatabaseName("IX_probe_freshness_expiry_causes_source_agent_id_source_resul~1");
-
-                    b.ToTable("probe_freshness_expiry_causes", null, t =>
-                        {
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_due_at", "due_at >= source_last_fresh_event_at");
-
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_inputs", "freshness_interval_seconds >= 1 AND freshness_grace_seconds >= 1");
-
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_source_disposition", "source_disposition = 'StateDriving'");
-
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_source_freshness", "source_cursor_event_at = source_last_fresh_event_at");
-
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_type", "cause_type = 'ResultFreshnessExpiry'");
-
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_causes_versions", "source_configuration_version >= 1 AND policy_version >= 1");
-                        });
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeFreshnessExpiryCauseDisposition", b =>
-                {
-                    b.Property<Guid>("CauseId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("cause_id");
-
-                    b.Property<DateTimeOffset?>("AppliedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("applied_at");
-
-                    b.Property<DateTimeOffset>("ExpiryCutoffReceivedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("expiry_cutoff_received_at");
-
-                    b.Property<string>("Outcome")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("varchar(16)")
-                        .HasColumnName("outcome");
-
-                    b.Property<Guid>("PolicySnapshotId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("policy_snapshot_id");
-
-                    b.Property<int>("PolicyVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("policy_version");
-
-                    b.Property<Guid>("ProbeId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("probe_id");
-
-                    b.Property<string>("ReasonCode")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("reason_code");
-
-                    b.HasKey("CauseId");
-
-                    b.HasAlternateKey("CauseId", "Outcome")
-                        .HasName("ak_probe_freshness_expiry_cause_dispositions_cause_outcome");
-
-                    b.HasIndex("ProbeId");
-
-                    b.HasIndex("PolicySnapshotId", "PolicyVersion");
-
-                    b.HasIndex("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion");
-
-                    b.ToTable("probe_freshness_expiry_cause_dispositions", null, t =>
-                        {
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_dispositions_outcome", "outcome IN ('Applied', 'NoOp')");
-
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_dispositions_shape", "(outcome = 'Applied' AND reason_code = 'result-freshness-expired' AND applied_at = expiry_cutoff_received_at) OR (outcome = 'NoOp' AND reason_code IN ('projection-missing', 'freshness-source-superseded', 'visible-already-unknown') AND applied_at IS NULL)");
-                        });
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeFreshnessExpiryCauseTransition", b =>
-                {
-                    b.Property<Guid>("CauseId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("cause_id");
-
-                    b.Property<DateTimeOffset>("AppliedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("applied_at");
-
-                    b.Property<string>("DispositionOutcome")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("varchar(16)")
-                        .HasColumnName("disposition_outcome");
-
-                    b.Property<string>("FromVisibleStatus")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("from_visible_status");
-
-                    b.Property<Guid>("PolicySnapshotId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("policy_snapshot_id");
-
-                    b.Property<int>("PolicyVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("policy_version");
-
-                    b.Property<Guid>("ProbeId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("probe_id");
-
-                    b.Property<string>("ReasonCode")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("reason_code");
-
-                    b.Property<string>("ToVisibleStatus")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("to_visible_status");
-
-                    b.HasKey("CauseId");
-
-                    b.HasIndex("ProbeId");
-
-                    b.HasIndex("CauseId", "DispositionOutcome");
-
-                    b.HasIndex("PolicySnapshotId", "PolicyVersion");
-
-                    b.HasIndex("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion");
-
-                    b.ToTable("probe_freshness_expiry_cause_transitions", null, t =>
-                        {
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_transitions_disposition_outcome", "disposition_outcome = 'Applied'");
-
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_transitions_from_visible_status", "from_visible_status IN ('Up', 'Degraded', 'Down', 'Recovering')");
-
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_transitions_reason_code", "reason_code = 'result-freshness-expired'");
-
-                            t.HasCheckConstraint("ck_probe_freshness_expiry_cause_transitions_to_visible_status", "to_visible_status = 'Unknown'");
-                        });
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeHeartbeatExpiryCause", b =>
-                {
-                    b.Property<Guid>("CauseId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("cause_id");
-
-                    b.Property<Guid>("AuthorityAgentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("authority_agent_id");
-
-                    b.Property<string>("CauseType")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("cause_type");
-
-                    b.Property<DateTimeOffset>("DueAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("due_at");
-
-                    b.Property<Guid>("PolicySnapshotId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("policy_snapshot_id");
-
-                    b.Property<int>("PolicyVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("policy_version");
-
-                    b.Property<Guid>("ProbeId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("probe_id");
-
-                    b.Property<DateTimeOffset>("RequestedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("requested_at")
-                        .HasDefaultValueSql("clock_timestamp()");
-
-                    b.Property<Guid>("SourceAgentGroupId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("source_agent_group_id");
-
-                    b.Property<long>("SourceConfigurationVersion")
-                        .HasColumnType("bigint")
-                        .HasColumnName("source_configuration_version");
-
-                    b.Property<DateTimeOffset>("SourceCursorEventAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("source_cursor_event_at");
-
-                    b.Property<string>("SourceDisposition")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("source_disposition");
-
-                    b.Property<int>("SourceHeartbeatIntervalSeconds")
-                        .HasColumnType("integer")
-                        .HasColumnName("source_heartbeat_interval_seconds");
-
-                    b.Property<DateTimeOffset>("SourceLastHeartbeatReceivedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("source_last_heartbeat_received_at");
-
-                    b.Property<Guid>("SourceResultId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("source_result_id");
-
-                    b.HasKey("CauseId");
-
-                    b.HasAlternateKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .HasName("ak_probe_heartbeat_expiry_causes_lineage");
-
-                    b.HasAlternateKey("ProbeId", "AuthorityAgentId", "SourceResultId", "SourceCursorEventAt", "SourceLastHeartbeatReceivedAt", "SourceHeartbeatIntervalSeconds")
-                        .HasName("ak_probe_heartbeat_expiry_causes_source");
-
-                    b.HasIndex("DueAt", "ProbeId")
-                        .HasDatabaseName("ix_probe_heartbeat_expiry_causes_due_probe");
-
-                    b.HasIndex("PolicySnapshotId", "PolicyVersion");
-
-                    b.HasIndex("SourceAgentGroupId", "SourceConfigurationVersion");
-
-                    b.HasIndex("AuthorityAgentId", "SourceResultId", "SourceDisposition");
-
-                    b.HasIndex("AuthorityAgentId", "SourceResultId", "ProbeId", "SourceCursorEventAt")
-                        .HasDatabaseName("IX_probe_heartbeat_expiry_causes_authority_agent_id_source_re~1");
-
-                    b.ToTable("probe_heartbeat_expiry_causes", null, t =>
-                        {
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_due_at", "due_at >= source_last_heartbeat_received_at");
-
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_heartbeat_interval", "source_heartbeat_interval_seconds BETWEEN 15 AND 30");
-
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_source_disposition", "source_disposition = 'StateDriving'");
-
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_type", "cause_type = 'AgentHeartbeatExpiry'");
-
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_causes_versions", "source_configuration_version >= 1 AND policy_version >= 1");
-                        });
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeHeartbeatExpiryCauseDisposition", b =>
-                {
-                    b.Property<Guid>("CauseId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("cause_id");
-
-                    b.Property<DateTimeOffset?>("AppliedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("applied_at");
-
-                    b.Property<DateTimeOffset>("ExpiryCutoffReceivedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("expiry_cutoff_received_at");
-
-                    b.Property<string>("Outcome")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("varchar(16)")
-                        .HasColumnName("outcome");
-
-                    b.Property<Guid>("PolicySnapshotId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("policy_snapshot_id");
-
-                    b.Property<int>("PolicyVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("policy_version");
-
-                    b.Property<Guid>("ProbeId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("probe_id");
-
-                    b.Property<string>("ReasonCode")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("reason_code");
-
-                    b.HasKey("CauseId");
-
-                    b.HasAlternateKey("CauseId", "Outcome")
-                        .HasName("ak_probe_heartbeat_expiry_cause_dispositions_cause_outcome");
-
-                    b.HasIndex("ProbeId");
-
-                    b.HasIndex("PolicySnapshotId", "PolicyVersion");
-
-                    b.HasIndex("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion");
-
-                    b.ToTable("probe_heartbeat_expiry_cause_dispositions", null, t =>
-                        {
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_dispositions_outcome", "outcome IN ('Applied', 'NoOp')");
-
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_dispositions_shape", "(outcome = 'Applied' AND reason_code = 'agent-heartbeat-expired' AND applied_at = expiry_cutoff_received_at) OR (outcome = 'NoOp' AND reason_code IN ('projection-missing', 'authority-watermark-superseded', 'authority-heartbeat-advanced', 'visible-already-unknown') AND applied_at IS NULL)");
-                        });
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeHeartbeatExpiryCauseTransition", b =>
-                {
-                    b.Property<Guid>("CauseId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("cause_id");
-
-                    b.Property<DateTimeOffset>("AppliedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("applied_at");
-
-                    b.Property<string>("DispositionOutcome")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("varchar(16)")
-                        .HasColumnName("disposition_outcome");
-
-                    b.Property<string>("FromVisibleStatus")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("from_visible_status");
-
-                    b.Property<Guid>("PolicySnapshotId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("policy_snapshot_id");
-
-                    b.Property<int>("PolicyVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("policy_version");
-
-                    b.Property<Guid>("ProbeId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("probe_id");
-
-                    b.Property<string>("ReasonCode")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("reason_code");
-
-                    b.Property<string>("ToVisibleStatus")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("to_visible_status");
-
-                    b.HasKey("CauseId");
-
-                    b.HasIndex("ProbeId");
-
-                    b.HasIndex("CauseId", "DispositionOutcome");
-
-                    b.HasIndex("PolicySnapshotId", "PolicyVersion");
-
-                    b.HasIndex("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion");
-
-                    b.ToTable("probe_heartbeat_expiry_cause_transitions", null, t =>
-                        {
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_transitions_disposition_outcome", "disposition_outcome = 'Applied'");
-
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_transitions_from_visible_status", "from_visible_status IN ('Up', 'Degraded', 'Down', 'Recovering')");
-
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_transitions_reason_code", "reason_code = 'agent-heartbeat-expired'");
-
-                            t.HasCheckConstraint("ck_probe_heartbeat_expiry_cause_transitions_to_visible_status", "to_visible_status = 'Unknown'");
+                            t.HasCheckConstraint("ck_notification_suppression_contexts_reason", "(lifecycle_event_key = 'opened' AND reason_code = 'availability-down') OR (lifecycle_event_key = 'resolved' AND reason_code = 'confirmed-recovery')");
                         });
                 });
 
@@ -1924,12 +1459,6 @@ namespace EePulse.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("underlying_status");
 
-                    b.Property<string>("VisibleStatus")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("varchar(20)")
-                        .HasColumnName("visible_status");
-
                     b.Property<Guid?>("WatermarkAgentId")
                         .HasColumnType("uuid")
                         .HasColumnName("watermark_agent_id");
@@ -1957,8 +1486,6 @@ namespace EePulse.Infrastructure.Persistence.Migrations
                             t.HasCheckConstraint("ck_probe_status_projections_state_version", "state_version >= 0");
 
                             t.HasCheckConstraint("ck_probe_status_projections_status", "underlying_status IN ('Unknown', 'Up', 'Degraded', 'Down', 'Recovering')");
-
-                            t.HasCheckConstraint("ck_probe_status_projections_visible_status", "visible_status IN ('Unknown', 'Up', 'Degraded', 'Down', 'Recovering')");
 
                             t.HasCheckConstraint("ck_probe_status_projections_watermark", "(watermark_event_at IS NULL AND watermark_agent_id IS NULL AND watermark_result_id IS NULL) OR (watermark_event_at IS NOT NULL AND watermark_agent_id IS NOT NULL AND watermark_result_id IS NOT NULL)");
                         });
@@ -2169,198 +1696,6 @@ namespace EePulse.Infrastructure.Persistence.Migrations
                         .HasPrincipalKey("EventId", "IncidentId", "LifecycleEventKey", "PolicyVersion")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeFreshnessExpiryCause", b =>
-                {
-                    b.HasOne("EePulse.Domain.Inventory.Probe", null)
-                        .WithMany()
-                        .HasForeignKey("ProbeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Agents.Agent", null)
-                        .WithMany()
-                        .HasForeignKey("SourceAgentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeStatusPolicySnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("Id", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Agents.AgentConfigurationSnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("SourceAgentGroupId", "SourceConfigurationVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeResultProcessingDisposition", null)
-                        .WithMany()
-                        .HasForeignKey("SourceAgentId", "SourceResultId", "SourceDisposition")
-                        .HasPrincipalKey("AgentId", "ResultId", "Disposition")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Agents.ProbeResultLedgerEntry", null)
-                        .WithMany()
-                        .HasForeignKey("SourceAgentId", "SourceResultId", "ProbeId", "SourceCursorEventAt")
-                        .HasPrincipalKey("AgentId", "ResultId", "ProbeId", "EndedAt")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeFreshnessExpiryCauseDisposition", b =>
-                {
-                    b.HasOne("EePulse.Domain.Inventory.Probe", null)
-                        .WithMany()
-                        .HasForeignKey("ProbeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeStatusPolicySnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("Id", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeFreshnessExpiryCause", null)
-                        .WithMany()
-                        .HasForeignKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeFreshnessExpiryCauseTransition", b =>
-                {
-                    b.HasOne("EePulse.Domain.Inventory.Probe", null)
-                        .WithMany()
-                        .HasForeignKey("ProbeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeFreshnessExpiryCauseDisposition", null)
-                        .WithMany()
-                        .HasForeignKey("CauseId", "DispositionOutcome")
-                        .HasPrincipalKey("CauseId", "Outcome")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeStatusPolicySnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("Id", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeFreshnessExpiryCause", null)
-                        .WithMany()
-                        .HasForeignKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("FK_probe_freshness_expiry_cause_transitions_probe_freshness_e~1");
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeHeartbeatExpiryCause", b =>
-                {
-                    b.HasOne("EePulse.Domain.Agents.Agent", null)
-                        .WithMany()
-                        .HasForeignKey("AuthorityAgentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Inventory.Probe", null)
-                        .WithMany()
-                        .HasForeignKey("ProbeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeStatusPolicySnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("Id", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Agents.AgentConfigurationSnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("SourceAgentGroupId", "SourceConfigurationVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeResultProcessingDisposition", null)
-                        .WithMany()
-                        .HasForeignKey("AuthorityAgentId", "SourceResultId", "SourceDisposition")
-                        .HasPrincipalKey("AgentId", "ResultId", "Disposition")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Agents.ProbeResultLedgerEntry", null)
-                        .WithMany()
-                        .HasForeignKey("AuthorityAgentId", "SourceResultId", "ProbeId", "SourceCursorEventAt")
-                        .HasPrincipalKey("AgentId", "ResultId", "ProbeId", "EndedAt")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeHeartbeatExpiryCauseDisposition", b =>
-                {
-                    b.HasOne("EePulse.Domain.Inventory.Probe", null)
-                        .WithMany()
-                        .HasForeignKey("ProbeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeStatusPolicySnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("Id", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeHeartbeatExpiryCause", null)
-                        .WithMany()
-                        .HasForeignKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EePulse.Domain.Status.ProbeHeartbeatExpiryCauseTransition", b =>
-                {
-                    b.HasOne("EePulse.Domain.Inventory.Probe", null)
-                        .WithMany()
-                        .HasForeignKey("ProbeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeHeartbeatExpiryCauseDisposition", null)
-                        .WithMany()
-                        .HasForeignKey("CauseId", "DispositionOutcome")
-                        .HasPrincipalKey("CauseId", "Outcome")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeStatusPolicySnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("Id", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EePulse.Domain.Status.ProbeHeartbeatExpiryCause", null)
-                        .WithMany()
-                        .HasForeignKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .HasPrincipalKey("CauseId", "ProbeId", "PolicySnapshotId", "PolicyVersion")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("FK_probe_heartbeat_expiry_cause_transitions_probe_heartbeat_e~1");
                 });
 
             modelBuilder.Entity("EePulse.Domain.Status.ProbeResultProcessingDisposition", b =>
