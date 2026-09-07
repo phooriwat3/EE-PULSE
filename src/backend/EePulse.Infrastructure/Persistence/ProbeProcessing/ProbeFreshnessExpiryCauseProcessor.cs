@@ -100,7 +100,6 @@ public sealed class ProbeFreshnessExpiryCauseProcessor(EePulseDbContext db)
                 else
                 {
                     var fromVisibleStatus = projection.VisibleStatus;
-                    projection.ExpireResultFreshness();
                     disposition = ProbeFreshnessExpiryCauseDisposition.Applied(cause.CauseId, cause.ProbeId,
                         cause.PolicySnapshotId, cause.PolicyVersion, expiryCutoffReceivedAt);
                     db.Add(new ProbeFreshnessExpiryCauseTransition(cause.CauseId, cause.ProbeId,
@@ -111,9 +110,25 @@ public sealed class ProbeFreshnessExpiryCauseProcessor(EePulseDbContext db)
                 await db.SaveChangesAsync(cancellationToken);
                 if (disposition.Outcome == ProbeFreshnessExpiryCauseDispositionOutcome.Applied)
                 {
-                    await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_projections SET state_version = state_version + 1 WHERE probe_id = {probeId}", cancellationToken);
+                    var unknownVisibleStatus = ProbeStatus.Unknown.ToString();
+                    var visibleStatusRows = await db.Database.ExecuteSqlInterpolatedAsync(
+                        $"UPDATE probe_status_projections SET visible_status = {unknownVisibleStatus} WHERE probe_id = {probeId}",
+                        cancellationToken);
+                    if (visibleStatusRows != 1)
+                        throw new InvalidOperationException("The freshness expiry processor expected to update exactly one projection visible status.");
+
+                    var stateVersionRows = await db.Database.ExecuteSqlInterpolatedAsync(
+                        $"UPDATE probe_status_projections SET state_version = state_version + 1 WHERE probe_id = {probeId}",
+                        cancellationToken);
+                    if (stateVersionRows != 1)
+                        throw new InvalidOperationException("The freshness expiry processor expected to update exactly one projection state version.");
+
+                    var visibleStatus = db.Entry(projection!).Property(row => row.VisibleStatus);
+                    visibleStatus.CurrentValue = ProbeStatus.Unknown;
+                    visibleStatus.OriginalValue = ProbeStatus.Unknown;
+                    visibleStatus.IsModified = false;
                     var version = db.Entry(projection!).Property(row => row.StateVersion);
-                    version.CurrentValue++;
+                    version.CurrentValue = version.OriginalValue + 1;
                     version.OriginalValue = version.CurrentValue;
                     version.IsModified = false;
                 }

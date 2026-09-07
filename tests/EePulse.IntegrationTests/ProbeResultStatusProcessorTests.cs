@@ -7,8 +7,11 @@ using EePulse.Infrastructure.Persistence.ProbeProcessing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
+using NpgsqlTypes;
 using System.Collections.Immutable;
 using System.Data.Common;
+using System.Globalization;
+using System.Runtime.ExceptionServices;
 
 namespace EePulse.IntegrationTests;
 
@@ -53,7 +56,9 @@ public sealed class ProbeResultStatusProcessorTests
         await using (var initial = new EePulseDbContext(fixture.Options)) Assert.Equal(oldResult, (await new ProbeResultStatusProcessor(initial, new FixedClock(oldEvent)).ProcessNextAsync(fixture.ProbeId, ct)).ResultId);
         var oldCauseCreatedAfter = await ReadPostgresTimestampAsync(fixture.ConnectionString, ct);
         var newResult = Guid.Parse("b3000000-0000-0000-0000-000000000002"); var newEvent = oldEvent.AddSeconds(1);
+        var expectedNewDispositionDecidedAt = new DateTimeOffset(newEvent.UtcTicks - newEvent.UtcTicks % 10, TimeSpan.Zero);
         await AddLedgerAsync(fixture, newEvent, newEvent, 3, 0m, resultId: newResult);
+        var expectedConfigurationPayload = await NormalizePostgresJsonbAsync(fixture.ConnectionString, FreshnessPayload(fixture.ProbeId, 30), ct);
         var before = await ReadPostgresTimestampAsync(fixture.ConnectionString, ct); ProbeHeartbeatExpiryCauseSnapshot originalCause; ProbeStatusProjectionSnapshot projectionBefore; H1NoMutationSnapshot baseline;
         await using (var pre = new EePulseDbContext(fixture.Options))
         {
@@ -69,7 +74,7 @@ public sealed class ProbeResultStatusProcessorTests
             Assert.Equal((fixture.AgentId, fixture.GroupId, "processor", "processor", "1.0.0", AgentSelfHealth.Healthy, AgentStatus.Online, 0L, oldHeartbeat, oldHeartbeat, 20, 0L, 0L, fixture.Now, (DateTimeOffset?)null, (string?)null), (agent.Id, agent.AgentGroupId, agent.Name, agent.MachineName, agent.AgentVersion, agent.SelfHealth, agent.Status, agent.QueueDepth, agent.LastHeartbeatAt, agent.LastReportedAt, agent.HeartbeatIntervalSeconds, agent.DesiredConfigurationVersion, agent.LastAppliedConfigurationVersion, agent.CreatedAt, agent.RevokedAt, agent.RevocationReason));
             Assert.Equal((fixture.AgentId, 1L, acknowledgement.Id, AgentAcknowledgementStatus.Applied, fixture.Now), (boundary.AgentId, boundary.ConfigurationVersion, boundary.SourceAcknowledgementId, boundary.SourceAcknowledgementStatus, boundary.AppliedAcknowledgementReceivedAt));
             Assert.Equal((fixture.AgentId, 1L, AgentAcknowledgementStatus.Applied, fixture.Now, fixture.Now, fixture.Now, 1L, 1L), (acknowledgement.AgentId, acknowledgement.ConfigurationVersion, acknowledgement.Status, acknowledgement.AppliedAt, acknowledgement.SentAt, acknowledgement.ReceivedAt, acknowledgement.CentralEffectiveConfigurationVersion, acknowledgement.DesiredConfigurationVersion));
-            Assert.Equal((fixture.GroupId, 1L, FreshnessPayload(fixture.ProbeId, 30), Convert.ToHexString(new byte[32]), fixture.Now, (long?)null), (configuration.AgentGroupId, configuration.Version, configuration.Payload, Convert.ToHexString(configuration.PayloadDigest), configuration.GeneratedAt, configuration.RollbackOfVersion));
+            Assert.Equal((fixture.GroupId, 1L, expectedConfigurationPayload, Convert.ToHexString(new byte[32]), fixture.Now, (long?)null), (configuration.AgentGroupId, configuration.Version, configuration.Payload, Convert.ToHexString(configuration.PayloadDigest), configuration.GeneratedAt, configuration.RollbackOfVersion));
             Assert.Equal((fixture.PolicyId, 1, 2, 2, (int?)500, (decimal?)null, 300, 60, fixture.Now), (policy.Id, policy.PolicyVersion, policy.FailureThreshold, policy.RecoveryThreshold, policy.WarningRttMilliseconds, policy.WarningPacketLossRatio, policy.ApprovedLatenessSeconds, policy.ApprovedFutureSkewSeconds, policy.CreatedAt));
             Assert.Equal((fixture.ProbeId, 1L, fixture.GroupId, fixture.PolicyId), (binding.ProbeId, binding.ConfigurationVersion, binding.AgentGroupId, binding.PolicySnapshotId));
             Assert.Equal((fixture.AgentId, newResult, fixture.ProbeId, 1L, newEvent.AddSeconds(-1), newEvent, 3, 3, 0m, 1m, 1m, 1m, (string?)null, Convert.ToHexString(new byte[32]), newEvent), (pending.AgentId, pending.ResultId, pending.ProbeId, pending.ConfigurationVersion, pending.StartedAt, pending.EndedAt, pending.AttemptCount, pending.SuccessfulAttemptCount, pending.PacketLossRatio, pending.MinRttMilliseconds, pending.AverageRttMilliseconds, pending.MaxRttMilliseconds, pending.ErrorCategory, Convert.ToHexString(pending.ImmutablePayloadDigest), pending.ReceivedAt));
@@ -90,7 +95,7 @@ public sealed class ProbeResultStatusProcessorTests
         await using var blockerA = new NpgsqlConnection(fixture.ConnectionString); await blockerA.OpenAsync(ct); await using var txA = await blockerA.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct); var pidA = await LockProjectionForUpdateAsync(blockerA, txA, fixture.ProbeId, ct);
         await using var observer = new NpgsqlConnection(fixture.ConnectionString); await observer.OpenAsync(ct);
         var resultDb = new EePulseDbContext(resultOptions); var h1Db = new EePulseDbContext(h1Options); var resultCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct); var h1Cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        Task<ProbeResultStatusProcessorOutcome>? resultTask = null; Task<ProbeHeartbeatExpiryProcessorOutcome>? h1Task = null; ProbeResultStatusProcessorOutcome? resultOutcome = null; ProbeHeartbeatExpiryProcessorOutcome? h1Outcome = null; T4B3BackendIdentity? backendB = null; T4B3BackendIdentity? backendC = null; Exception? primary = null; var releasedA = false;
+        Task<ProbeResultStatusProcessorOutcome>? resultTask = null; Task<ProbeHeartbeatExpiryProcessorOutcome>? h1Task = null; ProbeResultStatusProcessorOutcome? resultOutcome = null; ProbeHeartbeatExpiryProcessorOutcome? h1Outcome = null; T4B3BackendIdentity? backendB = null; T4B3BackendIdentity? backendC = null; Exception? primary = null; ExceptionDispatchInfo? primaryDispatch = null; Exception? cleanupToThrow = null; var releasedA = false;
         try
         {
             resultTask = RunResultAsync(resultDb, fixture.ProbeId, newEvent, value => resultOutcome = value, resultCancellation.Token);
@@ -104,7 +109,7 @@ public sealed class ProbeResultStatusProcessorTests
             await txA.RollbackAsync(ct); releasedA = true;
             using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct); bounded.CancelAfter(TimeSpan.FromSeconds(10)); await resultTask.WaitAsync(bounded.Token); await h1Task.WaitAsync(bounded.Token);
         }
-        catch (Exception exception) { primary = exception; throw; }
+        catch (Exception exception) { primary = exception; primaryDispatch = ExceptionDispatchInfo.Capture(exception); }
         finally
         {
             var failures = new List<Exception>(); async Task Attempt(string name, Func<CancellationToken, Task> action) { try { using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10)); await action(cleanup.Token); } catch (Exception exception) { failures.Add(new InvalidOperationException($"T4B3 cleanup failed while {name}.", exception)); } }
@@ -116,12 +121,14 @@ public sealed class ProbeResultStatusProcessorTests
             if (h1Task is null) { await Attempt("disposing never-started H1 context", async _ => await h1Db.DisposeAsync()); await Attempt("disposing never-started H1 CTS", _ => { h1Cancellation.Dispose(); return Task.CompletedTask; }); }
             else if (h1Terminal) { await Attempt("disposing H1 context", async _ => await h1Db.DisposeAsync()); await Attempt("disposing H1 CTS", _ => { h1Cancellation.Dispose(); return Task.CompletedTask; }); }
             else await Attempt("transferring H1 processor C ownership", _ => { TransferT4B3Ownership("H1 processor C", h1Task, h1Cancellation, backendC, [new("H1 context", async () => await h1Db.DisposeAsync())], failures, primary); return Task.CompletedTask; });
-            if (failures.Count > 0) { if (primary is not null) for (var index = 0; index < failures.Count; index++) primary.Data[$"T4B3CleanupFailure{index + 1}"] = failures[index]; else if (failures.Count == 1) throw failures[0]; else throw new AggregateException(failures); }
+            if (failures.Count > 0) { if (primary is not null) for (var index = 0; index < failures.Count; index++) primary.Data[$"T4B3CleanupFailure{index + 1}"] = failures[index]; else cleanupToThrow = failures.Count == 1 ? failures[0] : new AggregateException(failures); }
         }
+        primaryDispatch?.Throw();
+        if (cleanupToThrow is not null) ExceptionDispatchInfo.Capture(cleanupToThrow).Throw();
 
         var after = await ReadPostgresTimestampAsync(fixture.ConnectionString, ct); await using var verify = new EePulseDbContext(fixture.Options);
         var newDisposition = await verify.ProbeResultProcessingDispositions.AsNoTracking().SingleAsync(x => x.AgentId == fixture.AgentId && x.ResultId == newResult, ct); var fresh = await verify.ProbeFreshnessExpiryCauses.AsNoTracking().SingleAsync(x => x.SourceResultId == newResult, ct); var successor = await verify.ProbeHeartbeatExpiryCauses.AsNoTracking().SingleAsync(x => x.SourceResultId == newResult, ct); var oldDisposition = await verify.ProbeHeartbeatExpiryCauseDispositions.AsNoTracking().SingleAsync(x => x.CauseId == originalCause.CauseId, ct); var projection = await verify.ProbeStatusProjections.AsNoTracking().SingleAsync(x => x.ProbeId == fixture.ProbeId, ct); var originalAfter = await verify.ProbeHeartbeatExpiryCauses.AsNoTracking().Where(x => x.CauseId == originalCause.CauseId).Select(x => new ProbeHeartbeatExpiryCauseSnapshot(x.CauseId, x.ProbeId, x.CauseType, x.AuthorityAgentId, x.SourceResultId, x.SourceCursorEventAt, x.SourceLastHeartbeatReceivedAt, x.SourceHeartbeatIntervalSeconds, x.SourceConfigurationVersion, x.SourceAgentGroupId, x.SourceDisposition, x.PolicySnapshotId, x.PolicyVersion, x.DueAt, x.RequestedAt)).SingleAsync(ct);
-        Assert.Equal((ProbeResultStatusProcessorOutcomeKind.Processed, newResult), (resultOutcome!.Kind, resultOutcome.ResultId)); Assert.Equal((fixture.AgentId, newResult, fixture.ProbeId, newEvent, ProbeResultProcessingDispositionKind.StateDriving, "state-driving", fixture.PolicyId, 1), (newDisposition.AgentId, newDisposition.ResultId, newDisposition.ProbeId, newDisposition.EventAt, newDisposition.Disposition, newDisposition.ReasonCode, newDisposition.ResolvedPolicySnapshotId, newDisposition.ResolvedPolicyVersion)); Assert.InRange(newDisposition.DecidedAt, before, after);
+        Assert.Equal((ProbeResultStatusProcessorOutcomeKind.Processed, newResult), (resultOutcome!.Kind, resultOutcome.ResultId)); Assert.Equal((fixture.AgentId, newResult, fixture.ProbeId, newEvent, ProbeResultProcessingDispositionKind.StateDriving, "state-driving", fixture.PolicyId, 1, expectedNewDispositionDecidedAt), (newDisposition.AgentId, newDisposition.ResultId, newDisposition.ProbeId, newDisposition.EventAt, newDisposition.Disposition, newDisposition.ReasonCode, newDisposition.ResolvedPolicySnapshotId, newDisposition.ResolvedPolicyVersion, newDisposition.DecidedAt));
         Assert.False(await verify.ProbeResultStatusTransitions.AsNoTracking().AnyAsync(x => x.AgentId == fixture.AgentId && x.ResultId == newResult, ct));
         Assert.Equal((fixture.ProbeId, ProbeStatus.Up, ProbeStatus.Up, 0, 2, 2L, fixture.AgentId, newResult, newEvent, newEvent, (Guid?)null), (projection.ProbeId, projection.UnderlyingStatus, projection.VisibleStatus, projection.ConsecutiveFailureCount, projection.ConsecutiveSuccessCount, projection.StateVersion, projection.WatermarkAgentId, projection.WatermarkResultId, projection.WatermarkEventAt, projection.LastFreshEventAt, projection.OpenIncidentId));
         Assert.NotEqual(Guid.Empty, fresh.CauseId); Assert.Equal((ProbeFreshnessExpiryCauseType.ResultFreshnessExpiry, ProbeResultProcessingDispositionKind.StateDriving, fixture.ProbeId, fixture.AgentId, newResult, newEvent, newEvent, 1L, fixture.GroupId, fixture.PolicyId, 1, 30, 60, newEvent.AddSeconds(60)), (fresh.CauseType, fresh.SourceDisposition, fresh.ProbeId, fresh.SourceAgentId, fresh.SourceResultId, fresh.SourceCursorEventAt, fresh.SourceLastFreshEventAt, fresh.SourceConfigurationVersion, fresh.SourceAgentGroupId, fresh.PolicySnapshotId, fresh.PolicyVersion, fresh.FreshnessIntervalSeconds, fresh.FreshnessGraceSeconds, fresh.DueAt)); Assert.InRange(fresh.RequestedAt, before, after);
@@ -133,7 +140,7 @@ public sealed class ProbeResultStatusProcessorTests
         var expectedFinal = baseline with
         {
             Projection = new St10ProjectionSnapshot(fixture.ProbeId, ProbeStatus.Up, ProbeStatus.Up, 0, 2, newEvent, newEvent, fixture.AgentId, newResult, 2, null),
-            ResultDispositions = baseline.ResultDispositions.Append(new St10ResultDispositionSnapshot(fixture.AgentId, newResult, fixture.ProbeId, newEvent, ProbeResultProcessingDispositionKind.StateDriving, "state-driving", fixture.PolicyId, 1, newDisposition.DecidedAt)).OrderBy(x => x.AgentId).ThenBy(x => x.ResultId).ToArray(),
+            ResultDispositions = baseline.ResultDispositions.Append(new St10ResultDispositionSnapshot(fixture.AgentId, newResult, fixture.ProbeId, newEvent, ProbeResultProcessingDispositionKind.StateDriving, "state-driving", fixture.PolicyId, 1, expectedNewDispositionDecidedAt)).OrderBy(x => x.AgentId).ThenBy(x => x.ResultId).ToArray(),
             FreshnessCauses = baseline.FreshnessCauses.Append(new FreshnessFullSnapshot(fresh.CauseId, fresh.ProbeId, fresh.CauseType, fresh.SourceAgentId, fresh.SourceResultId, fresh.SourceCursorEventAt, fresh.SourceLastFreshEventAt, fresh.SourceConfigurationVersion, fresh.SourceAgentGroupId, fresh.SourceDisposition, fresh.PolicySnapshotId, fresh.PolicyVersion, fresh.FreshnessIntervalSeconds, fresh.FreshnessGraceSeconds, fresh.DueAt, fresh.RequestedAt)).OrderBy(x => x.CauseId).ToArray(),
             HeartbeatCauses = baseline.HeartbeatCauses.Append(new HeartbeatFullSnapshot(successor.CauseId, successor.ProbeId, successor.CauseType, successor.AuthorityAgentId, successor.SourceResultId, successor.SourceCursorEventAt, successor.SourceLastHeartbeatReceivedAt, successor.SourceHeartbeatIntervalSeconds, successor.SourceConfigurationVersion, successor.SourceAgentGroupId, successor.SourceDisposition, successor.PolicySnapshotId, successor.PolicyVersion, successor.DueAt, successor.RequestedAt)).OrderBy(x => x.CauseId).ToArray(),
             Dispositions = baseline.Dispositions.Append(new HeartbeatDispositionFullSnapshot(oldDisposition.CauseId, oldDisposition.ProbeId, oldDisposition.PolicySnapshotId, oldDisposition.PolicyVersion, oldDisposition.Outcome, oldDisposition.ReasonCode, oldDisposition.ExpiryCutoffReceivedAt, oldDisposition.AppliedAt)).OrderBy(x => x.CauseId).ToArray()
@@ -2480,7 +2487,7 @@ public sealed class ProbeResultStatusProcessorTests
         var blockerC = new NpgsqlConnection(fixture.ConnectionString); await blockerC.OpenAsync(TestContext.Current.CancellationToken);
         var txC = await blockerC.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, TestContext.Current.CancellationToken);
         var pidC = await GetBackendPidAsync(blockerC, TestContext.Current.CancellationToken);
-        Task? invocation = null; Task? waitC = null; NpgsqlCommand? waitCCommand = null; CancellationTokenSource? waitCCancellation = null; Exception? primary = null; int? pidB = null; var releasedA = false; var releasedC = false;
+        Task? invocation = null; Task? waitC = null; NpgsqlCommand? waitCCommand = null; CancellationTokenSource? waitCCancellation = null; Exception? primary = null; ExceptionDispatchInfo? primaryDispatch = null; Exception? cleanupToThrow = null; int? pidB = null; var releasedA = false; var releasedC = false;
         ProbeHeartbeatExpiryProcessorOutcome? heartbeatOutcome = null; ProbeFreshnessExpiryProcessorOutcome? freshnessOutcome = null;
         try
         {
@@ -2504,7 +2511,7 @@ public sealed class ProbeResultStatusProcessorTests
             await txC.RollbackAsync(TestContext.Current.CancellationToken);
             releasedC = true;
         }
-        catch (Exception exception) { primary = exception; throw; }
+        catch (Exception exception) { primary = exception; primaryDispatch = ExceptionDispatchInfo.Capture(exception); }
         finally
         {
             var cleanupFailures = new List<Exception>();
@@ -2561,9 +2568,10 @@ public sealed class ProbeResultStatusProcessorTests
             {
                 for (var index = 0; index < cleanupFailures.Count; index++) primary.Data[$"T4A1CleanupFailure{index + 1}"] = cleanupFailures[index];
             }
-            else if (cleanupFailures.Count == 1) throw cleanupFailures[0];
-            else throw new AggregateException(cleanupFailures);
+            else cleanupToThrow = cleanupFailures.Count == 1 ? cleanupFailures[0] : new AggregateException(cleanupFailures);
         }
+        primaryDispatch?.Throw();
+        if (cleanupToThrow is not null) ExceptionDispatchInfo.Capture(cleanupToThrow).Throw();
 
         var after = await ReadPostgresTimestampAsync(fixture.ConnectionString, TestContext.Current.CancellationToken);
         await using var verify = new EePulseDbContext(fixture.Options);
@@ -2618,11 +2626,11 @@ public sealed class ProbeResultStatusProcessorTests
         Guid causeId;
         await using (var initialVerify = new EePulseDbContext(fixture.Options))
         {
-            var cause = await initialVerify.ProbeFreshnessExpiryCauses.AsNoTracking()
+            var initialFreshnessCause = await initialVerify.ProbeFreshnessExpiryCauses.AsNoTracking()
                 .SingleAsync(x => x.SourceAgentId == fixture.AgentId && x.SourceResultId == resultA,
                     TestContext.Current.CancellationToken);
-            causeId = cause.CauseId;
-            Assert.InRange(cause.RequestedAt, initialBefore, initialAfter);
+            causeId = initialFreshnessCause.CauseId;
+            Assert.InRange(initialFreshnessCause.RequestedAt, initialBefore, initialAfter);
         }
 
         var futureAt = (await ReadPostgresTimestampAsync(fixture.ConnectionString, TestContext.Current.CancellationToken)).AddMinutes(5);
@@ -2644,9 +2652,9 @@ public sealed class ProbeResultStatusProcessorTests
         Assert.True(futureAt > before);
         await using (var eligibility = new EePulseDbContext(fixture.Options))
         {
-            var cause = await eligibility.ProbeFreshnessExpiryCauses.AsNoTracking()
+            var eligibleFreshnessCause = await eligibility.ProbeFreshnessExpiryCauses.AsNoTracking()
                 .SingleAsync(x => x.CauseId == causeId, TestContext.Current.CancellationToken);
-            Assert.True(cause.DueAt <= before);
+            Assert.True(eligibleFreshnessCause.DueAt <= before);
         }
 
         ProbeFreshnessExpiryProcessorOutcome outcome;
@@ -2744,11 +2752,11 @@ public sealed class ProbeResultStatusProcessorTests
         Guid causeId;
         await using (var initialVerify = new EePulseDbContext(fixture.Options))
         {
-            var cause = await initialVerify.ProbeHeartbeatExpiryCauses.AsNoTracking()
+            var initialHeartbeatCause = await initialVerify.ProbeHeartbeatExpiryCauses.AsNoTracking()
                 .SingleAsync(x => x.AuthorityAgentId == fixture.AgentId && x.SourceResultId == resultA,
                     TestContext.Current.CancellationToken);
-            causeId = cause.CauseId;
-            Assert.InRange(cause.RequestedAt, initialBefore, initialAfter);
+            causeId = initialHeartbeatCause.CauseId;
+            Assert.InRange(initialHeartbeatCause.RequestedAt, initialBefore, initialAfter);
         }
 
         var futureAt = (await ReadPostgresTimestampAsync(fixture.ConnectionString, TestContext.Current.CancellationToken)).AddMinutes(5);
@@ -2770,9 +2778,9 @@ public sealed class ProbeResultStatusProcessorTests
         Assert.True(futureAt > before);
         await using (var eligibility = new EePulseDbContext(fixture.Options))
         {
-            var cause = await eligibility.ProbeHeartbeatExpiryCauses.AsNoTracking()
+            var eligibleHeartbeatCause = await eligibility.ProbeHeartbeatExpiryCauses.AsNoTracking()
                 .SingleAsync(x => x.CauseId == causeId, TestContext.Current.CancellationToken);
-            Assert.True(cause.DueAt <= before);
+            Assert.True(eligibleHeartbeatCause.DueAt <= before);
         }
 
         ProbeHeartbeatExpiryProcessorOutcome outcome;
@@ -2943,7 +2951,7 @@ public sealed class ProbeResultStatusProcessorTests
             new(controlled.CauseId, fixture.AgentId, controlled.ResultId, controlled.EventAt, originalHeartbeatAt,
                 heartbeatIntervalSeconds, 1L, fixture.GroupId, fixture.PolicyId, 1),
             preMutationProjection, null, null, null, null, null, null, null,
-            originalHeartbeatAt, heartbeatIntervalSeconds, null, null, null, new[] { controlled.CauseId });
+            originalHeartbeatAt, heartbeatIntervalSeconds, null, null, null, null, new[] { controlled.CauseId });
         if (prerequisite == "ProjectionMissing")
         {
             await using var mutation = new EePulseDbContext(fixture.Options);
@@ -3220,6 +3228,7 @@ public sealed class ProbeResultStatusProcessorTests
         var eventLow = heartbeatLow.AddSeconds(10); var eventHigh = eventLow.AddSeconds(1);
         await SetHeartbeatAsync(fixture, agentLow, heartbeatLow); await SetHeartbeatAsync(fixture, agentHigh, heartbeatHigh);
         var agentHighEvidence = await CaptureT4B4AgentEvidenceAsync(fixture, agentHigh);
+        var expectedAgentHighConfigurationPayload = await NormalizePostgresJsonbAsync(fixture.ConnectionString, FreshnessPayload(fixture.ProbeId, 30), ct);
         await AddLedgerAsync(fixture, eventLow, eventLow, 3, 0m, resultId: resultLow, agentId: agentLow);
         var oldCauseBefore = await ReadPostgresTimestampAsync(fixture.ConnectionString, ct);
         await using (var seed = new EePulseDbContext(fixture.Options)) Assert.Equal(resultLow, (await new ProbeResultStatusProcessor(seed, new FixedClock(eventLow)).ProcessNextAsync(fixture.ProbeId, ct)).ResultId);
@@ -3232,7 +3241,7 @@ public sealed class ProbeResultStatusProcessorTests
         var app = $"t4b4-h1-{Guid.NewGuid():N}"; var options = new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { ApplicationName = app }.ConnectionString).Options;
         await using var blockerA = new NpgsqlConnection(fixture.ConnectionString); await blockerA.OpenAsync(ct); await using var txA = await blockerA.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct); var pidA = await LockProbeAdvisoryTransactionAsync(blockerA, txA, fixture.ProbeId, ct);
         await using var observer = new NpgsqlConnection(fixture.ConnectionString); await observer.OpenAsync(ct);
-        var h1Db = new EePulseDbContext(options); var h1Cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct); Task<ProbeHeartbeatExpiryProcessorOutcome>? h1Task = null; ProbeHeartbeatExpiryProcessorOutcome? outcome = null; T4B3BackendIdentity? backendB = null; Exception? primary = null; var releasedA = false; var releasedD = false;
+        var h1Db = new EePulseDbContext(options); var h1Cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct); Task<ProbeHeartbeatExpiryProcessorOutcome>? h1Task = null; ProbeHeartbeatExpiryProcessorOutcome? outcome = null; T4B3BackendIdentity? backendB = null; Exception? primary = null; ExceptionDispatchInfo? primaryDispatch = null; Exception? cleanupToThrow = null; var releasedA = false; var releasedD = false;
         NpgsqlConnection? blockerD = null; NpgsqlTransaction? txD = null;
         NpgsqlConnection? waiterE = null; NpgsqlTransaction? txE = null; NpgsqlCommand? waitECommand = null; CancellationTokenSource? waitECancellation = null; Task<object?>? waitETask = null; T4B3BackendIdentity? backendE = null;
         try
@@ -3241,11 +3250,11 @@ public sealed class ProbeResultStatusProcessorTests
             h1Task = RunHeartbeatAsync(h1Db, fixture.ProbeId, value => outcome = value, h1Cancellation.Token);
             backendB = await CaptureT4B3BackendIdentityAsync(observer, app, h1Task, ct); Assert.NotEqual(pidA, backendB.Pid);
             await WaitForH1ProbeBlockedByAsync(observer, backendB, pidA, fixture.ProbeId, h1Task, ct);
-            var eApp = $"t4b4-low-waiter-{Guid.NewGuid():N}"; waiterE = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { ApplicationName = eApp }.ConnectionString); await waiterE.OpenAsync(ct); txE = await waiterE.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct); var pidE = await GetBackendPidAsync(waiterE, ct); backendE = await CaptureT4B3IdleBackendIdentityAsync(observer, eApp, pidE, ct); Assert.Equal(pidE, backendE.Pid); Assert.NotEqual(backendB.Pid, backendE.Pid); waitECancellation = CancellationTokenSource.CreateLinkedTokenSource(ct); waitECommand = new NpgsqlCommand("SELECT id FROM agents WHERE id=@agentId FOR UPDATE", waiterE, txE); waitECommand.Parameters.AddWithValue("agentId", agentLow); waitETask = waitECommand.ExecuteScalarAsync(waitECancellation.Token).AsTask();
+            var eApp = $"t4b4-low-waiter-{Guid.NewGuid():N}"; waiterE = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { ApplicationName = eApp }.ConnectionString); await waiterE.OpenAsync(ct); txE = await waiterE.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct); var pidE = await GetBackendPidAsync(waiterE, ct); backendE = await CaptureT4B3IdleBackendIdentityAsync(observer, eApp, pidE, ct); Assert.Equal(pidE, backendE.Pid); Assert.NotEqual(backendB.Pid, backendE.Pid); waitECancellation = CancellationTokenSource.CreateLinkedTokenSource(ct); waitECommand = new NpgsqlCommand("SELECT id FROM agents WHERE id=@agentId FOR UPDATE", waiterE, txE); waitECommand.Parameters.AddWithValue("agentId", agentLow); waitETask = waitECommand.ExecuteScalarAsync(waitECancellation.Token);
             await WaitForT4B4WaiterEAsync(observer, backendE, backendB, pidA, fixture.ProbeId, waitETask, h1Task, ct);
             await WaitForH1ProbeBlockedByAsync(observer, backendB, pidA, fixture.ProbeId, h1Task, ct);
-            await using (var blocking = new NpgsqlCommand("SELECT array_to_string(pg_blocking_pids(@pid), ',')", observer)) { blocking.Parameters.AddWithValue("pid", backendE.Pid); Assert.Equal(backendB.Pid.ToString(), Assert.IsType<string>(await blocking.ExecuteScalarAsync(ct))); }
-            var eFailures = new List<Exception>(); var eTerminal = await SettleT4B3TaskAsync("T4B4 agentLow waiter E", waitETask, waitECancellation, backendE, observer, eFailures); Assert.True(eTerminal); Assert.Empty(eFailures); await txE.RollbackAsync(ct); await txE.DisposeAsync(); txE = null; await waitECommand.DisposeAsync(); waitECommand = null; waitECancellation.Dispose(); waitECancellation = null;
+            await using (var blocking = new NpgsqlCommand("SELECT array_to_string(pg_blocking_pids(@pid), ',')", observer)) { blocking.Parameters.AddWithValue("pid", backendE.Pid); Assert.Equal(backendB.Pid.ToString(CultureInfo.InvariantCulture), Assert.IsType<string>(await blocking.ExecuteScalarAsync(ct))); }
+            var eFailures = new List<Exception>(); var eTerminal = await SettleT4B3TaskAsync("T4B4 agentLow waiter E", waitETask, waitECancellation, backendE, observer, eFailures, cancelBeforeInitialObservation: true); Assert.True(eTerminal); Assert.Empty(eFailures); await txE.RollbackAsync(ct); await txE.DisposeAsync(); txE = null; await waitECommand.DisposeAsync(); waitECommand = null; waitECancellation.Dispose(); waitECancellation = null;
             AssertH1NoMutationSnapshotEqual(baseline, await CaptureH1NoMutationSnapshotAsync(fixture));
 
             await AddLedgerAsync(fixture, eventHigh, eventHigh, 3, 0m, resultId: resultHigh, agentId: agentHigh);
@@ -3260,7 +3269,7 @@ public sealed class ProbeResultStatusProcessorTests
                 Assert.Equal(agentHighEvidence, new T4B4AgentEvidence(highAgent.Id, highAgent.ClientInstanceId, highAgent.Name, highAgent.MachineName, highAgent.AgentVersion, highAgent.AgentGroupId, highAgent.SelfHealth, highAgent.Status, highAgent.QueueDepth, highAgent.LastHeartbeatAt, highAgent.LastReportedAt, highAgent.HeartbeatIntervalSeconds, highAgent.DesiredConfigurationVersion, highAgent.LastAppliedConfigurationVersion, highAgent.LastConfigurationAcknowledgedAt, highAgent.ClockSkewSuspected, highAgent.CredentialExpiresAt, highAgent.CreatedAt, highAgent.RevokedAt, highAgent.RevocationReason, highAgent.RowVersion));
                 Assert.Equal((agentHigh, 1L, AgentAcknowledgementStatus.Applied, fixture.Now, fixture.Now, fixture.Now, (string?)null, 1L, 1L), (acknowledgement.AgentId, acknowledgement.ConfigurationVersion, acknowledgement.Status, acknowledgement.AppliedAt, acknowledgement.SentAt, acknowledgement.ReceivedAt, acknowledgement.ErrorCode, acknowledgement.CentralEffectiveConfigurationVersion, acknowledgement.DesiredConfigurationVersion));
                 Assert.Equal((agentHigh, 1L, acknowledgement.Id, AgentAcknowledgementStatus.Applied, fixture.Now), (boundary.AgentId, boundary.ConfigurationVersion, boundary.SourceAcknowledgementId, boundary.SourceAcknowledgementStatus, boundary.AppliedAcknowledgementReceivedAt));
-                Assert.Equal((fixture.GroupId, 1L, FreshnessPayload(fixture.ProbeId, 30), Convert.ToHexString(new byte[32]), fixture.Now, (long?)null), (configuration.AgentGroupId, configuration.Version, configuration.Payload, Convert.ToHexString(configuration.PayloadDigest), configuration.GeneratedAt, configuration.RollbackOfVersion));
+                Assert.Equal((fixture.GroupId, 1L, expectedAgentHighConfigurationPayload, Convert.ToHexString(new byte[32]), fixture.Now, (long?)null), (configuration.AgentGroupId, configuration.Version, configuration.Payload, Convert.ToHexString(configuration.PayloadDigest), configuration.GeneratedAt, configuration.RollbackOfVersion));
                 Assert.Equal((fixture.PolicyId, 1, 2, 2, (int?)500, (decimal?)null, 300, 60, fixture.Now), (policy.Id, policy.PolicyVersion, policy.FailureThreshold, policy.RecoveryThreshold, policy.WarningRttMilliseconds, policy.WarningPacketLossRatio, policy.ApprovedLatenessSeconds, policy.ApprovedFutureSkewSeconds, policy.CreatedAt));
                 Assert.True(highLedger.ReceivedAt >= boundary.AppliedAcknowledgementReceivedAt); Assert.Equal((fixture.ProbeId, 1L, fixture.GroupId, fixture.PolicyId), (binding.ProbeId, binding.ConfigurationVersion, binding.AgentGroupId, binding.PolicySnapshotId));
                 Assert.False(await changed.ProbeResultProcessingDispositions.AsNoTracking().AnyAsync(x => x.AgentId == agentHigh && x.ResultId == resultHigh, ct)); Assert.False(await changed.ProbeFreshnessExpiryCauses.AsNoTracking().AnyAsync(x => x.SourceAgentId == agentHigh && x.SourceResultId == resultHigh, ct)); Assert.False(await changed.ProbeHeartbeatExpiryCauses.AsNoTracking().AnyAsync(x => x.AuthorityAgentId == agentHigh && x.SourceResultId == resultHigh, ct));
@@ -3296,7 +3305,7 @@ public sealed class ProbeResultStatusProcessorTests
             };
             AssertH1NoMutationSnapshotEqual(expectedFinal, final); Assert.Equal(oldCause, final.HeartbeatCauses.Single(x => x.CauseId == oldCause.CauseId));
         }
-        catch (Exception exception) { primary = exception; throw; }
+        catch (Exception exception) { primary = exception; primaryDispatch = ExceptionDispatchInfo.Capture(exception); }
         finally
         {
             var failures = new List<Exception>(); async Task Attempt(string name, Func<CancellationToken, Task> action) { try { using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10)); await action(cleanup.Token); } catch (Exception exception) { failures.Add(new InvalidOperationException($"T4B4 cleanup failed while {name}.", exception)); } }
@@ -3311,8 +3320,10 @@ public sealed class ProbeResultStatusProcessorTests
             var terminal = h1Task is not null && await SettleT4B3TaskAsync("T4B4 H1 B", h1Task, h1Cancellation, backendB, observer, failures);
             if (h1Task is null || terminal) { await Attempt("disposing H1 context", async _ => await h1Db.DisposeAsync()); await Attempt("disposing H1 CTS", _ => { h1Cancellation.Dispose(); return Task.CompletedTask; }); } else await Attempt("transferring H1 ownership", _ => { TransferT4B3Ownership("T4B4 H1 B", h1Task, h1Cancellation, backendB, [new("T4B4 H1 context", async () => await h1Db.DisposeAsync())], failures, primary); return Task.CompletedTask; });
             if (txD is not null) await Attempt("disposing Agent blocker D transaction", async _ => await txD.DisposeAsync()); if (blockerD is not null) await Attempt("disposing Agent blocker D connection", async _ => await blockerD.DisposeAsync());
-            if (failures.Count > 0) { if (primary is not null) for (var i = 0; i < failures.Count; i++) primary.Data[$"T4B4CleanupFailure{i + 1}"] = failures[i]; else if (failures.Count == 1) throw failures[0]; else throw new AggregateException(failures); }
+            if (failures.Count > 0) { if (primary is not null) for (var i = 0; i < failures.Count; i++) primary.Data[$"T4B4CleanupFailure{i + 1}"] = failures[i]; else cleanupToThrow = failures.Count == 1 ? failures[0] : new AggregateException(failures); }
         }
+        primaryDispatch?.Throw();
+        if (cleanupToThrow is not null) ExceptionDispatchInfo.Capture(cleanupToThrow).Throw();
     }
 
     [Fact]
@@ -3343,6 +3354,8 @@ public sealed class ProbeResultStatusProcessorTests
         var invocation = new ProbeHeartbeatExpiryCauseProcessor(processorContext).ProcessNextDueAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
         ProbeHeartbeatExpiryProcessorOutcome outcome = default!;
         Exception? primary = null;
+        ExceptionDispatchInfo? primaryDispatch = null;
+        Exception? cleanupToThrow = null;
         try
         {
             using var wait = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken); wait.CancelAfter(TimeSpan.FromSeconds(10));
@@ -3364,7 +3377,7 @@ public sealed class ProbeResultStatusProcessorTests
         catch (Exception exception)
         {
             primary = exception;
-            throw;
+            primaryDispatch = ExceptionDispatchInfo.Capture(exception);
         }
         finally
         {
@@ -3377,9 +3390,11 @@ public sealed class ProbeResultStatusProcessorTests
             catch (Exception cleanupFailure)
             {
                 if (primary is not null) primary.Data["T3B3AgentShareGateCleanupFailure"] = cleanupFailure;
-                else throw;
+                else cleanupToThrow = cleanupFailure;
             }
         }
+        primaryDispatch?.Throw();
+        if (cleanupToThrow is not null) ExceptionDispatchInfo.Capture(cleanupToThrow).Throw();
         var after = await ReadPostgresTimestampAsync(fixture.ConnectionString, TestContext.Current.CancellationToken);
         var expectedCanonical = new[] { fixture.AgentId.ToString("D"), agentB.ToString("D") }.OrderBy(id => id, StringComparer.Ordinal).ToArray();
         var acquisitions = gate.AgentShareCommands;
@@ -3454,6 +3469,8 @@ public sealed class ProbeResultStatusProcessorTests
         }
 
         Exception? primary = null;
+        ExceptionDispatchInfo? primaryDispatch = null;
+        Exception? cleanupToThrow = null;
         try
         {
             await using var connection = new NpgsqlConnection(fixture.ConnectionString);
@@ -3473,7 +3490,7 @@ public sealed class ProbeResultStatusProcessorTests
         catch (Exception exception)
         {
             primary = exception;
-            throw;
+            primaryDispatch = ExceptionDispatchInfo.Capture(exception);
         }
         finally
         {
@@ -3488,9 +3505,11 @@ public sealed class ProbeResultStatusProcessorTests
             catch (Exception cleanupFailure)
             {
                 if (primary is not null) primary.Data["H1 cause ordering trigger cleanup failure"] = cleanupFailure;
-                else throw;
+                else cleanupToThrow = cleanupFailure;
             }
         }
+        primaryDispatch?.Throw();
+        if (cleanupToThrow is not null) ExceptionDispatchInfo.Capture(cleanupToThrow).Throw();
 
         await using (var verifyOrdering = new EePulseDbContext(fixture.Options))
         {
@@ -3645,7 +3664,33 @@ public sealed class ProbeResultStatusProcessorTests
     }
 
     private static async Task<LedgerOrder[]> ReadPendingOrderAsync(Fixture fixture) { await using var db = new EePulseDbContext(fixture.Options); return await db.ProbeResultLedgerEntries.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId && !db.ProbeResultProcessingDispositions.Any(d => d.AgentId == x.AgentId && d.ResultId == x.ResultId)).OrderBy(x => x.EndedAt).ThenBy(x => x.AgentId).ThenBy(x => x.ResultId).Select(x => new LedgerOrder(x.AgentId, x.ResultId, x.EndedAt, x.ReceivedAt)).ToArrayAsync(TestContext.Current.CancellationToken); }
-    private static async Task<ProbeArtifacts> ReadProbeArtifactsAsync(Fixture fixture) { await using var db = new EePulseDbContext(fixture.Options); var incidents = await db.AvailabilityIncidents.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).Select(x => new IncidentArtifact(x.Id, x.ProbeId, x.RuleKey, x.Status, x.OpenedAt, x.AcknowledgedAt, x.AcknowledgedBy, x.AcknowledgementComment, x.ResolvedAt, x.ResolvedBy, x.ResolutionNote, x.OccurrenceCount)).OrderBy(x => x.Id).ToArrayAsync(TestContext.Current.CancellationToken); var events = await db.IncidentLifecycleEvents.AsNoTracking().Where(x => x.ProbeId == fixture.ProbeId).Select(x => new EventArtifact(x.EventId, x.IncidentId, x.ProbeId, x.SourceAgentId, x.SourceResultId, x.SourceFromStatus, x.SourceToStatus, x.SourceReasonCode, x.PolicySnapshotId, x.PolicyVersion, x.LifecycleEventType, x.LifecycleEventKey, x.ProcessingDisposition, x.OccurredAt)).OrderBy(x => x.EventId).ToArrayAsync(TestContext.Current.CancellationToken); var eventIds = events.Select(x => x.EventId); var contexts = await db.NotificationSuppressionContexts.AsNoTracking().Where(x => eventIds.Contains(x.EventId)).Select(x => new ContextArtifact(x.EventId, x.IncidentId, x.LifecycleEventKey, x.PolicyVersion, x.Eligibility, x.ReasonCode, x.EvaluatedAt)).OrderBy(x => x.EventId).ToArrayAsync(TestContext.Current.CancellationToken); return new(incidents, events, contexts); }
+    private static async Task<ProbeArtifacts> ReadProbeArtifactsAsync(Fixture fixture)
+    {
+        await using var db = new EePulseDbContext(fixture.Options);
+        var incidents = await db.AvailabilityIncidents.AsNoTracking()
+            .Where(x => x.ProbeId == fixture.ProbeId)
+            .OrderBy(x => x.Id)
+            .Select(x => new IncidentArtifact(x.Id, x.ProbeId, x.RuleKey, x.Status, x.OpenedAt,
+                x.AcknowledgedAt, x.AcknowledgedBy, x.AcknowledgementComment, x.ResolvedAt,
+                x.ResolvedBy, x.ResolutionNote, x.OccurrenceCount))
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var events = await db.IncidentLifecycleEvents.AsNoTracking()
+            .Where(x => x.ProbeId == fixture.ProbeId)
+            .OrderBy(x => x.EventId)
+            .Select(x => new EventArtifact(x.EventId, x.IncidentId, x.ProbeId, x.SourceAgentId,
+                x.SourceResultId, x.SourceFromStatus, x.SourceToStatus, x.SourceReasonCode,
+                x.PolicySnapshotId, x.PolicyVersion, x.LifecycleEventType, x.LifecycleEventKey,
+                x.ProcessingDisposition, x.OccurredAt))
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+        var eventIds = events.Select(x => x.EventId);
+        var contexts = await db.NotificationSuppressionContexts.AsNoTracking()
+            .Where(x => eventIds.Contains(x.EventId))
+            .OrderBy(x => x.EventId)
+            .Select(x => new ContextArtifact(x.EventId, x.IncidentId, x.LifecycleEventKey,
+                x.PolicyVersion, x.Eligibility, x.ReasonCode, x.EvaluatedAt))
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+        return new(incidents, events, contexts);
+    }
     private static async Task<Guid> AddLedgerAsync(Fixture fixture, DateTimeOffset endedAt, DateTimeOffset receivedAt, int successes, decimal packetLossRatio, long configurationVersion = 1, Guid? resultId = null, decimal? averageRtt = 1m, Guid? agentId = null)
     {
         await using var db = new EePulseDbContext(fixture.Options);
@@ -3661,6 +3706,15 @@ public sealed class ProbeResultStatusProcessorTests
 
     private static string FreshnessPayload(Guid probeId, int intervalSeconds) =>
         $$"""{"probes":[{"probeId":"{{probeId:D}}","intervalSeconds":{{intervalSeconds}}}]}""";
+
+    private static async Task<string> NormalizePostgresJsonbAsync(string connectionString, string json, CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("SELECT CAST(CAST(@json AS jsonb) AS text)", connection);
+        command.Parameters.Add(new NpgsqlParameter("json", NpgsqlDbType.Text) { Value = json });
+        return Assert.IsType<string>(await command.ExecuteScalarAsync(cancellationToken));
+    }
 
     private static async Task<DateTimeOffset> ReadPostgresTimestampAsync(string connectionString, CancellationToken cancellationToken)
     {
@@ -3685,9 +3739,19 @@ public sealed class ProbeResultStatusProcessorTests
         }
     }
 
-    private static async Task RunHeartbeatAsync(EePulseDbContext db, Guid probeId, Action<ProbeHeartbeatExpiryProcessorOutcome> setOutcome, CancellationToken cancellationToken) => setOutcome(await new ProbeHeartbeatExpiryCauseProcessor(db).ProcessNextDueAsync(probeId, cancellationToken));
+    private static async Task<ProbeHeartbeatExpiryProcessorOutcome> RunHeartbeatAsync(EePulseDbContext db, Guid probeId, Action<ProbeHeartbeatExpiryProcessorOutcome> setOutcome, CancellationToken cancellationToken)
+    {
+        var outcome = await new ProbeHeartbeatExpiryCauseProcessor(db).ProcessNextDueAsync(probeId, cancellationToken);
+        setOutcome(outcome);
+        return outcome;
+    }
     private static async Task RunFreshnessAsync(EePulseDbContext db, Guid probeId, Action<ProbeFreshnessExpiryProcessorOutcome> setOutcome, CancellationToken cancellationToken) => setOutcome(await new ProbeFreshnessExpiryCauseProcessor(db).ProcessNextDueAsync(probeId, cancellationToken));
-    private static async Task RunResultAsync(EePulseDbContext db, Guid probeId, DateTimeOffset now, Action<ProbeResultStatusProcessorOutcome> setOutcome, CancellationToken cancellationToken) => setOutcome(await new ProbeResultStatusProcessor(db, new FixedClock(now)).ProcessNextAsync(probeId, cancellationToken));
+    private static async Task<ProbeResultStatusProcessorOutcome> RunResultAsync(EePulseDbContext db, Guid probeId, DateTimeOffset now, Action<ProbeResultStatusProcessorOutcome> setOutcome, CancellationToken cancellationToken)
+    {
+        var outcome = await new ProbeResultStatusProcessor(db, new FixedClock(now)).ProcessNextAsync(probeId, cancellationToken);
+        setOutcome(outcome);
+        return outcome;
+    }
 
     private static async Task<int> LockProjectionForUpdateAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, Guid probeId, CancellationToken cancellationToken)
     {
@@ -3735,20 +3799,42 @@ public sealed class ProbeResultStatusProcessorTests
     {
         private readonly object sync = new(); private readonly List<T4B3DeferredDiagnostic> values = [];
         public void Add(T4B3DeferredDiagnostic value) { lock (sync) values.Add(value); }
-        public IReadOnlyList<T4B3DeferredDiagnostic> Snapshot() { lock (sync) return values.ToArray(); }
+        public T4B3DeferredDiagnostic[] Snapshot() { lock (sync) return values.ToArray(); }
     }
 
     private static async Task<T4B3BackendIdentity> CaptureT4B3BackendIdentityAsync(NpgsqlConnection observer, string applicationName, Task task, CancellationToken cancellationToken)
     {
-        var started = DateTimeOffset.UtcNow; var attempts = 0; var last = "<none>"; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        try { while (true) { attempts++; await using var command = new NpgsqlCommand("SELECT pid, application_name, backend_start::text, datname FROM pg_stat_activity WHERE application_name=@name AND state <> 'idle' ORDER BY pid", observer); command.Parameters.AddWithValue("name", applicationName); await using var reader = await command.ExecuteReaderAsync(timeout.Token); var rows = new List<T4B3BackendIdentity>(); while (await reader.ReadAsync(timeout.Token)) rows.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3))); last = rows.Count == 0 ? "<none>" : string.Join(" | ", rows.Select(x => $"pid={x.Pid},application={x.ApplicationName},backend_start={x.BackendStartedAt},database={x.DatabaseName}")); if (rows.Count == 1) return rows[0]; if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"T4B3 processor completed before one backend identity was observable. application={applicationName}; backends={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); } await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token); } }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for T4B3 backend identity. application={applicationName}; backends={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); }
+        var started = DateTimeOffset.UtcNow; var attempts = 0; var last = "<none>"; var commandStage = "not-started"; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (true)
+            {
+                attempts++; commandStage = "started";
+                await using var command = new NpgsqlCommand("SELECT pid, application_name, backend_start::text, datname, state FROM pg_stat_activity WHERE application_name=@name AND state <> 'idle' ORDER BY pid", observer);
+                command.Parameters.AddWithValue("name", applicationName);
+                await using var reader = await command.ExecuteReaderAsync(timeout.Token);
+                commandStage = "reader-opened";
+                var identities = new List<T4B3BackendIdentity>(); var observations = new List<string>();
+                while (await reader.ReadAsync(timeout.Token))
+                {
+                    commandStage = "row-read";
+                    var pid = reader.GetInt32(0); var observedApplication = reader.GetString(1); var backendStart = reader.GetString(2); var database = reader.IsDBNull(3) ? null : reader.GetString(3); var state = reader.GetString(4);
+                    observations.Add($"pid={pid},application={observedApplication},backend_start={backendStart},database={(database ?? "<null>")},state={state}");
+                    if (database is not null) identities.Add(new(pid, observedApplication, backendStart, database));
+                }
+                last = observations.Count == 0 ? "<none>" : string.Join(" | ", observations);
+                if (observations.Count == 1 && identities.Count == 1) return identities[0];
+                if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"T4B3 processor completed before one complete backend identity was observable. application={applicationName}; backends={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}; observerCommandStage={commandStage}."); }
+                await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for T4B3 backend identity. application={applicationName}; backends={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}; observerCommandStage={commandStage}."); }
     }
 
     private static async Task<T4B3BackendIdentity> CaptureT4B3IdleBackendIdentityAsync(NpgsqlConnection observer, string applicationName, int pid, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow; var attempts = 0; var last = "<none>"; var commandStage = "not-started"; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        try { while (true) { attempts++; commandStage = "started"; await using var command = new NpgsqlCommand("SELECT pid, application_name, backend_start::text, datname, state FROM pg_stat_activity WHERE pid=@pid", observer); command.Parameters.AddWithValue("pid", pid); await using var reader = await command.ExecuteReaderAsync(timeout.Token); commandStage = "reader-opened"; if (await reader.ReadAsync(timeout.Token)) { commandStage = "row-read"; var observedPid = reader.GetInt32(0); var observedApplication = reader.GetString(1); var observedStarted = reader.GetString(2); var observedDatabase = reader.GetString(3); var observedState = reader.GetString(4); last = $"pid={observedPid};application={observedApplication};backend_start={observedStarted};database={observedDatabase};state={observedState}"; if (observedPid == pid && observedApplication == applicationName && observedState == "idle in transaction") return new(observedPid, observedApplication, observedStarted, observedDatabase); } else { commandStage = "completed-without-row"; last = "<absent>"; } await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token); } }
+        try { while (true) { attempts++; commandStage = "started"; await using var command = new NpgsqlCommand("SELECT pid, application_name, backend_start::text, datname, state FROM pg_stat_activity WHERE pid=@pid", observer); command.Parameters.AddWithValue("pid", pid); await using var reader = await command.ExecuteReaderAsync(timeout.Token); commandStage = "reader-opened"; if (await reader.ReadAsync(timeout.Token)) { commandStage = "row-read"; var observedPid = reader.GetInt32(0); var observedApplication = reader.GetString(1); var observedStarted = reader.GetString(2); var observedDatabase = reader.IsDBNull(3) ? null : reader.GetString(3); var observedState = reader.GetString(4); last = $"pid={observedPid};application={observedApplication};backend_start={observedStarted};database={(observedDatabase ?? "<null>")};state={observedState}"; if (observedDatabase is not null && observedPid == pid && observedApplication == applicationName && observedState == "idle in transaction") return new(observedPid, observedApplication, observedStarted, observedDatabase); } else { commandStage = "completed-without-row"; last = "<absent>"; } await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token); } }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out capturing idle T4B4 waiter E backend identity. expectedPid={pid}; expectedApplication={applicationName}; lastObserved={last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}; observerCommandStage={commandStage}."); }
     }
 
@@ -3770,14 +3856,15 @@ public sealed class ProbeResultStatusProcessorTests
                 {
                     var observedApplication = reader.GetString(0);
                     var observedBackendStart = reader.GetString(1);
-                    var observedDatabase = reader.GetString(2);
+                    var observedDatabase = reader.IsDBNull(2) ? null : reader.GetString(2);
                     var observedState = reader.GetString(3);
                     var observedWaitType = reader.IsDBNull(4) ? "<null>" : reader.GetString(4);
                     var observedWaitEvent = reader.IsDBNull(5) ? "<null>" : reader.GetString(5);
                     var observedBlockingPids = reader.GetString(9);
-                    var observedIdentityText = $"{observedApplication}|{observedBackendStart}|{observedDatabase}";
+                    var observedIdentityText = $"{observedApplication}|{observedBackendStart}|{(observedDatabase ?? "<null>")}";
                     var identity = observedApplication == waiter.ApplicationName
                         && observedBackendStart == waiter.BackendStartedAt
+                        && observedDatabase is not null
                         && observedDatabase == waiter.DatabaseName;
                     last = $"expected={waiter};observed={observedIdentityText};state={observedState};wait={observedWaitType}/{observedWaitEvent};blocking={observedBlockingPids}";
                     if (identity
@@ -3794,11 +3881,21 @@ public sealed class ProbeResultStatusProcessorTests
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested) { throw new Xunit.Sdk.XunitException($"Timed out waiting for T4B4 waiter E identity/lock evidence. {last};attempts={attempts};elapsed={DateTimeOffset.UtcNow - started}."); }
     }
 
-    private static async Task<bool> SettleT4B3TaskAsync(string name, Task? task, CancellationTokenSource cancellation, T4B3BackendIdentity? backend, NpgsqlConnection observer, List<Exception> failures)
+    private static async Task<bool> SettleT4B3TaskAsync(string name, Task? task, CancellationTokenSource cancellation, T4B3BackendIdentity? backend, NpgsqlConnection observer, List<Exception> failures, bool cancelBeforeInitialObservation = false)
     {
-        if (task is null || await ObserveTerminalAsync(name, task, false, failures)) return true;
-        try { cancellation.Cancel(); } catch (Exception exception) { failures.Add(new InvalidOperationException($"T4B3 cleanup failed while canceling {name}'s dedicated token.", exception)); }
-        var terminalAfterDedicatedCancellation = await ObserveTerminalAsync($"{name} after dedicated cancellation", task, true, failures);
+        if (task is null) return true;
+        bool terminalAfterDedicatedCancellation;
+        if (cancelBeforeInitialObservation)
+        {
+            try { cancellation.Cancel(); } catch (Exception exception) { failures.Add(new InvalidOperationException($"T4B3 cleanup failed while canceling {name}'s dedicated token.", exception)); }
+            terminalAfterDedicatedCancellation = await ObserveTerminalAsync($"{name} after dedicated cancellation", task, true, failures);
+        }
+        else
+        {
+            if (await ObserveTerminalAsync(name, task, false, failures)) return true;
+            try { cancellation.Cancel(); } catch (Exception exception) { failures.Add(new InvalidOperationException($"T4B3 cleanup failed while canceling {name}'s dedicated token.", exception)); }
+            terminalAfterDedicatedCancellation = await ObserveTerminalAsync($"{name} after dedicated cancellation", task, true, failures);
+        }
         if (terminalAfterDedicatedCancellation) return true;
         if (backend is null) failures.Add(new InvalidOperationException($"T4B3 cleanup has no immutable backend identity for {name}.")); else await SignalT4B3BackendAsync($"canceling {name}", observer, backend, false, failures);
         if (await ObserveTerminalAsync($"{name} after pg_cancel_backend", task, true, failures)) return true;
@@ -3826,7 +3923,7 @@ public sealed class ProbeResultStatusProcessorTests
     {
         private readonly TaskCompletionSource<bool> startGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task CompletionTask { get; private set; } = Task.CompletedTask;
-        public void Start() { lock (T4B3DeferredGate) { T4B3DeferredOwners.Add(id, this); T4B3DeferredDiagnostics[id] = diagnostics; CompletionTask = CompleteAsync(); if (!T4B3DeferredOwners.TryGetValue(id, out var rooted) || !ReferenceEquals(rooted, this)) throw new InvalidOperationException($"T4B3 deferred registry lost {id} before task assignment."); } startGate.TrySetResult(true); }
+        public void Start() { lock (T4B3DeferredGate) { T4B3DeferredOwners.Add(id, this); T4B3DeferredDiagnostics[id] = diagnostics; CompletionTask = CompleteAsync(); if (!T4B3DeferredOwners.TryGetValue(id, out var rooted) || !ReferenceEquals(rooted, this)) throw new InvalidOperationException($"T4B3 deferred registry lost operation {name} ({id}) before task assignment."); } startGate.TrySetResult(true); }
         private async Task CompleteAsync() { await startGate.Task.ConfigureAwait(false); try { try { await task.ConfigureAwait(false); diagnostics.Add(new(id, "task", "succeeded", null)); } catch (OperationCanceledException exception) { diagnostics.Add(new(id, "task", "canceled", exception)); } catch (Exception exception) { foreach (var inner in exception is AggregateException aggregate ? aggregate.Flatten().InnerExceptions : [exception]) diagnostics.Add(new(id, "task", "faulted", inner)); } foreach (var resource in resources) try { await resource.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { diagnostics.Add(new(id, resource.Name, "dispose-failed", exception)); } } catch (Exception exception) { diagnostics.Add(new(id, "runner", "faulted", exception)); } finally { try { cancellation.Dispose(); } catch (Exception exception) { diagnostics.Add(new(id, "cancellation", "dispose-failed", exception)); } lock (T4B3DeferredGate) { T4B3DeferredDiagnostics[id] = diagnostics; T4B3DeferredOwners.Remove(id); } _ = backend; } }
     }
 
@@ -3848,7 +3945,7 @@ public sealed class ProbeResultStatusProcessorTests
                    COALESCE((SELECT string_agg(format('classid=%s,objid=%s,objsubid=%s,mode=%s,granted=%s,identity=%s', classid::bigint, objid::bigint, objsubid, mode, granted, ((CASE WHEN classid::bigint >= 2147483648 THEN classid::bigint - 4294967296 ELSE classid::bigint END) * 4294967296) + objid::bigint), ' | ' ORDER BY classid,objid,objsubid,mode,granted) FROM pg_locks WHERE pid=@pid AND locktype='advisory'),'<none>')
             FROM pg_stat_activity a WHERE a.pid=@pid
             """, observer); command.Parameters.AddWithValue("pid", waitingBackend.Pid); command.Parameters.AddWithValue("blocker", blockerPid); command.Parameters.AddWithValue("probeId", canonical); await using var reader = await command.ExecuteReaderAsync(timeout.Token);
-                if (await reader.ReadAsync(timeout.Token)) { last = $"backend={waitingBackend};state={reader.GetString(0)},wait={reader.GetString(1)},event={reader.GetString(2)},locks={reader.GetString(6)},blocking={reader.GetString(7)},expectedAdvisoryIdentity={reader.GetInt64(8)},observedAdvisoryRows={reader.GetString(9)}"; if (string.Equals(reader.IsDBNull(1) ? null : reader.GetString(1), "Lock", StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4) && reader.GetBoolean(5)) return; } else last = "<missing>";
+                if (await reader.ReadAsync(timeout.Token)) { last = $"backend={waitingBackend};state={reader.GetString(0)},wait_event_type={(reader.IsDBNull(1) ? "<null>" : reader.GetString(1))},wait_event={(reader.IsDBNull(2) ? "<null>" : reader.GetString(2))},locks={reader.GetString(6)},blocking={reader.GetString(7)},expectedAdvisoryIdentity={reader.GetInt64(8)},observedAdvisoryRows={reader.GetString(9)}"; if (string.Equals(reader.IsDBNull(1) ? null : reader.GetString(1), "Lock", StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4) && reader.GetBoolean(5)) return; } else last = "<missing>";
                 if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"Result processor did not retain the exact Probe advisory lock while waiting on the projection. backend={waitingBackend}; blocker={blockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); }
                 await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
             }
@@ -3872,7 +3969,7 @@ public sealed class ProbeResultStatusProcessorTests
                    COALESCE((SELECT string_agg(format('classid=%s,objid=%s,objsubid=%s,mode=%s,granted=%s,identity=%s', classid::bigint, objid::bigint, objsubid, mode, granted, ((CASE WHEN classid::bigint >= 2147483648 THEN classid::bigint - 4294967296 ELSE classid::bigint END) * 4294967296) + objid::bigint), ' | ' ORDER BY classid,objid,objsubid,mode,granted) FROM pg_locks WHERE pid=@pid AND locktype='advisory'),'<none>')
             FROM pg_stat_activity a WHERE a.pid=@pid
             """, observer); command.Parameters.AddWithValue("pid", waitingBackend.Pid); command.Parameters.AddWithValue("blocker", blockerBackend.Pid); command.Parameters.AddWithValue("excluded", excludedBlockerPid); command.Parameters.AddWithValue("probeId", canonical); await using var reader = await command.ExecuteReaderAsync(timeout.Token);
-                if (await reader.ReadAsync(timeout.Token)) { last = $"backend={waitingBackend};blocker={blockerBackend};state={reader.GetString(0)},wait={reader.GetString(1)},event={reader.GetString(2)},locks={reader.GetString(6)},blocking={reader.GetString(7)},expectedAdvisoryIdentity={reader.GetInt64(8)},observedAdvisoryRows={reader.GetString(9)}"; if (string.Equals(reader.IsDBNull(1) ? null : reader.GetString(1), "Lock", StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4) && reader.GetBoolean(5)) return; } else last = "<missing>";
+                if (await reader.ReadAsync(timeout.Token)) { last = $"backend={waitingBackend};blocker={blockerBackend};state={reader.GetString(0)},wait_event_type={(reader.IsDBNull(1) ? "<null>" : reader.GetString(1))},wait_event={(reader.IsDBNull(2) ? "<null>" : reader.GetString(2))},locks={reader.GetString(6)},blocking={reader.GetString(7)},expectedAdvisoryIdentity={reader.GetInt64(8)},observedAdvisoryRows={reader.GetString(9)}"; if (string.Equals(reader.IsDBNull(1) ? null : reader.GetString(1), "Lock", StringComparison.Ordinal) && reader.GetBoolean(3) && reader.GetBoolean(4) && reader.GetBoolean(5)) return; } else last = "<missing>";
                 if (task.IsCompleted) { await task; throw new Xunit.Sdk.XunitException($"H1 did not wait on result processor's exact Probe advisory lock. backend={waitingBackend}; blocker={blockerBackend}; excluded={excludedBlockerPid}; probe={canonical}; {last}; attempts={attempts}; elapsed={DateTimeOffset.UtcNow - started}."); }
                 await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
             }
@@ -3910,7 +4007,7 @@ public sealed class ProbeResultStatusProcessorTests
             await task.WaitAsync(cleanup.Token);
             return true;
         }
-        catch (OperationCanceledException) when (task.IsCompleted && expectedCancellation)
+        catch (OperationCanceledException) when (expectedCancellation && task.IsCanceled)
         {
             return true;
         }
@@ -4167,9 +4264,9 @@ public sealed class ProbeResultStatusProcessorTests
                 var requestedAgentIds = new List<string>();
                 foreach (DbParameter parameter in command.Parameters)
                 {
-                    if (parameter.Value is Guid agentId) requestedAgentIds.Add(agentId.ToString("D"));
-                    else if (parameter.Value is Guid[] agentIds) requestedAgentIds.AddRange(agentIds.Select(agentId => agentId.ToString("D")));
-                    else if (parameter.Value is Array array) foreach (var value in array) if (value is Guid agentId) requestedAgentIds.Add(agentId.ToString("D"));
+                    if (parameter.Value is Guid requestedAgentId) requestedAgentIds.Add(requestedAgentId.ToString("D"));
+                    else if (parameter.Value is Guid[] requestedAgentIdArray) requestedAgentIds.AddRange(requestedAgentIdArray.Select(arrayAgentId => arrayAgentId.ToString("D")));
+                    else if (parameter.Value is Array requestedAgentArray) foreach (var value in requestedAgentArray) if (value is Guid arrayAgentId) requestedAgentIds.Add(arrayAgentId.ToString("D"));
                 }
                 lock (sync) agentShareCommands.Add(new AgentShareCommand(requestedAgentIds.ToImmutableArray()));
                 if (Interlocked.CompareExchange(ref used, 1, 0) == 0) { Reached.TrySetResult(); await Release.Task.WaitAsync(cancellationToken); }

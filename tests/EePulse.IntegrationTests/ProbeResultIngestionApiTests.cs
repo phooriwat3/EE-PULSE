@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using EePulse.Application.Time;
@@ -16,6 +17,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace EePulse.IntegrationTests;
 
@@ -199,6 +201,8 @@ public sealed class ProbeResultIngestionApiTests
         var agentReleased = false;
         var probeReleased = false;
         Exception? primary = null;
+        ExceptionDispatchInfo? primaryDispatch = null;
+        Exception? cleanupToThrow = null;
         try
         {
             await agentBlocker.OpenAsync(ct);
@@ -260,7 +264,7 @@ public sealed class ProbeResultIngestionApiTests
         catch (Exception exception)
         {
             primary = exception;
-            throw;
+            primaryDispatch = ExceptionDispatchInfo.Capture(exception);
         }
         finally
         {
@@ -277,9 +281,13 @@ public sealed class ProbeResultIngestionApiTests
                 {
                     foreach (var failure in cleanupFailures) primary.Data["T4A3CleanupFailure" + primary.Data.Count] = failure;
                 }
-                else throw new AggregateException("T4A3 cleanup failed.", cleanupFailures);
+                else cleanupToThrow = cleanupFailures.Count == 1
+                    ? cleanupFailures[0]
+                    : new AggregateException("T4A3 cleanup failed.", cleanupFailures);
             }
         }
+        primaryDispatch?.Throw();
+        if (cleanupToThrow is not null) ExceptionDispatchInfo.Capture(cleanupToThrow).Throw();
     }
 
     [Fact]
@@ -346,23 +354,64 @@ public sealed class ProbeResultIngestionApiTests
     [Fact]
     public async Task ResultIngestionForDifferentProbeProceedsWhileAnotherProbeLockIsHeld()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var ct = timeout.Token;
-        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        var setupCancellationToken = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(setupCancellationToken);
         await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
         using var client = factory.CreateClient();
-        var enrolled = await EnrollConfiguredAgentWithProbes(client, 2, ct);
+        var enrolled = await EnrollConfiguredAgentWithProbes(client, 2, setupCancellationToken);
 
         await using var held = new EePulseDbContext(CreateOptions(postgres.ConnectionString));
-        await using var heldTransaction = await held.Database.BeginTransactionAsync(ct);
-        await ProbeTransactionLock.AcquireAsync(held, enrolled.ProbeIds[0], ct);
+        await using var heldTransaction = await held.Database.BeginTransactionAsync(setupCancellationToken);
+        await ProbeTransactionLock.AcquireAsync(held, enrolled.ProbeIds[0], setupCancellationToken);
 
+        using var contentionTimeout = CancellationTokenSource.CreateLinkedTokenSource(setupCancellationToken);
+        contentionTimeout.CancelAfter(TimeSpan.FromSeconds(15));
+        var contentionCancellationToken = contentionTimeout.Token;
         var result = Result(enrolled.AgentId, enrolled.ProbeIds[1], enrolled.ConfigurationVersion);
-        var response = await Send(client, enrolled, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [result]), HttpStatusCode.OK, ct);
-        Assert.Equal([result.ResultId], response.AcceptedResultIds);
-        await AssertLedgerCount(factory, 1, ct);
+        ExceptionDispatchInfo? primaryFailure = null;
+        var cleanupFailures = new List<Exception>();
 
-        await heldTransaction.RollbackAsync(ct);
+        try
+        {
+            var response = await Send(client, enrolled, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [result]), HttpStatusCode.OK, contentionCancellationToken);
+            Assert.Equal([result.ResultId], response.AcceptedResultIds);
+            await AssertLedgerCount(factory, 1, contentionCancellationToken);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = ExceptionDispatchInfo.Capture(exception);
+        }
+        finally
+        {
+            try
+            {
+                using var rollbackTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await heldTransaction.RollbackAsync(rollbackTimeout.Token);
+            }
+            catch (Exception exception)
+            {
+                cleanupFailures.Add(exception);
+            }
+
+            if (primaryFailure is not null)
+            {
+                for (var index = 0; index < cleanupFailures.Count; index++)
+                {
+                    primaryFailure.SourceException.Data[$"ResultIngestionForDifferentProbeCleanupFailure{index + 1}"] = cleanupFailures[index];
+                }
+            }
+        }
+
+        primaryFailure?.Throw();
+        if (cleanupFailures.Count == 1)
+        {
+            ExceptionDispatchInfo.Capture(cleanupFailures[0]).Throw();
+        }
+
+        if (cleanupFailures.Count > 1)
+        {
+            throw new AggregateException("Result ingestion for different Probe cleanup failed.", cleanupFailures);
+        }
     }
 
     private static async Task AssertResultIngestionWaitsForHeldProbeLockAsync(
@@ -498,7 +547,7 @@ public sealed class ProbeResultIngestionApiTests
                    EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'transactionid' AND NOT l.granted),
                    EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'advisory'),
                    EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'advisory' AND NOT l.granted
-                       AND (lpad(to_hex(l.classid::bigint), 8, '0') || lpad(to_hex(l.objid::bigint), 8, '0')) = lpad(to_hex(hashtextextended(@probeId, 0)), 16, '0')),
+                       AND (lpad(to_hex(l.classid::bigint), 8, '0') || lpad(to_hex(l.objid::bigint), 8, '0')) = lpad(to_hex(hashtextextended(@probeId::text, 0)), 16, '0')),
                    pg_blocking_pids(a.pid)
             FROM pg_stat_activity a
             WHERE (@applicationName IS NULL OR a.application_name = @applicationName)
@@ -506,10 +555,10 @@ public sealed class ProbeResultIngestionApiTests
               AND (@applicationName IS NULL OR a.state <> 'idle')
             ORDER BY a.pid
             LIMIT 1
-            """, observer);
-        command.Parameters.AddWithValue("applicationName", (object?)applicationName ?? DBNull.Value);
-        command.Parameters.AddWithValue("requestPid", (object?)requestPid ?? DBNull.Value);
-        command.Parameters.AddWithValue("probeId", (object?)(probeId?.ToString("D")) ?? DBNull.Value);
+        """, observer);
+        command.Parameters.Add(new NpgsqlParameter("applicationName", NpgsqlDbType.Text) { Value = (object?)applicationName ?? DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter("requestPid", NpgsqlDbType.Integer) { Value = (object?)requestPid ?? DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter("probeId", NpgsqlDbType.Uuid) { Value = (object?)probeId ?? DBNull.Value });
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return null;
         return new(reader.GetInt32(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetBoolean(3), reader.GetBoolean(4), reader.GetBoolean(5), reader.GetFieldValue<int[]>(6));
