@@ -1,6 +1,7 @@
 using EePulse.Domain.Auditing;
 using EePulse.Domain.Agents;
 using EePulse.Domain.Inventory;
+using EePulse.Domain.Preferences;
 using EePulse.Domain.Status;
 using Microsoft.EntityFrameworkCore;
 
@@ -40,6 +41,7 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
     public DbSet<AvailabilityIncident> AvailabilityIncidents => Set<AvailabilityIncident>();
     public DbSet<IncidentLifecycleEvent> IncidentLifecycleEvents => Set<IncidentLifecycleEvent>();
     public DbSet<NotificationSuppressionContext> NotificationSuppressionContexts => Set<NotificationSuppressionContext>();
+    public DbSet<UserTimezonePreference> UserTimezonePreferences => Set<UserTimezonePreference>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
