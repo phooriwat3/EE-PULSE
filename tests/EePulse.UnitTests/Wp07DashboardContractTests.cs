@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using EePulse.Contracts.Agents;
 using EePulse.Contracts.Dashboard;
+using NodaTime.TimeZones;
 
 namespace EePulse.UnitTests;
 
@@ -66,6 +67,101 @@ public sealed class Wp07DashboardContractTests
     }
 
     [Fact]
+    public void TimezoneBootstrapEtagsAndIfMatchClassificationAreFrozen()
+    {
+        Assert.Equal("\"tz-0\"", TimezonePreferenceContract.NoPersistedRowEtag);
+        Assert.Equal("\"tz-0\"", TimezonePreferenceContract.EtagForVersion(0));
+        Assert.Equal("\"tz-1\"", TimezonePreferenceContract.EtagForVersion(1));
+        Assert.Equal("\"tz-2\"", TimezonePreferenceContract.EtagForVersion(2));
+        Assert.Equal("\"tz-3\"", TimezonePreferenceContract.EtagForVersion(3));
+        Assert.NotEqual(TimezonePreferenceContract.EtagForVersion(0), TimezonePreferenceContract.EtagForVersion(1));
+        Assert.True(TimezonePreferenceContract.IsStrongEtag(TimezonePreferenceContract.EtagForVersion(0)));
+        Assert.True(TimezonePreferenceContract.IsStrongEtag(TimezonePreferenceContract.EtagForVersion(42)));
+        Assert.Equal(TimezoneIfMatchClassification.Missing, TimezonePreferenceContract.ClassifyIfMatch(null, "\"tz-0\""));
+        Assert.Equal(TimezoneIfMatchClassification.Invalid, TimezonePreferenceContract.ClassifyIfMatch(["W/\"tz-0\""], "\"tz-0\""));
+        Assert.Equal(TimezoneIfMatchClassification.Invalid, TimezonePreferenceContract.ClassifyIfMatch(["*"], "\"tz-0\""));
+        Assert.Equal(TimezoneIfMatchClassification.Invalid, TimezonePreferenceContract.ClassifyIfMatch([""], "\"tz-0\""));
+        Assert.Equal(TimezoneIfMatchClassification.Invalid, TimezonePreferenceContract.ClassifyIfMatch(["\"tz-0\"", "\"tz-1\""], "\"tz-0\""));
+        Assert.Equal(TimezoneIfMatchClassification.Invalid, TimezonePreferenceContract.ClassifyIfMatch(["\"tz-0\", \"tz-1\""], "\"tz-0\""));
+        Assert.Equal(TimezoneIfMatchClassification.Current, TimezonePreferenceContract.ClassifyIfMatch(["\"tz-0\""], "\"tz-0\""));
+        Assert.Equal(TimezoneIfMatchClassification.Stale, TimezonePreferenceContract.ClassifyIfMatch(["\"tz-1\""], "\"tz-2\""));
+        Assert.Equal(TimezoneIfMatchClassification.Stale, TimezonePreferenceContract.ClassifyIfMatch(["\"tz-0\""], "\"tz-1\""));
+
+        // This is the concurrent first-write loser after the unique insert re-read: its tz-0 is stale.
+        Assert.Equal(TimezoneIfMatchClassification.Stale, TimezonePreferenceContract.ClassifyIfMatch(
+            [TimezonePreferenceContract.NoPersistedRowEtag], TimezonePreferenceContract.EtagForVersion(1)));
+    }
+
+    [Fact]
+    public void TimezoneStateMachineFreezesNoOpClearAndVersionProgression()
+    {
+        var absent = TimezonePreferenceState.NoPersistedRow;
+        Assert.False(absent.RowExists);
+        Assert.Null(absent.Timezone);
+        Assert.Equal("\"tz-0\"", absent.Etag);
+        Assert.Same(absent, TimezonePreferenceContract.Advance(absent, null));
+
+        var created = TimezonePreferenceContract.Advance(absent, "UTC");
+        Assert.True(created.RowExists);
+        Assert.Equal(TimezonePreferenceContract.CanonicalUtcId, created.Timezone);
+        Assert.Equal(1, created.Version);
+        Assert.Equal("\"tz-1\"", created.Etag);
+        Assert.Same(created, TimezonePreferenceContract.Advance(created, "Etc/UTC"));
+
+        var cleared = TimezonePreferenceContract.Advance(created, null);
+        Assert.True(cleared.RowExists);
+        Assert.Null(cleared.Timezone);
+        Assert.Equal(2, cleared.Version);
+        var reset = TimezonePreferenceContract.Advance(cleared, "Asia/Bangkok");
+        Assert.Equal("Asia/Bangkok", reset.Timezone);
+        Assert.Equal(3, reset.Version);
+        Assert.Equal("\"tz-3\"", reset.Etag);
+    }
+
+    [Fact]
+    public void TimezoneNormalizationAndMutationOutcomesAreHostIndependent()
+    {
+        Assert.Equal("Asia/Bangkok", Normalize("Asia/Bangkok"));
+        Assert.Equal(TimezonePreferenceContract.CanonicalUtcId, Normalize("UTC"));
+        Assert.Equal(TimezonePreferenceContract.CanonicalUtcId, Normalize("Etc/UTC"));
+        Assert.Equal("Asia/Kolkata", Normalize("Asia/Calcutta"));
+        AssertValid(new TimezonePreferenceRequest("UTC"));
+        AssertValid(new TimezonePreferenceRequest("Etc/UTC"));
+        foreach (var invalid in new[] { "Pacific Standard Time", "asia/bangkok", "Asia/Bangkok ", "", " ", "../Etc/UTC", "Asia\\Bangkok", "Not/AZone" })
+        {
+            Assert.False(TimezonePreferenceContract.TryNormalizeTimezone(invalid, out _));
+            AssertInvalid(new TimezonePreferenceRequest(invalid));
+        }
+        Assert.True(TimezonePreferenceContract.TryNormalizeTimezone(null, out var cleared));
+        Assert.Null(cleared);
+        Assert.Equal(TimezonePreferenceMutationOutcome.NoOpAbsent, TimezonePreferenceContract.ClassifyMutation(false, null, null));
+        Assert.Equal(TimezonePreferenceMutationOutcome.Create, TimezonePreferenceContract.ClassifyMutation(false, null, "UTC"));
+        Assert.Equal(TimezonePreferenceMutationOutcome.NoOpCurrent, TimezonePreferenceContract.ClassifyMutation(true, "Etc/UTC", "UTC"));
+        Assert.Equal(TimezonePreferenceMutationOutcome.Clear, TimezonePreferenceContract.ClassifyMutation(true, "Asia/Bangkok", null));
+        Assert.Equal(TimezonePreferenceMutationOutcome.Update, TimezonePreferenceContract.ClassifyMutation(true, null, "Asia/Bangkok"));
+    }
+
+    [Fact]
+    public void UtcNormalizationTracksThePinnedTzdbProviderCanonicalId()
+    {
+        var providerCanonicalUtc = TzdbDateTimeZoneSource.Default.CanonicalIdMap["UTC"];
+        Assert.Equal("Etc/UTC", providerCanonicalUtc);
+        Assert.True(TimezonePreferenceContract.TryNormalizeTimezone("UTC", out var normalized));
+        Assert.Equal(providerCanonicalUtc, normalized);
+    }
+
+    [Fact]
+    public void TimezonePrincipalComponentsFailClosedWithoutFallbacks()
+    {
+        Assert.True(TimezonePreferenceContract.IsValidPrincipalComponent("https://issuer.example", TimezonePreferenceContract.MaximumIssuerLength));
+        Assert.True(TimezonePreferenceContract.IsValidPrincipalComponent(Id, TimezonePreferenceContract.MaximumSubjectLength));
+        Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent(null, TimezonePreferenceContract.MaximumIssuerLength));
+        Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent("", TimezonePreferenceContract.MaximumSubjectLength));
+        Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent(" ", TimezonePreferenceContract.MaximumSubjectLength));
+        Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent(new string('x', TimezonePreferenceContract.MaximumIssuerLength + 1), TimezonePreferenceContract.MaximumIssuerLength));
+    }
+
+    [Fact]
     public void BoundedRequestsFiltersAndTimezoneExposeRealValidationMetadata()
     {
         AssertInvalid(new AcknowledgeIncidentRequest(""));
@@ -106,6 +202,11 @@ public sealed class Wp07DashboardContractTests
         .Where(property => property.Name is "Id" or "SiteId" or "DeviceId" or "ProbeId" or "AgentId" or "AgentGroupId" or "OpenIncidentId" or "IncidentId" or "TransitionId" or "EventId" or "ActorId" or "AuthorId" or "EntityId" or "CorrelationId");
 
     private static DateTimeOffset Utc(int hour) => new(2026, 9, 7, hour, 0, 0, TimeSpan.Zero);
+    private static string Normalize(string value)
+    {
+        Assert.True(TimezonePreferenceContract.TryNormalizeTimezone(value, out var normalized));
+        return Assert.IsType<string>(normalized);
+    }
     private static JsonSerializerOptions CreateJsonOptions() { var options = new JsonSerializerOptions(JsonSerializerDefaults.Web); AgentJsonContract.AddConverters(options); return options; }
     private static void AssertValid(object instance) => Assert.Empty(Validate(instance));
     private static void AssertInvalid(object instance) => Assert.NotEmpty(Validate(instance));

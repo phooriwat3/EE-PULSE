@@ -3,4 +3,7 @@
     <PackageId>EePulse.Contracts</PackageId>
     <VersionPrefix>1.0.0</VersionPrefix>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NodaTime" />
+  </ItemGroup>
 </Project>

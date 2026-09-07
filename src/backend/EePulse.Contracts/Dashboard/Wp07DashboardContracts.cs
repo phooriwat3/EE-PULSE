@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
 using EePulse.Contracts.Agents;
+using NodaTime.TimeZones;
 
 namespace EePulse.Contracts.Dashboard;
 
@@ -45,11 +46,119 @@ public static class ManualResolutionConflictContract
     public const string NoMutationGuarantee = "No incident, lifecycle, comment, or audit mutation is made.";
 }
 
-public static class TimezonePreferenceContract
+public static partial class TimezonePreferenceContract
 {
     public static readonly IReadOnlyList<string> DisplayPrecedence = ["persistedOverride", "selectedSite", "browser"];
     // HTTP-visible ASCII subset: excludes SP, DQUOTE, DEL, and all controls.
     public const string StrongEtagPattern = "^\\\"[\\x21\\x23-\\x7E]+\\\"$";
+    public const string NoPersistedRowEtag = "\"tz-0\"";
+    public const string PersistedEtagPrefix = "\"tz-";
+    public const string PersistedEtagSuffix = "\"";
+    public const string InvalidIfMatchCode = "invalid-if-match";
+    public const string ConcurrencyConflictCode = "concurrency-conflict";
+    public const int MaximumIssuerLength = 512;
+    public const int MaximumSubjectLength = 512;
+
+    // NodaTime 3.3.3 embeds TZDB. UTC normalizes to the provider's canonical Etc/UTC ID.
+    public const string CanonicalUtcId = "Etc/UTC";
+
+    public static string EtagForVersion(long version)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(version);
+        return version == 0 ? NoPersistedRowEtag : $"\"tz-{version}\"";
+    }
+
+    public static bool IsStrongEtag(string? etag) => etag is not null && StrongEtag().IsMatch(etag);
+
+    public static TimezoneIfMatchClassification ClassifyIfMatch(IEnumerable<string>? values, string currentEtag)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(currentEtag);
+        if (!IsStrongEtag(currentEtag)) throw new ArgumentException("The current ETag must be strong.", nameof(currentEtag));
+        var candidates = values?.ToArray() ?? [];
+        if (candidates.Length == 0) return TimezoneIfMatchClassification.Missing;
+        if (candidates.Length != 1 || candidates[0].Contains(',', StringComparison.Ordinal) || !IsStrongEtag(candidates[0]))
+            return TimezoneIfMatchClassification.Invalid;
+        return string.Equals(candidates[0], currentEtag, StringComparison.Ordinal)
+            ? TimezoneIfMatchClassification.Current
+            : TimezoneIfMatchClassification.Stale;
+    }
+
+    public static bool TryNormalizeTimezone(string? timezone, out string? canonicalTimezone)
+    {
+        canonicalTimezone = null;
+        if (timezone is null) return true;
+        if (string.IsNullOrWhiteSpace(timezone) || timezone.Length > 255 || timezone.Contains('\\') ||
+            timezone is "." or "..") return false;
+
+        // CanonicalIdMap contains every embedded TZDB ID, including aliases, and is ordinal/case-sensitive.
+        if (!TzdbDateTimeZoneSource.Default.CanonicalIdMap.TryGetValue(timezone, out var canonical)) return false;
+        canonicalTimezone = canonical;
+        return true;
+    }
+
+    public static TimezonePreferenceMutationOutcome ClassifyMutation(
+        bool rowExists, string? currentTimezone, string? requestedTimezone)
+    {
+        if (!rowExists && currentTimezone is not null) throw new ArgumentException("An absent row cannot have a timezone.", nameof(currentTimezone));
+        if (!TryNormalizeTimezone(currentTimezone, out var canonicalCurrent) ||
+            !TryNormalizeTimezone(requestedTimezone, out var canonicalRequested))
+            throw new ArgumentException("Timezone values must be null or recognized TZDB IDs.");
+        if (!rowExists && canonicalRequested is null) return TimezonePreferenceMutationOutcome.NoOpAbsent;
+        if (rowExists && string.Equals(canonicalCurrent, canonicalRequested, StringComparison.Ordinal))
+            return TimezonePreferenceMutationOutcome.NoOpCurrent;
+        return !rowExists ? TimezonePreferenceMutationOutcome.Create :
+            canonicalRequested is null ? TimezonePreferenceMutationOutcome.Clear : TimezonePreferenceMutationOutcome.Update;
+    }
+
+    public static TimezonePreferenceState Advance(TimezonePreferenceState current, string? requestedTimezone)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        var outcome = ClassifyMutation(current.RowExists, current.Timezone, requestedTimezone);
+        if (outcome is TimezonePreferenceMutationOutcome.NoOpAbsent or TimezonePreferenceMutationOutcome.NoOpCurrent)
+            return current;
+
+        _ = TryNormalizeTimezone(requestedTimezone, out var canonicalRequested);
+        return outcome == TimezonePreferenceMutationOutcome.Create
+            ? new TimezonePreferenceState(true, canonicalRequested, 1)
+            : new TimezonePreferenceState(true, canonicalRequested, checked(current.Version + 1));
+    }
+
+    public static bool IsValidPrincipalComponent(string? value, int maximumLength) =>
+        value is { Length: > 0 } && value.Length <= maximumLength && !string.IsNullOrWhiteSpace(value);
+
+    private static Regex StrongEtag() => StrongEtagRegex();
+
+    [GeneratedRegex(StrongEtagPattern, RegexOptions.CultureInvariant)]
+    private static partial Regex StrongEtagRegex();
+}
+
+public enum TimezoneIfMatchClassification { Missing, Invalid, Current, Stale }
+public enum TimezonePreferenceMutationOutcome { NoOpAbsent, NoOpCurrent, Create, Update, Clear }
+
+// A persistence-independent state machine for the frozen GET/PUT bootstrap and version policy.
+public sealed record TimezonePreferenceState
+{
+    public TimezonePreferenceState(bool rowExists, string? timezone, long version)
+    {
+        if (!rowExists && (timezone is not null || version != 0))
+            throw new ArgumentException("An absent preference has null timezone and version zero.");
+        if (rowExists && version < 1)
+            throw new ArgumentOutOfRangeException(nameof(version), "A retained preference row has a positive version.");
+        if (!TimezonePreferenceContract.TryNormalizeTimezone(timezone, out var canonicalTimezone))
+            throw new ArgumentException("Timezone must be null or a recognized TZDB ID.", nameof(timezone));
+        if (timezone is not null && !string.Equals(timezone, canonicalTimezone, StringComparison.Ordinal))
+            throw new ArgumentException("A retained preference stores only the canonical TZDB ID.", nameof(timezone));
+
+        RowExists = rowExists;
+        Timezone = canonicalTimezone;
+        Version = version;
+    }
+
+    public static TimezonePreferenceState NoPersistedRow { get; } = new(false, null, 0);
+    public bool RowExists { get; }
+    public string? Timezone { get; }
+    public long Version { get; }
+    public string Etag => TimezonePreferenceContract.EtagForVersion(Version);
 }
 
 public enum DashboardProbeStatus { Unknown, Up, Degraded, Down, Recovering, Maintenance, Disabled }
@@ -138,14 +247,8 @@ public sealed record DashboardInvalidationEvent([property: Range(1, 1)] int Sche
 [AttributeUsage(AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Parameter)]
 public sealed class IanaTimeZoneAttribute : ValidationAttribute
 {
-    public override bool IsValid(object? value)
-    {
-        if (value is null) return true; // Null clears the override.
-        if (value is not string timezone || timezone.Length is 0 or > 255 || !timezone.Contains('/')) return false;
-        try { _ = TimeZoneInfo.FindSystemTimeZoneById(timezone); return true; }
-        catch (TimeZoneNotFoundException) { return false; }
-        catch (InvalidTimeZoneException) { return false; }
-    }
+    public override bool IsValid(object? value) => value is null || value is string timezone &&
+        TimezonePreferenceContract.TryNormalizeTimezone(timezone, out _);
 }
 
 [AttributeUsage(AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Parameter)]
