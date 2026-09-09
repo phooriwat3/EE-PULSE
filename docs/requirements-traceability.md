@@ -1,9 +1,9 @@
 # EE Pulse requirements traceability
 
-Last updated: 2026-09-07
+Last updated: 2026-09-08
 Status legend: Not started, In progress, Implemented, Verified, Blocked.
 
-WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. WP-05 durable outbox/delivery/ingestion was merged in `2c22766` (PR #5). WP-06 status projection, transition, incident, lifecycle-event, suppression, maintenance-precedence, freshness, and heartbeat-expiry behavior is merged in `751b6bd5`; dashboard-facing APIs/UI remain WP-07 work.
+WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. WP-05 durable outbox/delivery/ingestion was merged in `2c22766` (PR #5). WP-06 status projection, transition, incident, lifecycle-event, suppression, maintenance-precedence, freshness, and heartbeat-expiry behavior is merged in `751b6bd5`. WP-07 Phase 2A now implements and verifies the timezone-preference persistence/API vertical slice; dashboard/device/status reads, incident actions, audit listing, SignalR runtime, and frontend UI remain pending.
 
 ## Functional requirements
 
@@ -14,10 +14,10 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | FR-03 Agent | WP-03-05, WP-10 | In progress | WP-03 verified enrollment/identity/liveness/configuration; WP-05 merged durable SQLite queue, result batching, and idempotent backend ingestion. Installer and real Windows operational evidence remain. |
 | FR-04 Status engine | WP-06 | Implemented and merged | WP-06 merged result-driven projection/transitions, freshness/heartbeat UNKNOWN behavior, maintenance/disabled precedence, watermark/skew policy, and deterministic verification. Dashboard reads remain WP-07. |
 | FR-05 Incident management | WP-06, WP-07 | In progress | WP-06 merged atomic availability incident/lifecycle/occurrence/automatic confirmed-recovery resolution and suppression context. WP-07 must add authorized read, acknowledgement, comments, and constrained manual-resolution API/UI. |
-| FR-06 Dashboard | WP-07 | Phase 1 approved | [WP-07 design](api/wp07-dashboard-contract-design.md) defines summary/filter/live/NOC/recent-down/offline-Agent/open-incident contracts; implementation remains. |
-| FR-07 Device details | WP-07, WP-09 | Phase 1 approved | WP-07 contract defines status, metrics range, timeline, incident, Agent, result-freshness, UTC/timezone, and chart-gap semantics; implementation remains. |
+| FR-06 Dashboard | WP-07 | In progress | Phase 2A implements only the persisted timezone-preference API and generated OpenAPI coverage. Summary/filter/live/NOC/recent-down/offline-Agent/open-incident reads remain. |
+| FR-07 Device details | WP-07, WP-09 | Phase 1 approved | WP-07 contract defines status, metrics range, timeline, incident, Agent, result-freshness, UTC/timezone, and chart-gap semantics; implementation remains outside Phase 2A. |
 | FR-08 Notifications | WP-08 | Not started | Require fake SMTP/webhook open/reminder/recovery, dedupe, suppression, retry, and redacted logs. |
-| FR-09 Authentication/authorization | WP-02, WP-03, WP-07, WP-11 | In progress | Verified inventory Bearer policies; separate AgentCredential OpenAPI/authentication path; anonymous enrollment bootstrap; token expiry/single-use/replay/revocation; credential rotation; sanitized errors; and production fail-closed Agent HTTPS/proxy configuration. Production OIDC and full role-matrix evidence remain. |
+| FR-09 Authentication/authorization | WP-02, WP-03, WP-07, WP-11 | In progress | Verified inventory Bearer policies, separate AgentCredential path, and Phase 2A dashboard.read plus explicit issuer/subject fail-closed timezone identity. Production OIDC and broader dashboard role/action coverage remain. |
 | FR-10 Reporting | WP-09 | Not started | Require Device/Site availability, downtime/counts, safe CSV, maintenance separation, and explicit UNKNOWN coverage. |
 
 ## Non-functional requirements
@@ -56,11 +56,15 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | WP-04 Scheduler/ICMP | Implemented and integration-verified locally | Deterministic probe-runtime foundation verified through fake time/transport tests. Final integration review PASS; Agent tests 112/112; formatting; Agent host and Agent Tests Release builds (0 warnings/errors); quality/security; and `git diff --check` passed. This is not real ICMP, host/DI wiring, Windows Service, persistence, delivery, ingestion, UI, deployment, or IP-discovery evidence. |
 | WP-05 Queue/ingestion | Implemented and merged | PR #5 / `2c22766` implements the durable SQLite outbox, at-least-once delivery, idempotent PostgreSQL ledger, and recovery coverage under the binding UA-11 pressure policy. |
 | WP-06 Status/incidents | Implemented and merged | `751b6bd5` contains projection/transitions, freshness/heartbeat expiry, atomic availability incidents/lifecycle events, maintenance precedence, and deterministic verification. Read/action APIs and UI remain WP-07. |
-| WP-07 Dashboard | Phase 1 approved | [Contract design](api/wp07-dashboard-contract-design.md) defines the additive API/UX/event policy, including frozen PostgreSQL-backed per-principal timezone-preference semantics. Contract metadata/tests enforce UTC-Z, strict inbound JSON, bounded inputs, role boundaries, and compact invalidation events. No endpoint, migration, hub, or UI is claimed. |
+| WP-07 Dashboard | Phase 2A implemented and integration-verified | Timezone-preference persistence/API, explicit principal identity, dashboard.read authorization, safe correlation IDs, atomic redacted audit writes, ETag/concurrency/no-op/clear semantics, deterministic race/rollback evidence, and generated OpenAPI are implemented and verified. Dashboard/device/status reads, incident actions, audit listing, SignalR runtime, and frontend UI remain pending. |
 | WP-08 Notifications | Not started | Depends on incident outbox. |
 | WP-09 Reports/retention | Not started | Depends on transitions and time-series data. |
 | WP-10 Packaging/operations | Not started | Hardening follows working components. |
 | WP-11 QA/release | Not started | Full acceptance, load, resilience, auth, scan, restore, and clean-checkout gates remain. |
+
+### WP-07 Phase 2A evidence (2026-09-08)
+
+The timezone-preference vertical slice is implemented and generated OpenAPI is runtime-produced from the pinned Linux API. The complete pinned Release build passed with 0 warnings/errors; `EePulse.UnitTests` passed 128/128; and the PostgreSQL-backed `EePulse.IntegrationTests` suite passed 175/175 with no failures or skips in 15m26s. Focused evidence covers canonical development/principal identity, server-controlled correlation IDs, dashboard.read authorization, ETag/concurrency/no-op/clear behavior, deterministic first/stale races, deferred ownership draining, dual-SQL rollback/retry, aggregate snapshots, and audit redaction. The generated artifact documents the Phase 2A timezone GET/PUT addition and the source-backed WP-05 result-batches route; remaining dashboard/device/status, incident-action, audit-list, SignalR runtime, and frontend slices remain pending.
 
 ## WP-01 architecture evidence
 
@@ -73,4 +77,4 @@ WP-02 backend inventory and its inventory frontend slice are implemented and int
 | ADR-005 event watermark | In progress | Accepted ADR; ADR-012 approves WP-06 lateness/skew policy; implementation/tests remain. |
 | ADR-012 WP-06 UA-01 policy | Implemented and verified | Binding MVP policy was implemented in merged WP-06; WP-09 availability reporting remains. |
 | ADR-006 Windows Service + SQLite | In progress | Accepted ADR and Windows-Service-capable host; queue/installer evidence remains WP-05/10. |
-| Versioned HTTP/OpenAPI baseline | Verified | Package 1.0.0/schema v1; checked-in OpenAPI 3.1.1 has 14 paths, inventory schemas, 19 protected operations, Bearer/401/403 metadata, and unauthenticated health. |
+| Versioned HTTP/OpenAPI baseline | Verified | Package 1.0.0/schema v1; checked-in generated OpenAPI 3.1.1 has 29 paths, inventory/Agent/timezone schemas, 34 protected operations, Bearer/401/403 metadata, and unauthenticated health. |

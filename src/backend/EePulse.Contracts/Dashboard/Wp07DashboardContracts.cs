@@ -1,4 +1,7 @@
 using System.ComponentModel.DataAnnotations;
+using System.Buffers;
+using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
 using EePulse.Contracts.Agents;
@@ -74,14 +77,95 @@ public static partial class TimezonePreferenceContract
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(currentEtag);
         if (!IsStrongEtag(currentEtag)) throw new ArgumentException("The current ETag must be strong.", nameof(currentEtag));
-        var candidates = values?.ToArray() ?? [];
-        if (candidates.Length == 0) return TimezoneIfMatchClassification.Missing;
-        if (candidates.Length != 1 || candidates[0].Contains(',', StringComparison.Ordinal) || !IsStrongEtag(candidates[0]))
-            return TimezoneIfMatchClassification.Invalid;
-        return string.Equals(candidates[0], currentEtag, StringComparison.Ordinal)
+        if (!TryGetIfMatchVersion(values, out var version, out var classification)) return classification;
+        return string.Equals(EtagForVersion(version), currentEtag, StringComparison.Ordinal)
             ? TimezoneIfMatchClassification.Current
             : TimezoneIfMatchClassification.Stale;
     }
+
+    public static bool TryGetIfMatchVersion(IEnumerable<string>? values, out long version, out TimezoneIfMatchClassification classification)
+    {
+        version = 0;
+        var candidates = values?.ToArray() ?? [];
+        if (candidates.Length == 0) { classification = TimezoneIfMatchClassification.Missing; return false; }
+        if (candidates.Length != 1 || !TryParseEntityTagList(candidates, out var tags) || tags.Count != 1 || tags[0].Weak ||
+            !TryParseTimezoneEtag(tags[0].Tag, out version))
+        {
+            classification = TimezoneIfMatchClassification.Invalid;
+            return false;
+        }
+        classification = TimezoneIfMatchClassification.Current;
+        return true;
+    }
+
+    public static TimezoneIfNoneMatchClassification ClassifyIfNoneMatch(
+        IEnumerable<string>? values, string currentEtag, bool rowExists)
+    {
+        var candidates = values?.ToArray() ?? [];
+        if (candidates.Length == 0) return TimezoneIfNoneMatchClassification.Missing;
+        if (!TryParseEntityTagList(candidates, out var tags)) return TimezoneIfNoneMatchClassification.Invalid;
+        if (tags.Count == 1 && tags[0].Wildcard) return rowExists ? TimezoneIfNoneMatchClassification.Match : TimezoneIfNoneMatchClassification.NoMatch;
+        if (tags.Any(tag => tag.Wildcard)) return TimezoneIfNoneMatchClassification.Invalid;
+        if (tags.Any(tag => tag.Tag.StartsWith("\"tz-", StringComparison.Ordinal) && !TryParseTimezoneEtag(tag.Tag, out _)))
+            return TimezoneIfNoneMatchClassification.Invalid;
+        return tags.Any(tag => string.Equals(tag.Tag, currentEtag, StringComparison.Ordinal))
+            ? TimezoneIfNoneMatchClassification.Match : TimezoneIfNoneMatchClassification.NoMatch;
+    }
+
+    private static bool TryParseTimezoneEtag(string value, out long version)
+    {
+        version = 0;
+        if (string.Equals(value, NoPersistedRowEtag, StringComparison.Ordinal)) return true;
+        const string prefix = "\"tz-";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal) || !value.EndsWith('"') || value.Length <= prefix.Length + 1) return false;
+        var digits = value[prefix.Length..^1];
+        return digits[0] is not '0' && digits.All(character => character is >= '0' and <= '9') &&
+            long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out version) && version >= 1;
+    }
+
+    private static bool TryParseEntityTagList(IEnumerable<string> values, out List<ParsedEntityTag> tags)
+    {
+        tags = [];
+        foreach (var value in values)
+        {
+            if (value is null) return false;
+            var index = 0;
+            var expectTag = true;
+            while (true)
+            {
+                while (index < value.Length && value[index] is ' ' or '\t') index++;
+                if (index == value.Length) { if (expectTag) return false; break; }
+                if (!expectTag) return false;
+                if (value[index] == '*')
+                {
+                    tags.Add(new ParsedEntityTag(false, true, string.Empty)); index++;
+                }
+                else
+                {
+                    var weak = value.AsSpan(index).StartsWith("W/", StringComparison.Ordinal);
+                    if (weak) index += 2;
+                    if (index >= value.Length || value[index++] != '"') return false;
+                    var start = index;
+                    while (index < value.Length && value[index] != '"')
+                    {
+                        var character = value[index++];
+                        if (character < '\x21' || character == '"' || character > '\x7e') return false;
+                    }
+                    if (index == start || index >= value.Length) return false;
+                    var tag = "\"" + value[start..index] + "\"";
+                    index++;
+                    tags.Add(new ParsedEntityTag(weak, false, tag));
+                }
+                while (index < value.Length && value[index] is ' ' or '\t') index++;
+                if (index == value.Length) break;
+                if (value[index++] != ',') return false;
+                expectTag = true;
+            }
+        }
+        return tags.Count != 0;
+    }
+
+    private sealed record ParsedEntityTag(bool Weak, bool Wildcard, string Tag);
 
     public static bool TryNormalizeTimezone(string? timezone, out string? canonicalTimezone)
     {
@@ -124,7 +208,20 @@ public static partial class TimezonePreferenceContract
     }
 
     public static bool IsValidPrincipalComponent(string? value, int maximumLength) =>
-        value is { Length: > 0 } && value.Length <= maximumLength && !string.IsNullOrWhiteSpace(value);
+        value is { Length: > 0 } && value.Length <= maximumLength && !string.IsNullOrWhiteSpace(value) &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) && HasSafePrincipalCharacters(value);
+
+    private static bool HasSafePrincipalCharacters(string value)
+    {
+        for (var offset = 0; offset < value.Length;)
+        {
+            if (Rune.DecodeFromUtf16(value.AsSpan(offset), out var rune, out var consumed) != OperationStatus.Done) return false;
+            var category = Rune.GetUnicodeCategory(rune);
+            if (category is UnicodeCategory.Control or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator) return false;
+            offset += consumed;
+        }
+        return true;
+    }
 
     private static Regex StrongEtag() => StrongEtagRegex();
 
@@ -133,6 +230,7 @@ public static partial class TimezonePreferenceContract
 }
 
 public enum TimezoneIfMatchClassification { Missing, Invalid, Current, Stale }
+public enum TimezoneIfNoneMatchClassification { Missing, NoMatch, Match, Invalid }
 public enum TimezonePreferenceMutationOutcome { NoOpAbsent, NoOpCurrent, Create, Update, Clear }
 
 // A persistence-independent state machine for the frozen GET/PUT bootstrap and version policy.
@@ -232,8 +330,8 @@ public sealed record AuditLogFilter([property: StringLength(Wp07DashboardContrac
 
 public sealed record AuditLogEntryResponse([property: Required, CanonicalUuid] string Id, [property: CanonicalUuid] string? ActorId, string Action, string EntityType, [property: CanonicalUuid] string? EntityId, [property: Required, CanonicalUuid] string CorrelationId, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset OccurredAt, string? SourceIp);
 
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)] public sealed record TimezonePreferenceRequest([property: IanaTimeZone] string? Timezone);
-public sealed record TimezonePreferenceResponse(string? Timezone, [property: Required, RegularExpression(TimezonePreferenceContract.StrongEtagPattern)] string Etag);
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)] public sealed record TimezonePreferenceRequest([property: IanaTimeZone, StringLength(255)] string? Timezone);
+public sealed record TimezonePreferenceResponse([property: StringLength(255)] string? Timezone, [property: Required, RegularExpression(TimezonePreferenceContract.StrongEtagPattern)] string Etag);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record DashboardInvalidationEvent([property: Range(1, 1)] int SchemaVersion, [property: Required, StringLength(64, MinimumLength = 1)] string EventType, [property: Required, CanonicalUuid] string EntityId, [property: CanonicalUuid] string? DeviceId, [property: CanonicalUuid] string? ProbeId, [property: CanonicalUuid] string? SiteId, [property: Range(typeof(long), "1", "9223372036854775807")] long? Version, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset OccurredAt) : IValidatableObject

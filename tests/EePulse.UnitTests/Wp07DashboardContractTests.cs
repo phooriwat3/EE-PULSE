@@ -93,6 +93,15 @@ public sealed class Wp07DashboardContractTests
     }
 
     [Fact]
+    public void TimezoneConditionalHeadersRejectNonCanonicalMutationTags()
+    {
+        Assert.False(TimezonePreferenceContract.TryGetIfMatchVersion(["\"tz-01\""], out _, out var classification));
+        Assert.Equal(TimezoneIfMatchClassification.Invalid, classification);
+        Assert.Equal(TimezoneIfNoneMatchClassification.Invalid,
+            TimezonePreferenceContract.ClassifyIfNoneMatch(["W/\"tz-01\""], "\"tz-1\"", true));
+    }
+
+    [Fact]
     public void TimezoneStateMachineFreezesNoOpClearAndVersionProgression()
     {
         var absent = TimezonePreferenceState.NoPersistedRow;

@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Primitives;
 using Microsoft.Extensions.Options;
 
 namespace EePulse.Api.Authorization;
@@ -13,6 +14,7 @@ public sealed class DevelopmentAuthenticationHandler(
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "DevelopmentHeader";
+    public const string DevelopmentIssuer = "https://ee-pulse.invalid/development";
     public const string RoleHeader = "X-EE-Pulse-Role";
     public const string ActorHeader = "X-EE-Pulse-Actor";
 
@@ -32,10 +34,10 @@ public sealed class DevelopmentAuthenticationHandler(
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
-        var actor = Request.Headers[ActorHeader].FirstOrDefault();
+        var hasCanonicalActor = TryGetCanonicalPreferenceActor(Request.Headers[ActorHeader], out var actorId);
         var requiresAttribution = roles.Contains("Engineer", StringComparer.Ordinal) ||
             roles.Contains("Administrator", StringComparer.Ordinal);
-        if (!Guid.TryParse(actor, out var actorId) || actorId == Guid.Empty)
+        if (!hasCanonicalActor)
         {
             if (requiresAttribution)
             {
@@ -51,9 +53,30 @@ public sealed class DevelopmentAuthenticationHandler(
             new(ClaimTypes.NameIdentifier, actorId.ToString()),
             new(ClaimTypes.Name, "Development user")
         };
+        if (actorId != Guid.Empty)
+        {
+            claims.Add(new Claim("iss", DevelopmentIssuer));
+            claims.Add(new Claim("sub", actorId.ToString("D").ToLowerInvariant()));
+        }
         claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
         var identity = new ClaimsIdentity(claims, SchemeName);
         var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName);
         return Task.FromResult(AuthenticateResult.Success(ticket));
+    }
+
+    /// <summary>Parses the only Development actor form that can contribute <c>iss</c>/<c>sub</c> preference identity.</summary>
+    public static bool TryGetCanonicalPreferenceActor(StringValues values, out Guid actorId)
+    {
+        actorId = Guid.Empty;
+        if (values.Count != 1) return false;
+        var value = values[0];
+        if (string.IsNullOrEmpty(value) || value.Any(char.IsWhiteSpace) || value.Any(char.IsControl) ||
+            !Guid.TryParseExact(value, "D", out actorId) || actorId == Guid.Empty ||
+            !string.Equals(value, actorId.ToString("D"), StringComparison.Ordinal))
+        {
+            actorId = Guid.Empty;
+            return false;
+        }
+        return true;
     }
 }

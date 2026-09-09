@@ -89,6 +89,11 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
         Assert.Contains("X-EE-Pulse-Role", bearer.GetProperty("description").GetString(), StringComparison.Ordinal);
         var agentCredential = document.RootElement.GetProperty("components").GetProperty("securitySchemes")
             .GetProperty("AgentCredential");
+        // HTTP bearer security has an implicit Authorization header; OpenAPI must not model it as an apiKey.
+        Assert.Equal("http", agentCredential.GetProperty("type").GetString());
+        Assert.Equal("bearer", agentCredential.GetProperty("scheme").GetString());
+        Assert.False(agentCredential.TryGetProperty("in", out _));
+        Assert.False(agentCredential.TryGetProperty("name", out _));
         Assert.Equal("EE-Pulse-Agent-v1", agentCredential.GetProperty("bearerFormat").GetString());
 
         foreach (var path in document.RootElement.GetProperty("paths").EnumerateObject()
@@ -100,7 +105,8 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
                 var isEnrollment = path.Name == "/api/v1/agents/enroll";
                 var isAgentOperation = path.Name.StartsWith("/api/v1/agents/{agentId}/heartbeat", StringComparison.Ordinal) ||
                     path.Name.StartsWith("/api/v1/agents/{agentId}/configuration", StringComparison.Ordinal) ||
-                    path.Name.StartsWith("/api/v1/agents/{agentId}/credentials/rotate", StringComparison.Ordinal);
+                    path.Name.StartsWith("/api/v1/agents/{agentId}/credentials/rotate", StringComparison.Ordinal) ||
+                    path.Name == "/api/v1/agents/{agentId}/result-batches";
                 var security = operation.Value.GetProperty("security");
                 if (isEnrollment)
                 {
@@ -110,6 +116,11 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
                 {
                     Assert.Contains(security.EnumerateArray(), requirement =>
                         requirement.TryGetProperty(isAgentOperation ? "AgentCredential" : "Bearer", out _));
+                    if (isAgentOperation)
+                    {
+                        Assert.DoesNotContain(security.EnumerateArray(), requirement =>
+                            requirement.TryGetProperty("Bearer", out _));
+                    }
                 }
                 var responses = operation.Value.GetProperty("responses");
                 Assert.True(responses.TryGetProperty("401", out _), $"{operation.Name.ToUpperInvariant()} {path.Name} lacks 401.");

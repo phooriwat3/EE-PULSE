@@ -15,13 +15,17 @@ using EePulse.Infrastructure.Persistence;
 using EePulse.Infrastructure.Persistence.ProbeProcessing;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.OpenApi;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.OpenApi;
 using Npgsql;
 
 namespace EePulse.Api.Agents;
 
 public static partial class AgentEndpoints
 {
+    internal const string ResultBatchRoute = "/agents/{agentId:guid}/result-batches";
+    internal const string ResultBatchPath = "/api/v1/agents/{agentId}/result-batches";
     private const string TokenDomain = "EE-Pulse-Agent-Enrollment-v1";
     private const string CredentialDomain = "EE-Pulse-Agent-Credential-v1";
     private static readonly JsonSerializerOptions CanonicalJson = CreateCanonicalJson();
@@ -42,7 +46,7 @@ public static partial class AgentEndpoints
         Problems(MapAgentOperation(api.MapGet("/agents/{agentId:guid}/configuration", GetConfiguration)), 401, 403, 404, 409, 410, 503).Produces<AgentConfigurationResponse>().Produces(304);
         Problems(MapAgentOperation(api.MapPost("/agents/{agentId:guid}/configuration/acknowledgements", Acknowledge)), 400, 401, 403, 404, 409, 410, 429, 503).Produces<AgentConfigurationAcknowledgementResponse>();
         Problems(MapAgentOperation(api.MapPost("/agents/{agentId:guid}/credentials/rotate", Rotate)), 400, 401, 403, 404, 410, 429, 503).Produces<RotateAgentCredentialResponse>(201);
-        Problems(MapAgentOperation(api.MapPost("/agents/{agentId:guid}/result-batches", IngestResults)), 400, 401, 403, 409, 410, 413, 429, 503).Produces<ProbeResultIngestionBatchResponse>();
+        Problems(MapAgentOperation(api.MapPost(ResultBatchRoute, IngestResults)), 400, 401, 403, 409, 410, 413, 429, 503).Produces<ProbeResultIngestionBatchResponse>();
         return app;
     }
     private static RouteHandlerBuilder MapAgentOperation(RouteHandlerBuilder route) => route.RequireAuthorization(new AuthorizeAttribute { AuthenticationSchemes = AgentContract.CredentialAuthenticationScheme });
@@ -298,4 +302,35 @@ public static partial class AgentEndpoints
     { public string CorrelationId { get; } = correlationId ?? Guid.NewGuid().ToString("N"); public string Instance { get; } = instance ?? "/api/v1"; }
     [GeneratedRegex("^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$")]
     private static partial Regex SemVer();
+}
+
+/// <summary>
+/// Corrects the generated security requirement for the agent result-ingestion route.
+/// Runtime authorization is declared by <see cref="AgentEndpoints.MapAgentOperation"/>;
+/// this transformer keeps the generated document aligned with that boundary.
+/// </summary>
+public sealed class AgentCredentialSecurityDocumentTransformer : IOpenApiDocumentTransformer
+{
+    public Task TransformAsync(
+        OpenApiDocument document,
+        OpenApiDocumentTransformerContext context,
+        CancellationToken cancellationToken)
+    {
+        if (document.Paths?.TryGetValue(AgentEndpoints.ResultBatchPath, out var path) == true &&
+            path.Operations is not null)
+        {
+            foreach (var operation in path.Operations.Values)
+            {
+                operation.Security =
+                [
+                    new OpenApiSecurityRequirement
+                    {
+                        [new OpenApiSecuritySchemeReference(AgentContract.CredentialAuthenticationScheme, document)] = []
+                    }
+                ];
+            }
+        }
+
+        return Task.CompletedTask;
+    }
 }

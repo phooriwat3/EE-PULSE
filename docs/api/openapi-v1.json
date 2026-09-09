@@ -2917,6 +2917,443 @@
           }
         ]
       }
+    },
+    "/api/v1/agents/{agentId}/result-batches": {
+      "post": {
+        "tags": [
+          "AgentEndpoints"
+        ],
+        "parameters": [
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProbeResultIngestionBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Gone",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeResultIngestionBatchResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AgentCredential": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/timezone-preference": {
+      "get": {
+        "tags": [
+          "Dashboard - Timezone preference"
+        ],
+        "summary": "Get the caller's persisted timezone preference",
+        "description": "Returns the persisted canonical IANA timezone, or null when no preference is stored. The response is cacheable with the strong ETag header.",
+        "operationId": "GetTimezonePreference",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "A comma-separated list of entity tags. Strong and weak tags use weak comparison; '*' is valid only as the sole member.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong timezone preference ETag; \"tz-0\" denotes the absent row and persisted rows use \"tz-{version}\".",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimezonePreferenceResponse"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong timezone preference ETag; \"tz-0\" denotes the absent row and persisted rows use \"tz-{version}\".",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-if-none-match) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem Details with stable code (timezone-preference-identity-required) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Dashboard - Timezone preference"
+        ],
+        "summary": "Set or clear the caller's persisted timezone preference",
+        "description": "Stores a canonical IANA timezone or clears the retained preference row. If-Match is required for optimistic concurrency; identical values are idempotent no-ops.",
+        "operationId": "PutTimezonePreference",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Exactly one canonical strong timezone ETag is required. Missing is 428; malformed, weak, wildcard, or multiple values are 400.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimezonePreferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong timezone preference ETag; \"tz-0\" denotes the absent row and persisted rows use \"tz-{version}\".",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimezonePreferenceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-json, invalid-timezone, invalid-if-match) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem Details with stable code (timezone-preference-identity-required) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Problem Details code concurrency-conflict with currentEtag and correlationId extensions.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong timezone preference ETag; \"tz-0\" denotes the absent row and persisted rows use \"tz-{version}\".",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Problem Details code missing-if-match with correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Problem Details with stable code (timezone-preference-write-failed) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -4820,6 +5257,168 @@
           }
         }
       },
+      "ProbeResultIngestionBatchRequest": {
+        "required": [
+          "batchId",
+          "results"
+        ],
+        "type": "object",
+        "properties": {
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProbeResultIngestionEnvelope"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProbeResultIngestionBatchResponse": {
+        "required": [
+          "batchId",
+          "acceptedResultIds",
+          "rejections"
+        ],
+        "type": "object",
+        "properties": {
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "acceptedResultIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "rejections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RejectedProbeResultIngestion"
+            }
+          }
+        }
+      },
+      "ProbeResultIngestionEnvelope": {
+        "required": [
+          "resultSchemaVersion",
+          "resultId",
+          "agentId",
+          "probeId",
+          "configurationVersion",
+          "startedAt",
+          "endedAt",
+          "attemptCount",
+          "successfulAttemptCount",
+          "packetLossRatio",
+          "minRttMilliseconds",
+          "averageRttMilliseconds",
+          "maxRttMilliseconds",
+          "errorCategory"
+        ],
+        "type": "object",
+        "properties": {
+          "resultSchemaVersion": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "resultId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "agentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "probeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "configurationVersion": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "attemptCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "successfulAttemptCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "packetLossRatio": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "minRttMilliseconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "averageRttMilliseconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "maxRttMilliseconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "errorCategory": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "ProblemDetails": {
         "type": "object",
         "properties": {
@@ -4855,6 +5454,22 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "RejectedProbeResultIngestion": {
+        "required": [
+          "resultId",
+          "code"
+        ],
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
           }
         }
       },
@@ -5028,6 +5643,44 @@
               "string"
             ],
             "format": "int64"
+          }
+        }
+      },
+      "TimezonePreferenceRequest": {
+        "required": [
+          "timezone"
+        ],
+        "type": "object",
+        "properties": {
+          "timezone": {
+            "maxLength": 255,
+            "minLength": 0,
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "TimezonePreferenceResponse": {
+        "required": [
+          "timezone",
+          "etag"
+        ],
+        "type": "object",
+        "properties": {
+          "timezone": {
+            "maxLength": 255,
+            "minLength": 0,
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "etag": {
+            "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+            "type": "string"
           }
         }
       },
@@ -5421,6 +6074,9 @@
     },
     {
       "name": "AgentEndpoints"
+    },
+    {
+      "name": "Dashboard - Timezone preference"
     }
   ]
 }

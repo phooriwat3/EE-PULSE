@@ -1,8 +1,8 @@
 # EE Pulse implementation status
 
-Last updated: 2026-09-07 (Asia/Bangkok)
+Last updated: 2026-09-08 (Asia/Bangkok)
 Owner: Lead/Integration Agent
-Current checkpoint: WP-07 Phase 1 contract and policy foundation approved
+Current checkpoint: WP-07 Phase 2A timezone-preference implementation, generated OpenAPI, and documentation pass
 
 ## Outcome
 
@@ -21,9 +21,9 @@ The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13
 | Area | State |
 | --- | --- |
 | Specifications | Six authoritative files under `docs/spec`; no `AGENTS.md` or additional repository instruction file is present. |
-| Git | WP-06 was merged in `751b6bd5a45fd42e00a9ccb22a5765d3c0c16594`; WP-07 Phase 1 is contract/design work only. |
+| Git | WP-06 was merged in `751b6bd5a45fd42e00a9ccb22a5765d3c0c16594`; WP-07 Phase 1 was contract/design-only, and this checkpoint completes the Phase 2A timezone-preference persistence and API implementation. |
 | Backend | PostgreSQL-backed Site, Device, AgentGroup, Probe, MaintenanceWindow, AuditEvent, CSV import, authorization policies, migration, seed gate, and dependency-aware readiness. |
-| Contracts/OpenAPI | Existing v1 inventory/Agent OpenAPI remains frozen; [WP-07 dashboard contract design](api/wp07-dashboard-contract-design.md) defines proposed additive contracts without claiming implemented routes. |
+| Contracts/OpenAPI | Existing v1 inventory/Agent contracts remain compatible; generated `openapi-v1.json` now includes the verified Phase 2A timezone-preference GET/PUT operations and their headers, security, response, and schema metadata. |
 | Probe Agent | WP-04 deterministic runtime foundation plus WP-05 durable SQLite outbox and at-least-once result delivery. Real ICMP and Windows-Service operational evidence remain unclaimed. |
 | Web | Responsive inventory console for Sites, server-filtered/paged Devices, create/edit/soft-disable, Probe fields, CSV preview/commit, row errors, stale/partial/retry states, and actionable concurrency conflicts. Development synthetic identity is absent from the production bundle, which fails closed pending OIDC. |
 | QA | WP-04 final integration review passed: Agent tests 112/112, formatting, Agent host and Agent Tests Release builds (0 warnings/errors), quality/security gate, and `git diff --check`. Earlier WP-02/03 evidence remains recorded below. |
@@ -40,7 +40,7 @@ The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13
 | WP-04 | Implemented and integration-verified locally | Deterministic probe-runtime foundation verified with fake time/transport: IPv4-literal scope validation, stable jitter/monotonic cadence, bounded admission/non-overlap, coalesced missed slots, sequential attempts, immutable local results, fixed outcome categories, cancellation, and cardinality-safe observability. No real ICMP, persistence, delivery, ingestion, UI, deployment, or Windows Service evidence is included. |
 | WP-05 | Implemented and merged | Durable SQLite outbox, at-least-once delivery, idempotent PostgreSQL ledger/ingestion, and delivery-recovery coverage were merged in `2c22766` (PR #5). UA-11 policy remains binding. No WP-06 status/incident behavior is included. |
 | WP-06 | Implemented and merged | Result-driven projection/transitions, freshness and heartbeat UNKNOWN expiry, atomic availability incidents/lifecycle/suppression context, maintenance precedence, and deterministic verification are merged. Dashboard read APIs, manual actions/comments, SignalR, UI, notifications, and reports remain outside WP-06. |
-| WP-07 | Phase 1 approved | [Contract design](api/wp07-dashboard-contract-design.md) fixes additive read/action/event contracts, persisted-timezone proposal, refresh, roles, and invalid manual-resolution conflict semantics. DTO metadata and independent contract tests enforce UTC-Z, unmapped-member, bounds, event, and policy rules. No endpoints, persistence, hub, or UI are implemented. |
+| WP-07 | Phase 2A implemented and integration-verified | Timezone-preference persistence, API GET/PUT, explicit issuer+subject identity, dashboard.read authorization, server-controlled correlation IDs, atomic redacted AuditEvent writes, ETag/concurrency/no-op/clear semantics, deterministic race/rollback coverage, and generated OpenAPI are implemented and verified. Dashboard/device/status reads, incident actions, audit listing, SignalR runtime, and frontend UI remain later WP-07 slices. |
 | WP-08 through WP-11 | Not started | Continue in dependency order after WP-07 implementation. |
 
 ## Stable contract decision
@@ -57,6 +57,19 @@ Stable elements include:
 Breaking changes require a new API/schema version. Compatible additions remain Lead-owned and require consumer/test review. Backend exclusively owns migrations.
 
 ## Integrated verification
+
+### WP-07 Phase 2A verification evidence (2026-09-08)
+
+| Gate | Result |
+| --- | --- |
+| Pinned Linux .NET 10.0.302 Release solution build | Passed; 0 warnings and 0 errors. |
+| Unit tests | 128/128 passed; 0 failed/skipped. |
+| Integration tests | 175/175 passed; 0 failed/skipped; PostgreSQL/Testcontainers run completed in 15m26s. |
+| Focused WP-07 tests | Contract/API, deterministic first/stale races, deferred ownership drain, dual-SQL rollback, correlation/principal, authorization, and aggregate snapshot tests passed. |
+| Generated OpenAPI | Runtime-generated twice from the pinned API; second generation is byte-identical (SHA-256 `44F2C9D1EB902E1EC44C6395305F328F262A3D592E9EDF7BA40724C030DE435C`); timezone GET/PUT and AgentCredential result-batches metadata reviewed. |
+| Format and hygiene | Style/analyzers passed; scoped whitespace/final-newline checks passed; `git diff --check` passed. |
+
+This checkpoint claims only the Phase 2A timezone-preference vertical slice. Dashboard/device/status reads, incident actions, audit-log listing/UI, SignalR runtime, and frontend UI remain pending WP-07 work. WP-08 notification fan-out and WP-09 reporting/retention ownership are unchanged.
 
 ### WP-06 final verification evidence (baseline at `751b6bd5a45fd42e00a9ccb22a5765d3c0c16594`)
 
@@ -77,7 +90,7 @@ Breaking changes require a new API/schema version. Compatible additions remain L
 | Agent B independent review | Agent build 0 warnings/errors; Agent tests 10/10; code reviewed by Lead and QA. |
 | Quality/security script | Passed foundation, working-tree/history secret patterns, exact versions, lockfile, Compose exposure/network/privilege, and image-tag checks. |
 | Compose/runtime | Config valid; PostgreSQL, VictoriaMetrics, API healthy; live/ready schema v1; anonymous inventory HTTP 401. |
-| OpenAPI | 3.1.1; 14 paths; 19 protected operations; Bearer scheme; protected operations declare 401/403; health remains unauthenticated. |
+| OpenAPI | 3.1.1; 29 paths; 34 protected operations; Bearer scheme; protected operations declare 401/403; health remains unauthenticated. |
 | Repository hygiene | `git diff --check` passed; no commit, push, deployment, real credentials, real probes, or notifications. |
 
 ### WP-03 final integration evidence (2026-08-14)
@@ -124,4 +137,4 @@ This checkpoint verifies a deterministic local runtime using fake time and fake 
 
 ## Next checkpoint
 
-WP-06 is merged and verified. WP-07 Phase 1 defines the approved dashboard/device/incident contract boundary; implementation begins only after review of this foundation. UA-03 remains mandatory before real ICMP validation; UA-04 remains mandatory before Windows Service operational evidence. Do not treat documentation CIDRs or local Compose credentials as production authorization.
+WP-06 is merged and verified. WP-07 Phase 1 defined the approved dashboard/device/incident contract boundary, and this checkpoint completes the Phase 2A timezone-preference persistence and API implementation. Dashboard/device/status reads, incident actions, audit read/UI, SignalR runtime, and frontend work remain pending; WP-08 notification fan-out and WP-09 reporting/retention ownership are unchanged. UA-03 remains mandatory before real ICMP validation; UA-04 remains mandatory before Windows Service operational evidence. Do not treat documentation CIDRs or local Compose credentials as production authorization.

@@ -4,6 +4,7 @@ using EePulse.Api.Authorization;
 using EePulse.Api.Inventory;
 using EePulse.Api.Agents;
 using EePulse.Api.OpenApi;
+using EePulse.Api.Timezone;
 using EePulse.Application.Time;
 using EePulse.Contracts;
 using EePulse.Contracts.Health;
@@ -30,7 +31,11 @@ try
         .WriteTo.Console(new CompactJsonFormatter()));
     builder.Services.AddProblemDetails();
     builder.Services.AddOpenApi("v1", options =>
-        options.AddDocumentTransformer<InventorySecurityDocumentTransformer>());
+    {
+        options.AddDocumentTransformer<InventorySecurityDocumentTransformer>();
+        options.AddDocumentTransformer<AgentCredentialSecurityDocumentTransformer>();
+        options.AddDocumentTransformer<TimezoneOpenApiDocumentTransformer>();
+    });
     builder.Services.AddHealthChecks();
     builder.Services.AddEePulseInfrastructure();
     builder.Services.AddAuthentication(DevelopmentAuthenticationHandler.SchemeName)
@@ -39,6 +44,9 @@ try
         .AddScheme<AuthenticationSchemeOptions, AgentCredentialAuthenticationHandler>(
             EePulse.Contracts.Agents.AgentContract.CredentialAuthenticationScheme, _ => { });
     builder.Services.AddInventoryAuthorization();
+    builder.Services.AddDashboardAuthorization();
+    builder.Services.AddSingleton<PrincipalIdentityResolver>();
+    builder.Services.AddScoped<TimezonePreferenceStore>();
     builder.Services.AddSingleton<DeviceCsvImportService>();
     builder.Services.AddHostedService<AgentOfflineService>();
     builder.Services.AddSingleton<AgentRateLimiter>();
@@ -90,6 +98,7 @@ try
 
     app.UseForwardedHeaders();
     app.UseMiddleware<CorrelationIdMiddleware>();
+    app.UseTimezonePreferenceCorrelationId();
     app.UseExceptionHandler();
     app.UseSerilogRequestLogging();
     app.UseMiddleware<AgentRequestSecurityMiddleware>();
@@ -129,6 +138,7 @@ try
 
     app.MapInventoryEndpoints();
     app.MapAgentEndpoints();
+    app.MapTimezonePreferenceEndpoints();
 
     app.Run();
 }
