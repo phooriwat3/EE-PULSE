@@ -1,8 +1,8 @@
 # EE Pulse implementation status
 
-Last updated: 2026-09-08 (Asia/Bangkok)
+Last updated: 2026-09-09 (Asia/Bangkok)
 Owner: Lead/Integration Agent
-Current checkpoint: WP-07 Phase 2A timezone-preference implementation, generated OpenAPI, and documentation pass
+Current checkpoint: WP-07 Phase 2A runtime implemented; Phase 2B contract closure complete; Phase 2B1 runtime pending
 
 ## Outcome
 
@@ -40,7 +40,7 @@ The committed WP-02 checkpoint is preserved at frozen contract commit `34718aa13
 | WP-04 | Implemented and integration-verified locally | Deterministic probe-runtime foundation verified with fake time/transport: IPv4-literal scope validation, stable jitter/monotonic cadence, bounded admission/non-overlap, coalesced missed slots, sequential attempts, immutable local results, fixed outcome categories, cancellation, and cardinality-safe observability. No real ICMP, persistence, delivery, ingestion, UI, deployment, or Windows Service evidence is included. |
 | WP-05 | Implemented and merged | Durable SQLite outbox, at-least-once delivery, idempotent PostgreSQL ledger/ingestion, and delivery-recovery coverage were merged in `2c22766` (PR #5). UA-11 policy remains binding. No WP-06 status/incident behavior is included. |
 | WP-06 | Implemented and merged | Result-driven projection/transitions, freshness and heartbeat UNKNOWN expiry, atomic availability incidents/lifecycle/suppression context, maintenance precedence, and deterministic verification are merged. Dashboard read APIs, manual actions/comments, SignalR, UI, notifications, and reports remain outside WP-06. |
-| WP-07 | Phase 2A implemented and integration-verified | Timezone-preference persistence, API GET/PUT, explicit issuer+subject identity, dashboard.read authorization, server-controlled correlation IDs, atomic redacted AuditEvent writes, ETag/concurrency/no-op/clear semantics, deterministic race/rollback coverage, and generated OpenAPI are implemented and verified. Dashboard/device/status reads, incident actions, audit listing, SignalR runtime, and frontend UI remain later WP-07 slices. |
+| WP-07 | Phase 2A runtime implemented; Phase 2B contract closure complete | Timezone-preference persistence/API and generated OpenAPI are implemented and verified. Phase 2B closes the summary/device-status representation contract only; Phase 2B1 runtime reads, incident actions, audit listing, SignalR, and frontend remain pending. |
 | WP-08 through WP-11 | Not started | Continue in dependency order after WP-07 implementation. |
 
 ## Stable contract decision
@@ -69,7 +69,7 @@ Breaking changes require a new API/schema version. Compatible additions remain L
 | Generated OpenAPI | Runtime-generated twice from the pinned API; second generation is byte-identical (SHA-256 `44F2C9D1EB902E1EC44C6395305F328F262A3D592E9EDF7BA40724C030DE435C`); timezone GET/PUT and AgentCredential result-batches metadata reviewed. |
 | Format and hygiene | Style/analyzers passed; scoped whitespace/final-newline checks passed; `git diff --check` passed. |
 
-This checkpoint claims only the Phase 2A timezone-preference vertical slice. Dashboard/device/status reads, incident actions, audit-log listing/UI, SignalR runtime, and frontend UI remain pending WP-07 work. WP-08 notification fan-out and WP-09 reporting/retention ownership are unchanged.
+This checkpoint claims Phase 2A timezone-preference implementation and Phase 2B contract closure only. Phase 2B1 freezes the future `GET /api/v1/dashboard/summary` and `GET /api/v1/devices/{id}/status` representation, status overlays, filter, ordering, ETag, and conditional-GET rules; neither runtime endpoint exists, so OpenAPI remains unchanged. Metrics, status-enriched device lists, history/timeline, incident/audit reads and actions, SignalR, frontend UI, WP-08 notification fan-out, and WP-09 reporting/retention remain outside this checkpoint. WP-07 is not complete.
 
 ### WP-06 final verification evidence (baseline at `751b6bd5a45fd42e00a9ccb22a5765d3c0c16594`)
 
@@ -137,4 +137,4 @@ This checkpoint verifies a deterministic local runtime using fake time and fake 
 
 ## Next checkpoint
 
-WP-06 is merged and verified. WP-07 Phase 1 defined the approved dashboard/device/incident contract boundary, and this checkpoint completes the Phase 2A timezone-preference persistence and API implementation. Dashboard/device/status reads, incident actions, audit read/UI, SignalR runtime, and frontend work remain pending; WP-08 notification fan-out and WP-09 reporting/retention ownership are unchanged. UA-03 remains mandatory before real ICMP validation; UA-04 remains mandatory before Windows Service operational evidence. Do not treat documentation CIDRs or local Compose credentials as production authorization.
+WP-06 is merged and verified. WP-07 Phase 1 defined the approved dashboard/device/incident contract boundary; Phase 2A completes timezone-preference persistence/API; and Phase 2B closes the future summary/device-status contract only. The Phase 2B1 runtime endpoints, incident actions, audit read/UI, SignalR runtime, and frontend work remain pending; WP-08 notification fan-out and WP-09 reporting/retention ownership are unchanged. UA-03 remains mandatory before real ICMP validation; UA-04 remains mandatory before Windows Service operational evidence. Do not treat documentation CIDRs or local Compose credentials as production authorization.

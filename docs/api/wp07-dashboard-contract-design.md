@@ -1,7 +1,25 @@
 # WP-07 dashboard and device experience — contract and policy design
 
-Status: Phase 2A timezone-preference implementation and generated-OpenAPI review (2026-09-08)
-Scope: Phase 2A implements the timezone-preference contract, persistence foundation, API slice, authorization, and generated OpenAPI. Dashboard/device/status reads, incident commands, SignalR runtime, and frontend work remain deferred.
+Status: Phase 2A timezone-preference implementation plus Phase 2B contract closure (2026-09-09)
+Scope: Phase 2A implements the timezone-preference contract, persistence foundation, API slice, authorization, and generated OpenAPI. Phase 2B closes only the frozen 2B1 contract for future dashboard summary and device-status reads. No Phase 2B1 runtime endpoint exists yet; OpenAPI remains unchanged.
+
+## Phase 2B1 frozen runtime contract (not implemented)
+
+The only future 2B1 routes are `GET /api/v1/dashboard/summary` and `GET /api/v1/devices/{id}/status`. Metrics, a status-enriched device list, history/timeline, incident reads/actions/comments, audit reads, SignalR, frontend behavior, WP-08 notification fan-out, and WP-09 reporting/retention are excluded. In particular, `includeStatus` is not added to the existing device-list response.
+
+Both routes initially require the global authenticated `dashboard.read` scope. There is no site-grant model: optional `siteId` is a data filter only, never an authorization boundary. Reads use the normal validated caller correlation convention and never persist a correlation ID.
+
+`DashboardSummaryResponse` has no `generatedAt` and neither route adds a request-time timestamp. `StatusEnrichedDeviceResponse` also has no request-time timestamp. Authoritative monitoring instants are UTC `Z`; client receipt time is presentation-only and never an authoritative monitoring timestamp.
+
+Filters are optional. `siteId` is parsed as UUID-D and rendered lowercase. Non-null `area`, `deviceType`, `criticality`, and `tag` are trimmed, Unicode Form-C normalized, non-empty after normalization, and limited to 128 UTF-16 code units; exact enum tokens are `Unknown`, `Up`, `Degraded`, `Down`, `Recovering`, `Maintenance`, and `Disabled`. The response `appliedFilter` contains the single validated normalized filter representation (including explicit nulls), never the caller's unnormalized input. No other Unicode normalization is performed.
+
+Visible status is contract-owned: disabled Device or Probe wins (`!Device.Enabled || !Probe.Enabled => Disabled`), then active matching maintenance (`Maintenance`), then persisted projection `VisibleStatus`. A missing projection is `Unknown`, state version `0`, and has nullable freshness, receipt, Agent, and incident fields; it must never become `Up`. UNKNOWN expiry may coexist with an active availability incident. An offline Agent is persisted `Agent.Status == Offline`; an active incident is `Open` or `Acknowledged`. `openIncidentId` is projection-authoritative; an incident row is a consistency check.
+
+Summary always emits all seven status-count values in the exact order above. `recentlyDown` contains final visible `Down` rows with the active incident referenced by the projection; `sinceAt` is `availability_incidents.opened_at`, maximum 20, ordered `sinceAt DESC, probeId DESC`, with duplicate `probeId` rejected. `offlineAgents` contains persisted offline Agents referenced by a filtered projection `watermark_agent_id`, maximum 20, ordered `lastHeartbeatAt ASC NULLS FIRST, agentId ASC`, with duplicate `agentId` rejected. `openIncidents` contains Open/Acknowledged rows, maximum 20, ordered `openedAt DESC, incidentId DESC`, with duplicate `incidentId` rejected. UUID rendering and every tie-break use lowercase UUID-D and ordinal comparison.
+
+The reusable contract canonicalizer validates the complete response before producing any bytes or ETag, then writes exact UTF-8 bytes for 200 responses. It writes object names in ascending ordinal order, writes every declared property including null, uses the collection orders above, exact PascalCase enum tokens, lowercase UUID-D, minimal base-10 integer JSON, System.Text.Json's fixed default escaping, and UTC `yyyy-MM-dd'T'HH:mm:ss.fffffffZ`. PostgreSQL timestamps are normalized to microsecond precision before DTO construction. Probes are sorted by lowercase `probeId` ordinal and duplicate IDs fail; tags are sorted ordinal and exact duplicates fail, while case-distinct tags remain distinct. Null collections/elements and invalid response values fail closed. The semantic summary lists and status counts are never re-sorted: they must already satisfy their frozen membership, cap, and order. The canonicalization marker is `wp07-2b1`; the strong identity-encoded response ETag is `"wp07-2b1-sha256-<43-character-unpadded-base64url-SHA256>"`, calculated from those exact bytes. Content type is `application/json; charset=utf-8`; no alternate representation or compression is permitted.
+
+Future GET conditional behavior accepts `If-None-Match` entity-tag lists across multiple header lines. Wildcard is valid only as the sole member. Supplied weak and strong tags use weak comparison for GET. Malformed input is `400` code `invalid-if-none-match`; a match is bodyless `304` with the current strong ETag, `Cache-Control: private, max-age=0, must-revalidate`, and `X-Correlation-ID`; a non-match is canonical `200`. `If-Match` is unsupported for these reads.
 
 ## 1. Boundaries and compatibility
 
@@ -27,8 +45,8 @@ The API enforces every row above; UI affordances are a convenience only. The new
 
 | Operation | Purpose | Filters/order/paging |
 | --- | --- | --- |
-| `GET /api/v1/dashboard/summary` | Status counts, recently-down targets, offline Agents, open incidents | Site, area, type, criticality, tag, visible status; fixed deterministic sub-list order documented in OpenAPI. |
-| `GET /api/v1/devices` (add `includeStatus=true`) | Existing server-paged inventory enriched with current Probe status | Preserve existing filters and page contract; add visible-status filter and stable `name,id` default order. |
+| `GET /api/v1/dashboard/summary` | Status counts, recently-down targets, offline Agents, open incidents | Site, area, type, criticality, tag, visible status; fixed deterministic sub-list order is frozen here and enters generated OpenAPI only with runtime implementation. |
+| `GET /api/v1/devices` | Existing server-paged inventory | No 2B1 `includeStatus` addition. |
 | `GET /api/v1/devices/{id}/status` | Status-enriched device/probe/Agent snapshot | One Device; `404` if absent. |
 | `GET /api/v1/devices/{id}/metrics` | RTT, loss and success chart data | Required `from`, `to`; optional `resolution`. |
 | `GET /api/v1/devices/{id}/timeline` | Status-transition history | Cursor page; `from`, `to`, Probe, and direction filter; default occurred-at descending. |
