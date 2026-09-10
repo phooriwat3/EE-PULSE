@@ -36,6 +36,8 @@ public static class Wp07DashboardContract
     public const string DashboardCacheControl = "private, max-age=0, must-revalidate";
     public const string InvalidIfNoneMatchCode = "invalid-if-none-match";
     public const string IfMatchUnsupportedCode = "if-match-unsupported";
+    public const int DashboardSummaryUnavailableStatusCode = 503;
+    public const string DashboardSummaryUnavailableCode = "dashboard-summary-unavailable";
     public const int DashboardSummaryListMaximum = 20;
 }
 

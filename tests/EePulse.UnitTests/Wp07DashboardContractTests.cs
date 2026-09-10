@@ -14,6 +14,13 @@ public sealed class Wp07DashboardContractTests
     private static readonly JsonSerializerOptions Json = CreateJsonOptions();
 
     [Fact]
+    public void DashboardSummaryUnavailableFailureContractIsStable()
+    {
+        Assert.Equal(503, Wp07DashboardContract.DashboardSummaryUnavailableStatusCode);
+        Assert.Equal("dashboard-summary-unavailable", Wp07DashboardContract.DashboardSummaryUnavailableCode);
+    }
+
+    [Fact]
     public void EveryDashboardTimestampHasUtcZConverterMetadata()
     {
         var timestamps = typeof(Wp07DashboardContract).Assembly.GetTypes()

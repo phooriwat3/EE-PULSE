@@ -5,6 +5,7 @@ using EePulse.Api.Inventory;
 using EePulse.Api.Agents;
 using EePulse.Api.OpenApi;
 using EePulse.Api.Timezone;
+using EePulse.Api.Dashboard;
 using EePulse.Application.Time;
 using EePulse.Contracts;
 using EePulse.Contracts.Health;
@@ -99,6 +100,7 @@ try
     app.UseForwardedHeaders();
     app.UseMiddleware<CorrelationIdMiddleware>();
     app.UseTimezonePreferenceCorrelationId();
+    app.UseDashboardSummaryCorrelationId();
     app.UseExceptionHandler();
     app.UseSerilogRequestLogging();
     app.UseMiddleware<AgentRequestSecurityMiddleware>();
@@ -139,6 +141,7 @@ try
     app.MapInventoryEndpoints();
     app.MapAgentEndpoints();
     app.MapTimezonePreferenceEndpoints();
+    app.MapDashboardSummaryEndpoints();
 
     app.Run();
 }
