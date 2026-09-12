@@ -77,7 +77,7 @@ public sealed class Wp05DeliveryEndToEndTests
         }
         finally
         {
-            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            DeleteOutboxDirectory(directory);
         }
     }
 
@@ -170,7 +170,7 @@ public sealed class Wp05DeliveryEndToEndTests
         }
         finally
         {
-            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            DeleteOutboxDirectory(directory);
         }
     }
 
@@ -274,7 +274,7 @@ public sealed class Wp05DeliveryEndToEndTests
         }
         finally
         {
-            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            DeleteOutboxDirectory(directory);
         }
     }
 
@@ -396,7 +396,7 @@ public sealed class Wp05DeliveryEndToEndTests
         }
         finally
         {
-            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            DeleteOutboxDirectory(directory);
         }
     }
 
@@ -478,7 +478,7 @@ public sealed class Wp05DeliveryEndToEndTests
         }
         finally
         {
-            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            DeleteOutboxDirectory(directory);
         }
     }
 
@@ -562,7 +562,17 @@ public sealed class Wp05DeliveryEndToEndTests
         }
         finally
         {
-            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+            DeleteOutboxDirectory(directory);
+        }
+    }
+
+    private static void DeleteOutboxDirectory(string directory)
+    {
+        SqliteConnection.ClearAllPools();
+
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 
