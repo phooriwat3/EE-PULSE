@@ -8,6 +8,10 @@ namespace EePulse.IntegrationTests;
 
 public sealed class ProbeTransactionLockTests
 {
+    private static readonly TimeSpan PreparationTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan BehaviorTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(10);
+
     [Fact]
     public async Task SameProbeBlocksUntilFirstTransactionCommits()
     {
@@ -25,141 +29,294 @@ public sealed class ProbeTransactionLockTests
     [Fact]
     public async Task DifferentProbeIdsDoNotBlockEachOther()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var ct = timeout.Token;
-        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        using var preparationTimeout = new CancellationTokenSource(PreparationTimeout);
+        var preparationToken = preparationTimeout.Token;
+        await using var postgres = await PostgresTestDatabase.StartAsync(preparationToken);
         var options = CreateOptions(postgres.ConnectionString);
         var firstProbeId = Guid.NewGuid();
         var secondProbeId = Guid.NewGuid();
 
         await using var first = new EePulseDbContext(options);
-        await using var firstTransaction = await first.Database.BeginTransactionAsync(ct);
-        await ProbeTransactionLock.AcquireAsync(first, firstProbeId, ct);
+        await using var firstTransaction = await first.Database.BeginTransactionAsync(preparationToken);
+        await ProbeTransactionLock.AcquireAsync(first, firstProbeId, preparationToken);
 
         await using var second = new EePulseDbContext(options);
-        await using var secondTransaction = await second.Database.BeginTransactionAsync(ct);
-        await ProbeTransactionLock.AcquireAsync(second, secondProbeId, ct);
-        await secondTransaction.CommitAsync(ct);
-        await firstTransaction.RollbackAsync(ct);
+        await using var secondTransaction = await second.Database.BeginTransactionAsync(preparationToken);
+        using var behaviorTimeout = new CancellationTokenSource(BehaviorTimeout);
+        var behaviorToken = behaviorTimeout.Token;
+        var secondTransactionCommitted = false;
+        Exception? testFailure = null;
+        try
+        {
+            await ProbeTransactionLock.AcquireAsync(second, secondProbeId, behaviorToken);
+            await secondTransaction.CommitAsync(behaviorToken);
+            secondTransactionCommitted = true;
+        }
+        catch (Exception exception)
+        {
+            testFailure = exception;
+            throw;
+        }
+        finally
+        {
+            using var cleanupTimeout = new CancellationTokenSource(CleanupTimeout);
+            var cleanupToken = cleanupTimeout.Token;
+            var cleanupFailures = new List<Exception>();
+
+            if (!secondTransactionCommitted)
+            {
+                try
+                {
+                    await RollbackIfActiveAsync(second, secondTransaction, cleanupToken);
+                }
+                catch (Exception exception)
+                {
+                    cleanupFailures.Add(exception);
+                }
+            }
+
+            try
+            {
+                await RollbackIfActiveAsync(first, firstTransaction, cleanupToken);
+            }
+            catch (Exception exception)
+            {
+                cleanupFailures.Add(exception);
+            }
+
+            SurfaceCleanupFailures(cleanupFailures, testFailure);
+        }
     }
 
     [Fact]
     public async Task MultipleProbeIdsAreAcquiredOnceInCanonicalOrder()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var ct = timeout.Token;
-        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        using var preparationTimeout = new CancellationTokenSource(PreparationTimeout);
+        var preparationToken = preparationTimeout.Token;
+        await using var postgres = await PostgresTestDatabase.StartAsync(preparationToken);
         var options = CreateOptions(postgres.ConnectionString);
         var probeIds = new[] { Guid.NewGuid(), Guid.NewGuid() }
             .OrderBy(probeId => probeId.ToString("D"), StringComparer.Ordinal)
             .ToArray();
 
         await using var first = new EePulseDbContext(options);
-        await using var firstTransaction = await first.Database.BeginTransactionAsync(ct);
-        await ProbeTransactionLock.AcquireAsync(first, probeIds[0], ct);
+        await using var firstTransaction = await first.Database.BeginTransactionAsync(preparationToken);
+        await ProbeTransactionLock.AcquireAsync(first, probeIds[0], preparationToken);
 
         await using var second = new EePulseDbContext(options);
-        await using var secondTransaction = await second.Database.BeginTransactionAsync(ct);
+        await using var secondTransaction = await second.Database.BeginTransactionAsync(preparationToken);
         var secondBackendProcessId = await second.Database
             .SqlQueryRaw<int>("SELECT pg_backend_pid() AS \"Value\"")
-            .SingleAsync(ct);
-        var secondAcquire = ProbeTransactionLock.AcquireAllAsync(second, [probeIds[1], probeIds[0], probeIds[1]], ct);
+            .SingleAsync(preparationToken);
+
+        await using var observer = new NpgsqlConnection(postgres.ConnectionString);
+        await observer.OpenAsync(preparationToken);
+        using var behaviorTimeout = new CancellationTokenSource(BehaviorTimeout);
+        var behaviorToken = behaviorTimeout.Token;
+        var secondAcquire = ProbeTransactionLock.AcquireAllAsync(second, [probeIds[1], probeIds[0], probeIds[1]], behaviorToken);
         var firstTransactionReleased = false;
+        Exception? testFailure = null;
         try
         {
-            await using var observer = new NpgsqlConnection(postgres.ConnectionString);
-            await observer.OpenAsync(ct);
-            await WaitForUngrantedAdvisoryLockAsync(observer, secondBackendProcessId, probeIds[0], secondAcquire, ct);
+            await WaitForUngrantedAdvisoryLockAsync(observer, secondBackendProcessId, probeIds[0], secondAcquire, behaviorToken);
 
             await using (var command = new NpgsqlCommand("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = @backendProcessId AND granted", observer))
             {
                 command.Parameters.AddWithValue("backendProcessId", secondBackendProcessId);
-                Assert.Equal(0L, (long)(await command.ExecuteScalarAsync(ct))!);
+                Assert.Equal(0L, (long)(await command.ExecuteScalarAsync(behaviorToken))!);
             }
 
-            await firstTransaction.CommitAsync(ct);
+            await firstTransaction.CommitAsync(behaviorToken);
             firstTransactionReleased = true;
             await secondAcquire;
 
             await using var finalCount = new NpgsqlCommand("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = @backendProcessId AND granted", observer);
             finalCount.Parameters.AddWithValue("backendProcessId", secondBackendProcessId);
-            Assert.Equal(2L, (long)(await finalCount.ExecuteScalarAsync(ct))!);
-            await secondTransaction.CommitAsync(ct);
+            Assert.Equal(2L, (long)(await finalCount.ExecuteScalarAsync(behaviorToken))!);
+            await secondTransaction.CommitAsync(behaviorToken);
+        }
+        catch (Exception exception)
+        {
+            testFailure = exception;
+            throw;
         }
         finally
         {
-            if (!firstTransactionReleased)
-            {
-                await RollbackIfActiveAsync(first, firstTransaction);
-                await secondAcquire;
-            }
+            using var cleanupTimeout = new CancellationTokenSource(CleanupTimeout);
+            await CleanupTransactionsAndAcquisitionAsync(
+                first,
+                firstTransaction,
+                firstTransactionReleased,
+                second,
+                secondTransaction,
+                secondAcquire,
+                behaviorTimeout,
+                testFailure,
+                cleanupTimeout.Token);
         }
     }
 
     [Fact]
     public async Task AcquisitionWithoutAnActiveTransactionFailsFast()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await using var postgres = await PostgresTestDatabase.StartAsync(timeout.Token);
+        using var preparationTimeout = new CancellationTokenSource(PreparationTimeout);
+        await using var postgres = await PostgresTestDatabase.StartAsync(preparationTimeout.Token);
         await using var db = new EePulseDbContext(CreateOptions(postgres.ConnectionString));
+        using var behaviorTimeout = new CancellationTokenSource(BehaviorTimeout);
+        var behaviorToken = behaviorTimeout.Token;
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => ProbeTransactionLock.AcquireAsync(db, Guid.NewGuid(), timeout.Token));
+            () => ProbeTransactionLock.AcquireAsync(db, Guid.NewGuid(), behaviorToken));
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => ProbeTransactionLock.AcquireAllAsync(db, [Guid.NewGuid()], timeout.Token));
+            () => ProbeTransactionLock.AcquireAllAsync(db, [Guid.NewGuid()], behaviorToken));
     }
 
     private static async Task AssertSameProbeBlocksUntilFirstTransactionReleasesAsync(
         Func<IDbContextTransaction, CancellationToken, Task> releaseFirstTransaction)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var ct = timeout.Token;
-        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        using var preparationTimeout = new CancellationTokenSource(PreparationTimeout);
+        var preparationToken = preparationTimeout.Token;
+        await using var postgres = await PostgresTestDatabase.StartAsync(preparationToken);
         var options = CreateOptions(postgres.ConnectionString);
         var probeId = Guid.NewGuid();
 
         await using var first = new EePulseDbContext(options);
-        await using var firstTransaction = await first.Database.BeginTransactionAsync(ct);
-        await ProbeTransactionLock.AcquireAsync(first, probeId, ct);
+        await using var firstTransaction = await first.Database.BeginTransactionAsync(preparationToken);
+        await ProbeTransactionLock.AcquireAsync(first, probeId, preparationToken);
 
         await using var second = new EePulseDbContext(options);
-        await using var secondTransaction = await second.Database.BeginTransactionAsync(ct);
+        await using var secondTransaction = await second.Database.BeginTransactionAsync(preparationToken);
         var secondBackendProcessId = await second.Database
             .SqlQueryRaw<int>("SELECT pg_backend_pid() AS \"Value\"")
-            .SingleAsync(ct);
-        var secondAcquire = ProbeTransactionLock.AcquireAsync(second, probeId, ct);
+            .SingleAsync(preparationToken);
+
+        await using var observer = new NpgsqlConnection(postgres.ConnectionString);
+        await observer.OpenAsync(preparationToken);
+        using var behaviorTimeout = new CancellationTokenSource(BehaviorTimeout);
+        var behaviorToken = behaviorTimeout.Token;
+        var secondAcquire = ProbeTransactionLock.AcquireAsync(second, probeId, behaviorToken);
 
         var firstTransactionReleased = false;
+        Exception? testFailure = null;
         try
         {
-            await using var observer = new NpgsqlConnection(postgres.ConnectionString);
-            await observer.OpenAsync(ct);
-            await WaitForUngrantedAdvisoryLockAsync(observer, secondBackendProcessId, probeId, secondAcquire, ct);
+            await WaitForUngrantedAdvisoryLockAsync(observer, secondBackendProcessId, probeId, secondAcquire, behaviorToken);
 
-            await releaseFirstTransaction(firstTransaction, ct);
+            await releaseFirstTransaction(firstTransaction, behaviorToken);
             firstTransactionReleased = true;
             await secondAcquire;
-            await secondTransaction.CommitAsync(ct);
+            await secondTransaction.CommitAsync(behaviorToken);
+        }
+        catch (Exception exception)
+        {
+            testFailure = exception;
+            throw;
         }
         finally
         {
-            if (!firstTransactionReleased)
-            {
-                await RollbackIfActiveAsync(first, firstTransaction);
-            }
+            using var cleanupTimeout = new CancellationTokenSource(CleanupTimeout);
+            await CleanupTransactionsAndAcquisitionAsync(
+                first,
+                firstTransaction,
+                firstTransactionReleased,
+                second,
+                secondTransaction,
+                secondAcquire,
+                behaviorTimeout,
+                testFailure,
+                cleanupTimeout.Token);
+        }
+    }
 
-            if (!secondAcquire.IsCompleted)
+    private static async Task CleanupTransactionsAndAcquisitionAsync(
+        EePulseDbContext first,
+        IDbContextTransaction firstTransaction,
+        bool firstTransactionReleased,
+        EePulseDbContext second,
+        IDbContextTransaction secondTransaction,
+        Task secondAcquire,
+        CancellationTokenSource behaviorTimeout,
+        Exception? testFailure,
+        CancellationToken cleanupToken)
+    {
+        var cleanupFailures = new List<Exception>();
+
+        if (!firstTransactionReleased)
+        {
+            try
+            {
+                await RollbackIfActiveAsync(first, firstTransaction, cleanupToken);
+            }
+            catch (Exception exception)
+            {
+                cleanupFailures.Add(exception);
+            }
+        }
+
+        try
+        {
+            if (!secondAcquire.IsCompleted && !behaviorTimeout.IsCancellationRequested)
             {
                 try
                 {
-                    await secondAcquire.WaitAsync(TimeSpan.FromSeconds(5));
+                    behaviorTimeout.Cancel();
                 }
-                catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+                catch (Exception exception)
                 {
-                    // The pending command honored this test's bounded cancellation.
+                    cleanupFailures.Add(exception);
+                }
+            }
+
+            await secondAcquire.WaitAsync(cleanupToken);
+        }
+        catch (OperationCanceledException) when (behaviorTimeout.IsCancellationRequested || cleanupToken.IsCancellationRequested)
+        {
+            if (!secondAcquire.IsCompleted && cleanupToken.IsCancellationRequested)
+            {
+                cleanupFailures.Add(new TimeoutException("The pending lock acquisition did not settle within the bounded cleanup deadline."));
+            }
+        }
+        catch (Exception exception)
+        {
+            cleanupFailures.Add(exception);
+        }
+        finally
+        {
+            // Never roll back on the second connection while its acquisition is still using that DbContext.
+            if (secondAcquire.IsCompleted)
+            {
+                try
+                {
+                    await RollbackIfActiveAsync(second, secondTransaction, cleanupToken);
+                }
+                catch (Exception exception)
+                {
+                    cleanupFailures.Add(exception);
                 }
             }
         }
+
+        SurfaceCleanupFailures(cleanupFailures, testFailure);
+    }
+
+    private static void SurfaceCleanupFailures(List<Exception> cleanupFailures, Exception? testFailure)
+    {
+        if (cleanupFailures.Count == 0)
+        {
+            return;
+        }
+
+        var cleanupFailure = cleanupFailures.Count == 1
+            ? cleanupFailures[0]
+            : new AggregateException("Multiple transaction-lock cleanup operations failed.", cleanupFailures);
+
+        if (testFailure is not null)
+        {
+            testFailure.Data["CleanupFailure"] = cleanupFailure;
+            return;
+        }
+
+        throw cleanupFailure;
     }
 
     private static async Task WaitForUngrantedAdvisoryLockAsync(
@@ -199,9 +356,9 @@ public sealed class ProbeTransactionLockTests
         }
     }
 
-    private static Task RollbackIfActiveAsync(EePulseDbContext db, IDbContextTransaction transaction) =>
+    private static Task RollbackIfActiveAsync(EePulseDbContext db, IDbContextTransaction transaction, CancellationToken cancellationToken) =>
         db.Database.CurrentTransaction is not null && db.Database.GetDbConnection().State == System.Data.ConnectionState.Open
-            ? transaction.RollbackAsync(CancellationToken.None)
+            ? transaction.RollbackAsync(cancellationToken)
             : Task.CompletedTask;
 
     private static DbContextOptions<EePulseDbContext> CreateOptions(string connectionString) =>
