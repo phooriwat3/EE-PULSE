@@ -33,6 +33,16 @@ public static class Wp07DashboardContract
     public const string TimezonePreferencePath = "/api/v1/users/me/timezone-preference";
     public const string DashboardSummaryPath = "/api/v1/dashboard/summary";
     public const string DeviceStatusPathTemplate = "/api/v1/devices/{id}/status";
+    public const string IncidentsPath = "/api/v1/incidents";
+    public const string IncidentDetailPathTemplate = "/api/v1/incidents/{id}";
+    public const string DeviceIncidentHistoryPathTemplate = "/api/v1/devices/{id}/incidents";
+    public const string IncidentLifecycleEventsPathTemplate = "/api/v1/incidents/{id}/lifecycle-events";
+    public const string IncidentCommentsPathTemplate = "/api/v1/incidents/{id}/comments";
+    public const string IncidentAcknowledgePathTemplate = "/api/v1/incidents/{id}/acknowledge";
+    public const string IncidentResolvePathTemplate = "/api/v1/incidents/{id}/resolve";
+    public const int IncidentDetailNotModifiedStatusCode = 304;
+    public const int IncidentActionSuccessStatusCode = 200;
+    public const int IncidentCommentCreatedStatusCode = 201;
     public const string DashboardCacheControl = "private, max-age=0, must-revalidate";
     public const string InvalidIfNoneMatchCode = "invalid-if-none-match";
     public const string IfMatchUnsupportedCode = "if-match-unsupported";
@@ -51,6 +61,7 @@ public static class DashboardAuthorization
     public const string IncidentsReadPolicy = "incidents.read";
     public const string IncidentsOperatePolicy = "incidents.operate";
     public const string AuditReadPolicy = "audit.read";
+    public static readonly IReadOnlyList<string> IncidentReadRoles = ["Viewer", "Operator", "Engineer", "Administrator", "Auditor"];
     public static readonly IReadOnlyList<string> IncidentOperateRoles = ["Operator", "Administrator"];
     public static readonly IReadOnlyList<string> AuditReadRoles = ["Auditor", "Administrator"];
     public static readonly IReadOnlyList<string> InventoryMutationRoles = ["Engineer", "Administrator"];
@@ -59,8 +70,12 @@ public static class DashboardAuthorization
 public static class ManualResolutionConflictContract
 {
     public const int StatusCode = 409;
+    public const string CurrentETagExtensionName = "currentEtag";
+    public const string ETagHeaderName = "ETag";
     public static readonly IReadOnlyList<string> RequiredExtensions =
-        ["incidentId", "probeId", "underlyingStatus", "visibleStatus", "stateVersion", "currentEtag"];
+        ["incidentId", "probeId", "underlyingStatus", "visibleStatus", "stateVersion", CurrentETagExtensionName];
+    public static readonly IReadOnlyList<DashboardProbeStatus> ForbiddenUnderlyingStatuses =
+        [DashboardProbeStatus.Down, DashboardProbeStatus.Recovering];
     public const string NoMutationGuarantee = "No incident, lifecycle, comment, or audit mutation is made.";
 }
 
@@ -281,6 +296,23 @@ public enum TimelineSort { OccurredAtDesc, OccurredAtAsc }
 public enum AuditSort { OccurredAtDesc, OccurredAtAsc }
 public enum ChartResolution { Auto, Raw, Minute, FiveMinutes, Hour }
 
+public static class IncidentDurationContract
+{
+    public static long? CalculateTotalDowntimeSeconds(IncidentStatus status, DateTimeOffset openedAt, DateTimeOffset? resolvedAt)
+    {
+        if (!Enum.IsDefined(status)) throw new DashboardContractValidationException("Incident status is invalid.");
+        if (openedAt.Offset != TimeSpan.Zero || resolvedAt.HasValue && resolvedAt.Value.Offset != TimeSpan.Zero)
+            throw new DashboardContractValidationException("Incident timestamps must be UTC.");
+        if (resolvedAt.HasValue && resolvedAt.Value < openedAt)
+            throw new DashboardContractValidationException("ResolvedAt precedes OpenedAt.");
+
+        if (status is IncidentStatus.Open or IncidentStatus.Acknowledged) return null;
+        if (!resolvedAt.HasValue) throw new DashboardContractValidationException("A resolved incident requires ResolvedAt.");
+
+        return (resolvedAt.Value - openedAt).Ticks / TimeSpan.TicksPerSecond;
+    }
+}
+
 public sealed record DashboardFilter(
     [property: CanonicalUuid] string? SiteId,
     [property: StringLength(Wp07DashboardContract.MaximumFilterTextLength, MinimumLength = 1)] string? Area,
@@ -470,6 +502,17 @@ public static class Wp07DashboardConditionalGet
     public static DashboardIfNoneMatchClassification ClassifyIfNoneMatch(IEnumerable<string>? values, string currentEtag)
     {
         if (!IsDashboardEtag(currentEtag)) throw new ArgumentException("Current ETag is invalid.", nameof(currentEtag));
+        return ClassifyParsedIfNoneMatch(values, currentEtag);
+    }
+
+    internal static DashboardIfNoneMatchClassification ClassifyOpaqueIfNoneMatch(IEnumerable<string>? values, string currentEtag)
+    {
+        if (!IncidentConcurrencyContract.IsStrongOpaqueEtag(currentEtag)) throw new ArgumentException("Current ETag is invalid.", nameof(currentEtag));
+        return ClassifyParsedIfNoneMatch(values, currentEtag);
+    }
+
+    private static DashboardIfNoneMatchClassification ClassifyParsedIfNoneMatch(IEnumerable<string>? values, string currentEtag)
+    {
         if (values is null) return DashboardIfNoneMatchClassification.Missing;
         if (!TryParse(values, out var tags, out var hasHeaderValues, out var hasEmptyMembers)) return DashboardIfNoneMatchClassification.Invalid;
         if (!hasHeaderValues) return DashboardIfNoneMatchClassification.Missing;
@@ -483,7 +526,7 @@ public static class Wp07DashboardConditionalGet
     public static DashboardNotModifiedMetadata NotModifiedMetadata(string currentEtag, string correlationId) => new(currentEtag, Wp07DashboardContract.DashboardCacheControl, "X-Correlation-ID", correlationId);
     public static bool IsDashboardEtag(string? value) => value is not null && value.Length == Wp07DashboardCanonicalizer.EtagPrefix.Length + 43 + Wp07DashboardCanonicalizer.EtagSuffix.Length && value.StartsWith(Wp07DashboardCanonicalizer.EtagPrefix, StringComparison.Ordinal) && value.EndsWith(Wp07DashboardCanonicalizer.EtagSuffix, StringComparison.Ordinal) && value.AsSpan(Wp07DashboardCanonicalizer.EtagPrefix.Length, 43).ToString().All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
-    private static bool TryParse(IEnumerable<string> values, out List<(bool Wildcard, string Tag)> tags, out bool hasHeaderValues, out bool hasEmptyMembers)
+    internal static bool TryParse(IEnumerable<string> values, out List<(bool Weak, bool Wildcard, string Tag)> tags, out bool hasHeaderValues, out bool hasEmptyMembers)
     {
         tags = [];
         hasHeaderValues = false;
@@ -518,10 +561,11 @@ public static class Wp07DashboardConditionalGet
                     continue;
                 }
                 if (++memberCount > MaximumListMembers) return false;
-                if (value[index] == '*') { tags.Add((true, string.Empty)); index++; }
+                if (value[index] == '*') { tags.Add((false, true, string.Empty)); index++; }
                 else
                 {
-                    if (value.AsSpan(index).StartsWith("W/", StringComparison.Ordinal)) index += 2;
+                    var weak = value.AsSpan(index).StartsWith("W/", StringComparison.Ordinal);
+                    if (weak) index += 2;
                     if (index >= value.Length || value[index++] != '"') return false;
                     var start = index;
                     while (index < value.Length && value[index] != '"')
@@ -531,7 +575,7 @@ public static class Wp07DashboardConditionalGet
                         index++;
                     }
                     if (index == value.Length) return false;
-                    tags.Add((false, "\"" + value[start..index++] + "\""));
+                    tags.Add((weak, false, "\"" + value[start..index++] + "\""));
                 }
                 while (index < value.Length && value[index] is ' ' or '\t') index++;
                 if (index == value.Length) break;
@@ -548,6 +592,76 @@ public static class Wp07DashboardConditionalGet
             return ++emptyMemberCount <= MaximumEmptyListMembers && ++memberCount <= MaximumListMembers;
         }
     }
+}
+
+public enum IncidentIfMatchClassification { Missing, Invalid, Current, Stale }
+public enum IncidentIfNoneMatchClassification { Missing, NoMatch, Match, Invalid }
+
+public static class IncidentConcurrencyContract
+{
+    public const int PreconditionRequiredStatusCode = 428;
+    public const int InvalidIfMatchStatusCode = 400;
+    public const int PreconditionFailedStatusCode = 412;
+    public const string InvalidIfMatchCode = "invalid-if-match";
+    public const string ConcurrencyConflictCode = "concurrency-conflict";
+    public const string ETagHeaderName = "ETag";
+    public const string CorrelationHeaderName = "X-Correlation-ID";
+    public const string CurrentETagExtensionName = "currentEtag";
+
+    public static bool IsStrongOpaqueEtag(string? value)
+    {
+        if (value is null || value.Length < 2 || value[0] != '"' || value[^1] != '"') return false;
+        for (var index = 1; index < value.Length - 1; index++)
+        {
+            var character = value[index];
+            if (character < '\x21' || character == '"' || character == '\x7f' || character > '\x00ff') return false;
+        }
+
+        return true;
+    }
+
+    public static IncidentIfMatchClassification ClassifyIfMatch(IEnumerable<string>? values, string currentEtag)
+    {
+        if (!IsStrongOpaqueEtag(currentEtag)) throw new ArgumentException("Current ETag is invalid.", nameof(currentEtag));
+        if (values is null) return IncidentIfMatchClassification.Missing;
+        if (!Wp07DashboardConditionalGet.TryParse(values, out var tags, out var hasHeaderValues, out var hasEmptyMembers))
+            return IncidentIfMatchClassification.Invalid;
+        if (!hasHeaderValues) return IncidentIfMatchClassification.Missing;
+        if (hasEmptyMembers || tags.Count != 1) return IncidentIfMatchClassification.Invalid;
+
+        var candidate = tags[0];
+        if (candidate.Weak || candidate.Wildcard || !IsStrongOpaqueEtag(candidate.Tag)) return IncidentIfMatchClassification.Invalid;
+        return string.Equals(candidate.Tag, currentEtag, StringComparison.Ordinal)
+            ? IncidentIfMatchClassification.Current
+            : IncidentIfMatchClassification.Stale;
+    }
+
+    public static IncidentIfNoneMatchClassification ClassifyIfNoneMatch(IEnumerable<string>? values, string currentEtag) =>
+        Wp07DashboardConditionalGet.ClassifyOpaqueIfNoneMatch(values, currentEtag) switch
+        {
+            DashboardIfNoneMatchClassification.Missing => IncidentIfNoneMatchClassification.Missing,
+            DashboardIfNoneMatchClassification.NoMatch => IncidentIfNoneMatchClassification.NoMatch,
+            DashboardIfNoneMatchClassification.Match => IncidentIfNoneMatchClassification.Match,
+            DashboardIfNoneMatchClassification.Invalid => IncidentIfNoneMatchClassification.Invalid,
+            _ => throw new ArgumentOutOfRangeException(nameof(values))
+        };
+
+    public static DashboardNotModifiedMetadata NotModifiedMetadata(string currentEtag, string correlationId)
+    {
+        if (!IsStrongOpaqueEtag(currentEtag)) throw new ArgumentException("Current ETag is invalid.", nameof(currentEtag));
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
+        return new DashboardNotModifiedMetadata(currentEtag, Wp07DashboardContract.DashboardCacheControl, CorrelationHeaderName, correlationId);
+    }
+}
+
+public static class IncidentActorIdentityContract
+{
+    public const int MaximumIssuerLength = 512;
+    public const int MaximumSubjectLength = 512;
+
+    public static bool HasValidIssuerAndSubject(string? issuer, string? subject) =>
+        TimezonePreferenceContract.IsValidPrincipalComponent(issuer, MaximumIssuerLength) &&
+        TimezonePreferenceContract.IsValidPrincipalComponent(subject, MaximumSubjectLength);
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -578,13 +692,13 @@ public sealed record IncidentListFilter([property: CanonicalUuid] string? SiteId
     }
 }
 
-public sealed record IncidentResponse([property: Required, CanonicalUuid] string Id, [property: Required, CanonicalUuid] string ProbeId, [property: Required, CanonicalUuid] string DeviceId, string DeviceName, [property: Required, CanonicalUuid] string SiteId, string SiteName, string RuleKey, IncidentStatus Status, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset OpenedAt, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? AcknowledgedAt, [property: CanonicalUuid] string? AcknowledgedBy, string? AcknowledgementComment, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? ResolvedAt, [property: CanonicalUuid] string? ResolvedBy, string? ResolutionNote, int OccurrenceCount, TimeSpan? TotalDowntime, long RowVersion);
-public sealed record IncidentLifecycleResponse([property: Required, CanonicalUuid] string EventId, [property: Required, CanonicalUuid] string IncidentId, string Type, string ReasonCode, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset OccurredAt, [property: CanonicalUuid] string? ActorId, string? Comment);
+public sealed record IncidentResponse([property: Required, CanonicalUuid] string Id, [property: Required, CanonicalUuid] string ProbeId, [property: Required, CanonicalUuid] string DeviceId, string DeviceName, [property: Required, CanonicalUuid] string SiteId, string SiteName, string RuleKey, IncidentStatus Status, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset OpenedAt, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? AcknowledgedAt, [property: CanonicalUuid, SurrogateUuid] string? AcknowledgedBy, [property: StringLength(Wp07DashboardContract.MaximumCommentLength)] string? AcknowledgementComment, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? ResolvedAt, [property: CanonicalUuid, SurrogateUuid] string? ResolvedBy, [property: StringLength(Wp07DashboardContract.MaximumNoteLength)] string? ResolutionNote, int OccurrenceCount, [property: Range(typeof(long), "0", "9223372036854775807")] long? TotalDowntimeSeconds);
+public sealed record IncidentLifecycleResponse([property: Required, CanonicalUuid] string EventId, [property: Required, CanonicalUuid] string IncidentId, string Type, string ReasonCode, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset OccurredAt, [property: CanonicalUuid, SurrogateUuid] string? ActorId, [property: StringLength(Wp07DashboardContract.MaximumCommentLength)] string? Comment);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)] public sealed record AcknowledgeIncidentRequest([property: Required, StringLength(Wp07DashboardContract.MaximumCommentLength, MinimumLength = 1)] string Comment);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)] public sealed record ResolveIncidentRequest([property: Required, StringLength(Wp07DashboardContract.MaximumNoteLength, MinimumLength = 1)] string Note);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)] public sealed record AddIncidentCommentRequest([property: Required, StringLength(Wp07DashboardContract.MaximumCommentLength, MinimumLength = 1)] string Comment);
-public sealed record IncidentActionResponse([property: Required, CanonicalUuid] string IncidentId, IncidentStatus Status, long RowVersion, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset CompletedAt);
-public sealed record IncidentCommentResponse([property: Required, CanonicalUuid] string Id, [property: Required, CanonicalUuid] string IncidentId, [property: Required, CanonicalUuid] string AuthorId, string Comment, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset CreatedAt);
+public sealed record IncidentActionResponse([property: Required, CanonicalUuid] string IncidentId, IncidentStatus Status, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset CompletedAt);
+public sealed record IncidentCommentResponse([property: Required, CanonicalUuid] string Id, [property: Required, CanonicalUuid] string IncidentId, [property: Required, CanonicalUuid, SurrogateUuid] string AuthorId, [property: Required, StringLength(Wp07DashboardContract.MaximumCommentLength, MinimumLength = 1)] string Comment, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset CreatedAt);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AuditLogFilter([property: StringLength(Wp07DashboardContract.MaximumFilterTextLength, MinimumLength = 1)] string? Action, [property: StringLength(Wp07DashboardContract.MaximumFilterTextLength, MinimumLength = 1)] string? EntityType, [property: CanonicalUuid] string? EntityId, [property: CanonicalUuid] string? ActorId, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? From, [property: JsonConverter(typeof(UtcDateTimeOffsetJsonConverter))] DateTimeOffset? To, [property: EnumDataType(typeof(AuditSort))] AuditSort Sort) : IValidatableObject
@@ -623,4 +737,12 @@ public sealed class CanonicalUuidAttribute : ValidationAttribute
     private static readonly Regex CanonicalUuid = new(Pattern, RegexOptions.CultureInvariant);
 
     public override bool IsValid(object? value) => value is null || value is string identifier && CanonicalUuid.IsMatch(identifier);
+}
+
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Parameter)]
+public sealed class SurrogateUuidAttribute : ValidationAttribute
+{
+    public override bool IsValid(object? value) => value is null ||
+        value is string identifier && Guid.TryParseExact(identifier, "D", out var id) && id != Guid.Empty &&
+        string.Equals(identifier, id.ToString("D"), StringComparison.Ordinal);
 }

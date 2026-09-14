@@ -191,6 +191,14 @@ public sealed class Wp07DashboardContractTests
     {
         AssertInvalid(new AcknowledgeIncidentRequest(""));
         AssertInvalid(new ResolveIncidentRequest(new string('x', Wp07DashboardContract.MaximumNoteLength + 1)));
+        Assert.Equal(2000, Wp07DashboardContract.MaximumCommentLength);
+        Assert.Equal(2000, Wp07DashboardContract.MaximumNoteLength);
+        AssertValid(new AcknowledgeIncidentRequest(new string('x', Wp07DashboardContract.MaximumCommentLength)));
+        AssertValid(new AddIncidentCommentRequest(new string('x', Wp07DashboardContract.MaximumCommentLength)));
+        AssertValid(new ResolveIncidentRequest(new string('x', Wp07DashboardContract.MaximumNoteLength)));
+        AssertInvalid(new AddIncidentCommentRequest(new string('x', Wp07DashboardContract.MaximumCommentLength + 1)));
+        AssertValid(new IncidentCommentResponse(Id, Id, Id, new string('x', Wp07DashboardContract.MaximumCommentLength), Utc(1)));
+        AssertInvalid(new IncidentCommentResponse(Id, Id, Id, new string('x', Wp07DashboardContract.MaximumCommentLength + 1), Utc(1)));
         AssertInvalid(new CursorPageRequest(new string('x', Wp07DashboardContract.MaximumCursorLength + 1), 0));
         AssertInvalid(new DashboardFilter(Id, new string('x', 129), null, null, null, null));
         AssertInvalid(new MetricsQuery(Utc(1), Utc(1), (ChartResolution)99, 0));
@@ -203,14 +211,165 @@ public sealed class Wp07DashboardContractTests
     }
 
     [Fact]
+    public void IncidentDurationUsesUtcInstantsAndFloorsResolvedSeconds()
+    {
+        var openedAt = Utc(1);
+        Assert.Equal<long?>(9L, IncidentDurationContract.CalculateTotalDowntimeSeconds(IncidentStatus.Resolved, openedAt, openedAt.AddSeconds(9)));
+        Assert.Equal<long?>(2L, IncidentDurationContract.CalculateTotalDowntimeSeconds(IncidentStatus.Resolved, openedAt, openedAt.AddSeconds(2).AddTicks(TimeSpan.TicksPerSecond - 1)));
+        Assert.Equal<long?>(0L, IncidentDurationContract.CalculateTotalDowntimeSeconds(IncidentStatus.Resolved, openedAt, openedAt));
+        Assert.Equal<long?>(0L, IncidentDurationContract.CalculateTotalDowntimeSeconds(IncidentStatus.Resolved, openedAt, openedAt.AddTicks(TimeSpan.TicksPerSecond - 1)));
+
+        Assert.Throws<DashboardContractValidationException>(() => IncidentDurationContract.CalculateTotalDowntimeSeconds(
+            IncidentStatus.Resolved, openedAt, openedAt.AddSeconds(-1)));
+        Assert.Throws<DashboardContractValidationException>(() => IncidentDurationContract.CalculateTotalDowntimeSeconds(
+            IncidentStatus.Resolved, openedAt.ToOffset(TimeSpan.FromHours(7)), openedAt.AddSeconds(1)));
+        Assert.Throws<DashboardContractValidationException>(() => IncidentDurationContract.CalculateTotalDowntimeSeconds(
+            IncidentStatus.Resolved, openedAt, openedAt.AddSeconds(1).ToOffset(TimeSpan.FromHours(-5))));
+    }
+
+    [Fact]
+    public void ActiveIncidentDurationIsNullAndDoesNotRequireRequestTime()
+    {
+        var openedAt = Utc(1);
+        Assert.Null(IncidentDurationContract.CalculateTotalDowntimeSeconds(IncidentStatus.Open, openedAt, null));
+        Assert.Null(IncidentDurationContract.CalculateTotalDowntimeSeconds(IncidentStatus.Acknowledged, openedAt, null));
+        Assert.Null(IncidentDurationContract.CalculateTotalDowntimeSeconds(IncidentStatus.Acknowledged, openedAt, openedAt.AddDays(2)));
+        Assert.Throws<DashboardContractValidationException>(() => IncidentDurationContract.CalculateTotalDowntimeSeconds(
+            IncidentStatus.Resolved, openedAt, null));
+    }
+
+    [Fact]
+    public void IncidentConcurrencyIsStrongOpaqueAndKeepsVersionTagsOutOfBodies()
+    {
+        const string etag = "\"k!._~?\"";
+        Assert.True(IncidentConcurrencyContract.IsStrongOpaqueEtag(etag));
+        Assert.True(IncidentConcurrencyContract.IsStrongOpaqueEtag("\"~\""));
+        Assert.False(IncidentConcurrencyContract.IsStrongOpaqueEtag("\"\u007f\""));
+        Assert.True(IncidentConcurrencyContract.IsStrongOpaqueEtag("\"\u0080\""));
+        Assert.True(IncidentConcurrencyContract.IsStrongOpaqueEtag("\"\u00ff\""));
+        Assert.False(IncidentConcurrencyContract.IsStrongOpaqueEtag("\"\u0100\""));
+        Assert.False(IncidentConcurrencyContract.IsStrongOpaqueEtag("W/\"opaque-state\""));
+        Assert.True(IncidentConcurrencyContract.IsStrongOpaqueEtag("\"\""));
+        Assert.False(IncidentConcurrencyContract.IsStrongOpaqueEtag("\"has space\""));
+        Assert.False(IncidentConcurrencyContract.IsStrongOpaqueEtag("\"has\\\"quote\""));
+        Assert.False(IncidentConcurrencyContract.IsStrongOpaqueEtag("unquoted"));
+
+        var incident = new IncidentResponse(Id, Id, Id, "device", Id, "site", "rule", IncidentStatus.Resolved,
+            Utc(1), null, null, null, Utc(1), Id, "resolved", 1, 0);
+        var action = new IncidentActionResponse(Id, IncidentStatus.Resolved, Utc(1));
+        Assert.Contains("totalDowntimeSeconds", JsonSerializer.Serialize(incident, Json), StringComparison.Ordinal);
+        Assert.DoesNotContain("totalDowntime\"", JsonSerializer.Serialize(incident, Json), StringComparison.Ordinal);
+        Assert.DoesNotContain("rowVersion", JsonSerializer.Serialize(incident, Json), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("etag", JsonSerializer.Serialize(incident, Json), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("rowVersion", JsonSerializer.Serialize(action, Json), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("etag", JsonSerializer.Serialize(action, Json), StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal(typeof(long?), typeof(IncidentResponse).GetProperty(nameof(IncidentResponse.TotalDowntimeSeconds))?.PropertyType);
+        Assert.Null(typeof(IncidentResponse).GetProperty("TotalDowntime"));
+        Assert.Null(typeof(IncidentResponse).GetProperty("RowVersion"));
+        Assert.Null(typeof(IncidentActionResponse).GetProperty("Etag"));
+        Assert.Null(typeof(IncidentActionResponse).GetProperty("RowVersion"));
+        Assert.Null(typeof(IncidentResponse).GetProperty("Etag"));
+        Assert.Equal("private, max-age=0, must-revalidate", Wp07DashboardContract.DashboardCacheControl);
+        Assert.Equal(304, Wp07DashboardContract.IncidentDetailNotModifiedStatusCode);
+        Assert.Equal(200, Wp07DashboardContract.IncidentActionSuccessStatusCode);
+        Assert.Equal(201, Wp07DashboardContract.IncidentCommentCreatedStatusCode);
+        Assert.Equal("/api/v1/incidents", Wp07DashboardContract.IncidentsPath);
+        Assert.Equal("/api/v1/incidents/{id}", Wp07DashboardContract.IncidentDetailPathTemplate);
+        Assert.Equal("/api/v1/devices/{id}/incidents", Wp07DashboardContract.DeviceIncidentHistoryPathTemplate);
+        Assert.Equal("/api/v1/incidents/{id}/lifecycle-events", Wp07DashboardContract.IncidentLifecycleEventsPathTemplate);
+        Assert.Equal("/api/v1/incidents/{id}/comments", Wp07DashboardContract.IncidentCommentsPathTemplate);
+        Assert.Equal("/api/v1/incidents/{id}/acknowledge", Wp07DashboardContract.IncidentAcknowledgePathTemplate);
+        Assert.Equal("/api/v1/incidents/{id}/resolve", Wp07DashboardContract.IncidentResolvePathTemplate);
+
+        var metadata = IncidentConcurrencyContract.NotModifiedMetadata(etag, Id);
+        Assert.Equal((etag, "private, max-age=0, must-revalidate", "X-Correlation-ID", Id),
+            (metadata.Etag, metadata.CacheControl, metadata.CorrelationHeaderName, metadata.CorrelationId));
+    }
+
+    [Fact]
+    public void IncidentIfMatchRequiresOneStrongOpaqueTagAndUsesOrdinalEquality()
+    {
+        const string current = "\"k!._~?\"";
+        Assert.Equal(IncidentIfMatchClassification.Missing, IncidentConcurrencyContract.ClassifyIfMatch(null, current));
+        Assert.Equal(IncidentIfMatchClassification.Missing, IncidentConcurrencyContract.ClassifyIfMatch([], current));
+        Assert.Equal(IncidentIfMatchClassification.Current, IncidentConcurrencyContract.ClassifyIfMatch([current], current));
+        Assert.Equal(IncidentIfMatchClassification.Stale, IncidentConcurrencyContract.ClassifyIfMatch(["\"zT2-b?\""], current));
+        const string emptyTag = "\"\"";
+        Assert.Equal(IncidentIfMatchClassification.Current, IncidentConcurrencyContract.ClassifyIfMatch([emptyTag], emptyTag));
+        Assert.Equal(IncidentIfMatchClassification.Stale, IncidentConcurrencyContract.ClassifyIfMatch([emptyTag], current));
+        Assert.Equal(IncidentIfMatchClassification.Stale, IncidentConcurrencyContract.ClassifyIfMatch(["\"\u0080\""], current));
+        Assert.Equal(IncidentIfMatchClassification.Stale, IncidentConcurrencyContract.ClassifyIfMatch(["\"\u00ff\""], current));
+
+        foreach (var invalid in new[] { "", " ", "\t", "*", "W/" + current, "\"old\", \"other\"" })
+            Assert.Equal(IncidentIfMatchClassification.Invalid, IncidentConcurrencyContract.ClassifyIfMatch([invalid], current));
+        Assert.Equal(IncidentIfMatchClassification.Invalid, IncidentConcurrencyContract.ClassifyIfMatch(["\"\u007f\""], current));
+        Assert.Equal(IncidentIfMatchClassification.Invalid, IncidentConcurrencyContract.ClassifyIfMatch([current, current], current));
+        Assert.Equal(IncidentIfMatchClassification.Invalid, IncidentConcurrencyContract.ClassifyIfMatch([current + ", \"other\""], current));
+
+        Assert.Equal(428, IncidentConcurrencyContract.PreconditionRequiredStatusCode);
+        Assert.Equal(400, IncidentConcurrencyContract.InvalidIfMatchStatusCode);
+        Assert.Equal("invalid-if-match", IncidentConcurrencyContract.InvalidIfMatchCode);
+        Assert.Equal(412, IncidentConcurrencyContract.PreconditionFailedStatusCode);
+        Assert.Equal("concurrency-conflict", IncidentConcurrencyContract.ConcurrencyConflictCode);
+        Assert.Equal("ETag", IncidentConcurrencyContract.ETagHeaderName);
+        Assert.Equal("currentEtag", IncidentConcurrencyContract.CurrentETagExtensionName);
+    }
+
+    [Fact]
+    public void IncidentDetailConditionalGetUsesBoundedOpaqueTagParsingRules()
+    {
+        const string current = "\"k!._~?\"";
+        Assert.Equal(IncidentIfNoneMatchClassification.Missing, IncidentConcurrencyContract.ClassifyIfNoneMatch(null, current));
+        Assert.Equal(IncidentIfNoneMatchClassification.Match, IncidentConcurrencyContract.ClassifyIfNoneMatch(["W/" + current], current));
+        Assert.Equal(IncidentIfNoneMatchClassification.Match, IncidentConcurrencyContract.ClassifyIfNoneMatch(["*"], current));
+        Assert.Equal(IncidentIfNoneMatchClassification.Match, IncidentConcurrencyContract.ClassifyIfNoneMatch([",," + current + ","], current));
+        Assert.Equal(IncidentIfNoneMatchClassification.NoMatch, IncidentConcurrencyContract.ClassifyIfNoneMatch(["\"other\""], current));
+        Assert.Equal(IncidentIfNoneMatchClassification.Invalid, IncidentConcurrencyContract.ClassifyIfNoneMatch(["*, " + current], current));
+        Assert.Equal(IncidentIfNoneMatchClassification.Invalid, IncidentConcurrencyContract.ClassifyIfNoneMatch([""], current));
+        Assert.Equal(304, Wp07DashboardContract.IncidentDetailNotModifiedStatusCode);
+    }
+
+    [Fact]
+    public void IncidentActorIdentityRequiresExactBoundedIssuerAndSubjectWithoutFallback()
+    {
+        Assert.True(IncidentActorIdentityContract.HasValidIssuerAndSubject("https://issuer.example", Id));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject(null, Id));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject("https://issuer.example", null));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject(" ", Id));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject("https://issuer.example", " "));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject(
+            new string('i', IncidentActorIdentityContract.MaximumIssuerLength + 1), Id));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject(
+            "https://issuer.example", new string('s', IncidentActorIdentityContract.MaximumSubjectLength + 1)));
+        Assert.Equal(512, IncidentActorIdentityContract.MaximumIssuerLength);
+        Assert.Equal(512, IncidentActorIdentityContract.MaximumSubjectLength);
+        var surrogateUuid = new SurrogateUuidAttribute();
+        Assert.True(surrogateUuid.IsValid(Id));
+        Assert.False(surrogateUuid.IsValid(Guid.Empty.ToString("D")));
+        Assert.All(new[]
+        {
+            typeof(IncidentResponse).GetProperty(nameof(IncidentResponse.AcknowledgedBy)),
+            typeof(IncidentResponse).GetProperty(nameof(IncidentResponse.ResolvedBy)),
+            typeof(IncidentLifecycleResponse).GetProperty(nameof(IncidentLifecycleResponse.ActorId)),
+            typeof(IncidentCommentResponse).GetProperty(nameof(IncidentCommentResponse.AuthorId))
+        }, property => Assert.NotNull(property?.GetCustomAttribute<SurrogateUuidAttribute>()));
+    }
+
+    [Fact]
     public void RolesManualResolutionAndInvalidationShapeAreFrozen()
     {
+        Assert.Equal(["Viewer", "Operator", "Engineer", "Administrator", "Auditor"], DashboardAuthorization.IncidentReadRoles);
         Assert.Equal(["Operator", "Administrator"], DashboardAuthorization.IncidentOperateRoles);
         Assert.Equal(["Auditor", "Administrator"], DashboardAuthorization.AuditReadRoles);
         Assert.Equal(["Engineer", "Administrator"], DashboardAuthorization.InventoryMutationRoles);
         Assert.Equal(409, ManualResolutionConflictContract.StatusCode);
         Assert.Equal("incident-manual-resolution-state-conflict", Wp07DashboardContract.ManualResolutionStateConflict);
         Assert.Equal(["incidentId", "probeId", "underlyingStatus", "visibleStatus", "stateVersion", "currentEtag"], ManualResolutionConflictContract.RequiredExtensions);
+        Assert.Equal("ETag", ManualResolutionConflictContract.ETagHeaderName);
+        Assert.Equal("currentEtag", ManualResolutionConflictContract.CurrentETagExtensionName);
+        Assert.Equal([DashboardProbeStatus.Down, DashboardProbeStatus.Recovering], ManualResolutionConflictContract.ForbiddenUnderlyingStatuses);
+        Assert.Equal("No incident, lifecycle, comment, or audit mutation is made.", ManualResolutionConflictContract.NoMutationGuarantee);
         var eventData = new DashboardInvalidationEvent(1, "status.changed", Id, null, null, null, null, Utc(1));
         Assert.Equal($"{{\"schemaVersion\":1,\"eventType\":\"status.changed\",\"entityId\":\"{Id}\",\"deviceId\":null,\"probeId\":null,\"siteId\":null,\"version\":null,\"occurredAt\":\"2026-09-07T01:00:00Z\"}}", JsonSerializer.Serialize(eventData, Json));
         var names = typeof(DashboardInvalidationEvent).GetProperties().Select(property => property.Name).ToArray();

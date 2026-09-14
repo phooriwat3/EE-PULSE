@@ -1,8 +1,8 @@
 # EE Pulse implementation status
 
-Last updated: 2026-09-13 (Asia/Bangkok)
+Last updated: 2026-09-14 (Asia/Bangkok)
 Owner: Lead/Integration Agent
-Current checkpoint: WP-07 Phase 2A, Phase 2B1A, and the Phase 2B1B runtime slice are final-verified; the explicit OpenAPI checkpoint remains pending
+Current checkpoint: WP-07 Phase 2A, Phase 2B1A, and Phase 2B1B runtime slices are final-verified; Phase 2B2 Commit 1 incident contracts are frozen and runtime is not started; the explicit OpenAPI checkpoint remains pending
 
 ## Outcome
 
@@ -92,6 +92,10 @@ This earlier 2026-09-08 checkpoint recorded the Phase 2A timezone-preference imp
 | Generated OpenAPI and artifact/scope integrity                     | OpenAPI was not generated; `docs/api/openapi-v1.json` remains byte-for-byte unchanged at 154,533 bytes, SHA-256 `44F2C9D1EB902E1EC44C6395305F328F262A3D592E9EDF7BA40724C030DE435C`; exact eight-file scope, no staged files, and clean infrastructure files confirmed.                                                                                                                                                                     |
 
 Final Phase 2B1B verification passed on the current eight-file diff against baseline `5223ef56cd2b798d6332c83b42a18d8fa876c8e5`: the fresh pinned Release build, complete unit and PostgreSQL-backed integration suites, style/analyzer gates, and final scoped hygiene all passed. Focused device-status evidence covers missing-projection overlay precedence, RFC 9110 entity-tag and empty-list-member handling, raw-target query-delimiter rejection, exact watermark event-time consistency, and independent cross-clock timestamp acceptance. The two Phase 2B read routes remain deliberately excluded from endpoint description, so generated OpenAPI remains deferred until the later explicit checkpoint and `docs/api/openapi-v1.json` remains unchanged. Incident actions, audit listing/UI, SignalR runtime, frontend/UI, WP-08 notification fan-out, and WP-09 reporting/retention remain outside this checkpoint; WP-07 is not complete. Aborted TestServer cancellation may appear as status `200` in server-side Serilog completion telemetry even though no response reaches the caller; it is not an HTTP 200 result and carries no cancellation exception or stack payload.
+
+### WP-07 Phase 2B2 Commit 1 contract freeze (2026-09-14)
+
+The incident list/detail, device incident history, lifecycle-event/comment reads, acknowledge, add-comment, and constrained manual-resolution contracts and policies are frozen. Incident duration uses resolved UTC instants only; incident concurrency is carried by opaque ETag headers; public actor IDs are surrogate UUIDs mapped from the exact bounded OIDC issuer/subject pair; and text limits remain 2,000 characters. Phase 2B2 runtime has not started: incident persistence, APIs/services, audit listing, timeline, metrics, SignalR, frontend, WP-08 notifications, WP-09 reporting/retention, and generated OpenAPI remain pending. No Phase 2B2 persistence, runtime wiring, or OpenAPI changes are included in this checkpoint. The Phase 2B1B verification evidence above remains unchanged.
 
 ### WP-06 final verification evidence (baseline at `751b6bd5a45fd42e00a9ccb22a5765d3c0c16594`)
 

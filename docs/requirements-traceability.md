@@ -1,9 +1,9 @@
 # EE Pulse requirements traceability
 
-Last updated: 2026-09-13
+Last updated: 2026-09-14
 Status legend: Not started, In progress, Implemented, Verified, Blocked.
 
-WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. WP-05 durable outbox/delivery/ingestion was merged in `2c22766` (PR #5). WP-06 status projection, transition, incident, lifecycle-event, suppression, maintenance-precedence, freshness, and heartbeat-expiry behavior is merged in `751b6bd5`. WP-07 Phase 2A timezone-preference, Phase 2B1A dashboard-summary, and the Phase 2B1B device-status runtime slice are final-verified. Generated OpenAPI inclusion remains a later explicit checkpoint, while incident actions, audit listing, SignalR runtime, and frontend UI remain pending.
+WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. WP-05 durable outbox/delivery/ingestion was merged in `2c22766` (PR #5). WP-06 status projection, transition, incident, lifecycle-event, suppression, maintenance-precedence, freshness, and heartbeat-expiry behavior is merged in `751b6bd5`. WP-07 Phase 2A timezone-preference, Phase 2B1A dashboard-summary, and Phase 2B1B device-status runtime slices are final-verified; Phase 2B2 Commit 1 incident read/action contracts are frozen and runtime is not started. Generated OpenAPI inclusion remains a later explicit checkpoint; incident persistence/runtime, audit listing, timeline, metrics, SignalR runtime, frontend UI, WP-08 notifications, and WP-09 reporting/retention remain pending.
 
 ## Functional requirements
 
@@ -87,6 +87,10 @@ The timezone-preference vertical slice is implemented and generated OpenAPI is r
 | Generated OpenAPI and artifact/scope integrity                     | OpenAPI was not generated; `docs/api/openapi-v1.json` remains byte-for-byte unchanged at 154,533 bytes, SHA-256 `44F2C9D1EB902E1EC44C6395305F328F262A3D592E9EDF7BA40724C030DE435C`; exact eight-file scope, no staged files, and clean infrastructure files confirmed.                                                                                                                                    |
 
 Final Phase 2B1B verification passed on the current eight-file diff against baseline `5223ef56cd2b798d6332c83b42a18d8fa876c8e5`: the fresh pinned Release build, complete unit and PostgreSQL-backed integration suites, style/analyzer gates, and final scoped hygiene all passed. Focused device-status evidence covers missing-projection overlay precedence, RFC 9110 entity-tag and empty-list-member handling, raw-target query-delimiter rejection, exact watermark event-time consistency, and independent cross-clock watermark timestamp acceptance. The two Phase 2B read routes remain deliberately excluded from endpoint description, so generated OpenAPI remains deferred until the later explicit checkpoint and `docs/api/openapi-v1.json` remains unchanged. Incident actions, audit listing/UI, SignalR runtime, frontend UI, WP-08 notifications, and WP-09 reporting/retention remain outside this checkpoint; WP-07 is not complete. Server-side aborted-request completion telemetry is not a public HTTP response and is not recorded as one.
+
+### WP-07 Phase 2B2 Commit 1 contract status (2026-09-14)
+
+Incident list/detail, device incident history, lifecycle-event/comment reads, acknowledge, add-comment, and constrained manual-resolution contracts and policies are frozen. The DTO contract uses resolved UTC instants for `TotalDowntimeSeconds`, opaque strong incident ETags in headers, and surrogate UUID actor IDs backed in a future runtime by the exact bounded OIDC issuer/subject pair. Comment and resolution-note limits remain 2,000 characters, with indefinite receipt retention until WP-09/UA-09 defines policy. No incident persistence, endpoint/runtime, identity-table, migration, timeline, SignalR, frontend, metrics, notification, reporting, audit-list, or OpenAPI implementation is claimed. Generated OpenAPI remains deferred. The Phase 2B1B runtime verification evidence recorded above is preserved.
 
 ## WP-01 architecture evidence
 
