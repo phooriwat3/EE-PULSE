@@ -38,6 +38,10 @@ public static class Wp07DashboardContract
     public const string IfMatchUnsupportedCode = "if-match-unsupported";
     public const int DashboardSummaryUnavailableStatusCode = 503;
     public const string DashboardSummaryUnavailableCode = "dashboard-summary-unavailable";
+    public const string InvalidDeviceStatusIdCode = "invalid-device-status-id";
+    public const string InvalidDeviceStatusQueryCode = "invalid-device-status-query";
+    public const int DeviceStatusUnavailableStatusCode = 503;
+    public const string DeviceStatusUnavailableCode = "device-status-unavailable";
     public const int DashboardSummaryListMaximum = 20;
 }
 
@@ -440,7 +444,7 @@ public static class Wp07DashboardCanonicalizer
     private static void ValidateRecentDown(IReadOnlyList<DashboardRecentDownItem>? values) { var entries = values ?? throw new DashboardContractValidationException("RecentlyDown is required."); ValidateCap(entries, "RecentlyDown"); var identities = new HashSet<string>(StringComparer.Ordinal); DashboardRecentDownItem? prior = null; foreach (var value in entries) { RequiredUuid(value.DeviceId, nameof(value.DeviceId)); RequiredUuid(value.ProbeId, nameof(value.ProbeId)); if (!identities.Add(value.ProbeId)) Fail("RecentlyDown contains duplicate ProbeId."); RequiredUuid(value.SiteId, nameof(value.SiteId)); RequiredUuid(value.OpenIncidentId, nameof(value.OpenIncidentId)); RequiredText(value.DeviceName, nameof(value.DeviceName)); RequiredText(value.SiteName, nameof(value.SiteName)); RequiredText(value.Criticality, nameof(value.Criticality)); OptionalText(value.Area, nameof(value.Area)); NormalizeUtc(value.SinceAt); if (prior is not null && CompareRecentDown(prior, value) > 0) Fail("RecentlyDown order is invalid."); prior = value; } }
     private static void ValidateOfflineAgents(IReadOnlyList<DashboardOfflineAgentItem>? values) { var entries = values ?? throw new DashboardContractValidationException("OfflineAgents is required."); ValidateCap(entries, "OfflineAgents"); var identities = new HashSet<string>(StringComparer.Ordinal); DashboardOfflineAgentItem? prior = null; foreach (var value in entries) { RequiredUuid(value.AgentId, nameof(value.AgentId)); if (!identities.Add(value.AgentId)) Fail("OfflineAgents contains duplicate AgentId."); RequiredUuid(value.AgentGroupId, nameof(value.AgentGroupId)); RequiredText(value.AgentName, nameof(value.AgentName)); RequiredText(value.Status, nameof(value.Status)); RequiredText(value.SelfHealth, nameof(value.SelfHealth)); if (!string.Equals(value.Status, "Offline", StringComparison.Ordinal)) Fail("OfflineAgents requires Offline."); if (value.LastHeartbeatAt.HasValue) NormalizeUtc(value.LastHeartbeatAt.Value); if (value.LastReportedAt.HasValue) NormalizeUtc(value.LastReportedAt.Value); if (prior is not null && CompareOffline(prior, value) > 0) Fail("OfflineAgents order is invalid."); prior = value; } }
     private static void ValidateOpenIncidents(IReadOnlyList<DashboardOpenIncidentItem>? values) { var entries = values ?? throw new DashboardContractValidationException("OpenIncidents is required."); ValidateCap(entries, "OpenIncidents"); var identities = new HashSet<string>(StringComparer.Ordinal); DashboardOpenIncidentItem? prior = null; foreach (var value in entries) { RequiredUuid(value.IncidentId, nameof(value.IncidentId)); if (!identities.Add(value.IncidentId)) Fail("OpenIncidents contains duplicate IncidentId."); RequiredUuid(value.DeviceId, nameof(value.DeviceId)); RequiredUuid(value.ProbeId, nameof(value.ProbeId)); RequiredUuid(value.SiteId, nameof(value.SiteId)); RequiredText(value.DeviceName, nameof(value.DeviceName)); RequiredText(value.SiteName, nameof(value.SiteName)); RequiredText(value.Criticality, nameof(value.Criticality)); if (value.OccurrenceCount < 0 || !Enum.IsDefined(value.Status) || value.Status is not (IncidentStatus.Open or IncidentStatus.Acknowledged)) Fail("Open incident is invalid."); NormalizeUtc(value.OpenedAt); if (prior is not null && CompareOpenIncident(prior, value) > 0) Fail("OpenIncidents order is invalid."); prior = value; } }
-    private static void ValidateProbe(DeviceStatusResponse value) { RequiredUuid(value.ProbeId, nameof(value.ProbeId)); NormalizeStatus(value.VisibleStatus); NormalizeStatus(value.UnderlyingStatus); if (value.StateVersion < 0) Fail("StateVersion is negative."); if (value.LastFreshEventAt.HasValue) NormalizeUtc(value.LastFreshEventAt.Value); if (value.LastReceivedAt.HasValue) NormalizeUtc(value.LastReceivedAt.Value); if (value.LastFreshEventAt > value.LastReceivedAt) Fail("Fresh event follows receipt."); OptionalUuid(value.AgentId, nameof(value.AgentId)); OptionalUuid(value.OpenIncidentId, nameof(value.OpenIncidentId)); OptionalText(value.AgentName, nameof(value.AgentName)); if ((value.AgentId is null) != (value.AgentName is null)) Fail("Agent fields are ambiguous."); }
+    private static void ValidateProbe(DeviceStatusResponse value) { RequiredUuid(value.ProbeId, nameof(value.ProbeId)); NormalizeStatus(value.VisibleStatus); NormalizeStatus(value.UnderlyingStatus); if (value.StateVersion < 0) Fail("StateVersion is negative."); if (value.LastFreshEventAt.HasValue) NormalizeUtc(value.LastFreshEventAt.Value); if (value.LastReceivedAt.HasValue) NormalizeUtc(value.LastReceivedAt.Value); OptionalUuid(value.AgentId, nameof(value.AgentId)); OptionalUuid(value.OpenIncidentId, nameof(value.OpenIncidentId)); OptionalText(value.AgentName, nameof(value.AgentName)); if ((value.AgentId is null) != (value.AgentName is null)) Fail("Agent fields are ambiguous."); }
     private static int CompareRecentDown(DashboardRecentDownItem left, DashboardRecentDownItem right) { var compare = right.SinceAt.CompareTo(left.SinceAt); return compare != 0 ? compare : string.CompareOrdinal(right.ProbeId, left.ProbeId); }
     private static int CompareOffline(DashboardOfflineAgentItem left, DashboardOfflineAgentItem right) { var compare = Nullable.Compare(left.LastHeartbeatAt, right.LastHeartbeatAt); return compare != 0 ? compare : string.CompareOrdinal(left.AgentId, right.AgentId); }
     private static int CompareOpenIncident(DashboardOpenIncidentItem left, DashboardOpenIncidentItem right) { var compare = right.OpenedAt.CompareTo(left.OpenedAt); return compare != 0 ? compare : string.CompareOrdinal(right.IncidentId, left.IncidentId); }
@@ -458,40 +462,75 @@ public sealed record DashboardNotModifiedMetadata(string Etag, string CacheContr
 
 public static class Wp07DashboardConditionalGet
 {
+    private const int MaximumHeaderValueCount = 100;
+    private const int MaximumHeaderCharacters = 32 * 1024;
+    private const int MaximumListMembers = 128;
+    private const int MaximumEmptyListMembers = 16;
+
     public static DashboardIfNoneMatchClassification ClassifyIfNoneMatch(IEnumerable<string>? values, string currentEtag)
     {
         if (!IsDashboardEtag(currentEtag)) throw new ArgumentException("Current ETag is invalid.", nameof(currentEtag));
-        var headers = values?.ToArray() ?? [];
-        if (headers.Length == 0) return DashboardIfNoneMatchClassification.Missing;
-        if (!TryParse(headers, out var tags)) return DashboardIfNoneMatchClassification.Invalid;
-        if (tags.Count == 1 && tags[0].Wildcard) return DashboardIfNoneMatchClassification.Match;
-        if (tags.Any(tag => tag.Wildcard)) return DashboardIfNoneMatchClassification.Invalid;
+        if (values is null) return DashboardIfNoneMatchClassification.Missing;
+        if (!TryParse(values, out var tags, out var hasHeaderValues, out var hasEmptyMembers)) return DashboardIfNoneMatchClassification.Invalid;
+        if (!hasHeaderValues) return DashboardIfNoneMatchClassification.Missing;
+        if (tags.Any(tag => tag.Wildcard))
+            return tags.Count == 1 && tags[0].Wildcard && !hasEmptyMembers
+                ? DashboardIfNoneMatchClassification.Match
+                : DashboardIfNoneMatchClassification.Invalid;
         return tags.Any(tag => string.Equals(tag.Tag, currentEtag, StringComparison.Ordinal)) ? DashboardIfNoneMatchClassification.Match : DashboardIfNoneMatchClassification.NoMatch;
     }
 
     public static DashboardNotModifiedMetadata NotModifiedMetadata(string currentEtag, string correlationId) => new(currentEtag, Wp07DashboardContract.DashboardCacheControl, "X-Correlation-ID", correlationId);
     public static bool IsDashboardEtag(string? value) => value is not null && value.Length == Wp07DashboardCanonicalizer.EtagPrefix.Length + 43 + Wp07DashboardCanonicalizer.EtagSuffix.Length && value.StartsWith(Wp07DashboardCanonicalizer.EtagPrefix, StringComparison.Ordinal) && value.EndsWith(Wp07DashboardCanonicalizer.EtagSuffix, StringComparison.Ordinal) && value.AsSpan(Wp07DashboardCanonicalizer.EtagPrefix.Length, 43).ToString().All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
-    private static bool TryParse(IEnumerable<string> values, out List<(bool Wildcard, string Tag)> tags)
+    private static bool TryParse(IEnumerable<string> values, out List<(bool Wildcard, string Tag)> tags, out bool hasHeaderValues, out bool hasEmptyMembers)
     {
         tags = [];
+        hasHeaderValues = false;
+        hasEmptyMembers = false;
+        var headerValueCount = 0;
+        var headerCharacterCount = 0;
+        var memberCount = 0;
+        var emptyMemberCount = 0;
+        var emptyMembersFound = false;
         foreach (var value in values)
         {
-            if (value is null) return false;
-            var index = 0; var expecting = true;
+            if (++headerValueCount > MaximumHeaderValueCount || value is null) return false;
+            hasHeaderValues = true;
+            if (value.Length > MaximumHeaderCharacters - headerCharacterCount) return false;
+            headerCharacterCount += value.Length;
+
+            var index = 0;
+            var expecting = true;
             while (true)
             {
                 while (index < value.Length && value[index] is ' ' or '\t') index++;
-                if (index == value.Length) { if (expecting) return false; break; }
+                if (index == value.Length)
+                {
+                    if (expecting && !AddEmptyMember()) return false;
+                    break;
+                }
                 if (!expecting) return false;
+                if (value[index] == ',')
+                {
+                    if (!AddEmptyMember()) return false;
+                    index++;
+                    continue;
+                }
+                if (++memberCount > MaximumListMembers) return false;
                 if (value[index] == '*') { tags.Add((true, string.Empty)); index++; }
                 else
                 {
                     if (value.AsSpan(index).StartsWith("W/", StringComparison.Ordinal)) index += 2;
                     if (index >= value.Length || value[index++] != '"') return false;
                     var start = index;
-                    while (index < value.Length && value[index] != '"') { if (value[index] < '\x21' || value[index] > '\x7e') return false; index++; }
-                    if (index == start || index == value.Length) return false;
+                    while (index < value.Length && value[index] != '"')
+                    {
+                        var character = value[index];
+                        if (character < '\x21' || character == '\x7f' || character > '\x00ff') return false;
+                        index++;
+                    }
+                    if (index == value.Length) return false;
                     tags.Add((false, "\"" + value[start..index++] + "\""));
                 }
                 while (index < value.Length && value[index] is ' ' or '\t') index++;
@@ -500,7 +539,14 @@ public static class Wp07DashboardConditionalGet
                 expecting = true;
             }
         }
-        return tags.Count != 0;
+        hasEmptyMembers = emptyMembersFound;
+        return !hasHeaderValues || tags.Count != 0;
+
+        bool AddEmptyMember()
+        {
+            emptyMembersFound = true;
+            return ++emptyMemberCount <= MaximumEmptyListMembers && ++memberCount <= MaximumListMembers;
+        }
     }
 }
 

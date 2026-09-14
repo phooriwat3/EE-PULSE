@@ -27,9 +27,12 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
-    builder.Services.AddSerilog((_, configuration) => configuration
+    var applicationSerilogLogger = new LoggerConfiguration()
         .Enrich.FromLogContext()
-        .WriteTo.Console(new CompactJsonFormatter()));
+        .WriteTo.Console(new CompactJsonFormatter())
+        .CreateLogger();
+    builder.Services.AddSingleton<Serilog.ILogger>(applicationSerilogLogger);
+    builder.Services.AddSerilog(applicationSerilogLogger);
     builder.Services.AddProblemDetails();
     builder.Services.AddOpenApi("v1", options =>
     {
@@ -101,6 +104,7 @@ try
     app.UseMiddleware<CorrelationIdMiddleware>();
     app.UseTimezonePreferenceCorrelationId();
     app.UseDashboardSummaryCorrelationId();
+    app.UseDeviceStatusCorrelationId();
     app.UseExceptionHandler();
     app.UseSerilogRequestLogging();
     app.UseMiddleware<AgentRequestSecurityMiddleware>();
@@ -142,6 +146,7 @@ try
     app.MapAgentEndpoints();
     app.MapTimezonePreferenceEndpoints();
     app.MapDashboardSummaryEndpoints();
+    app.MapDeviceStatusEndpoints();
 
     app.Run();
 }

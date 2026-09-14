@@ -21,6 +21,15 @@ public sealed class Wp07DashboardContractTests
     }
 
     [Fact]
+    public void DeviceStatusPublicFailureContractAndRouteIdRuleAreStable()
+    {
+        Assert.Equal("invalid-device-status-id", Wp07DashboardContract.InvalidDeviceStatusIdCode);
+        Assert.Equal("invalid-device-status-query", Wp07DashboardContract.InvalidDeviceStatusQueryCode);
+        Assert.Equal(503, Wp07DashboardContract.DeviceStatusUnavailableStatusCode);
+        Assert.Equal("device-status-unavailable", Wp07DashboardContract.DeviceStatusUnavailableCode);
+    }
+
+    [Fact]
     public void EveryDashboardTimestampHasUtcZConverterMetadata()
     {
         var timestamps = typeof(Wp07DashboardContract).Assembly.GetTypes()
@@ -259,6 +268,28 @@ public sealed class Wp07DashboardContractTests
     }
 
     [Fact]
+    public void DeviceStatusFreshEventAndReceiptTimestampsAreIndependentlyOptionalUtcValues()
+    {
+        var probe = new DeviceStatusResponse(Id, DashboardProbeStatus.Up, DashboardProbeStatus.Up, 1, Utc(2), Utc(1), null, null, null);
+        var device = new StatusEnrichedDeviceResponse(Id, Id, "device", "address", null, "type", null, null, "high", ["tag"], true, 1, [probe]);
+
+        var bytes = Wp07DashboardCanonicalizer.SerializeDeviceStatus(device);
+        var json = System.Text.Encoding.UTF8.GetString(bytes);
+        Assert.Contains("\"lastFreshEventAt\":\"2026-09-07T02:00:00.0000000Z\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"lastReceivedAt\":\"2026-09-07T01:00:00.0000000Z\"", json, StringComparison.Ordinal);
+        Assert.True(probe.LastFreshEventAt > probe.LastReceivedAt);
+
+        Assert.Contains("\"lastReceivedAt\":null", System.Text.Encoding.UTF8.GetString(
+            Wp07DashboardCanonicalizer.SerializeDeviceStatus(device with { Probes = [probe with { LastReceivedAt = null }] })), StringComparison.Ordinal);
+        Assert.Contains("\"lastFreshEventAt\":null", System.Text.Encoding.UTF8.GetString(
+            Wp07DashboardCanonicalizer.SerializeDeviceStatus(device with { Probes = [probe with { LastFreshEventAt = null }] })), StringComparison.Ordinal);
+        Assert.Throws<DashboardContractValidationException>(() => Wp07DashboardCanonicalizer.SerializeDeviceStatus(
+            device with { Probes = [probe with { LastFreshEventAt = Utc(2).ToOffset(TimeSpan.FromHours(1)) }] }));
+        Assert.Throws<DashboardContractValidationException>(() => Wp07DashboardCanonicalizer.SerializeDeviceStatus(
+            device with { Probes = [probe with { LastReceivedAt = Utc(1).ToOffset(TimeSpan.FromHours(-1)) }] }));
+    }
+
+    [Fact]
     public void Phase2B1PopulatedDeviceUsesIndependentCanonicalVector()
     {
         const string expected = "{\"address\":\"addr\\u0022\",\"area\":null,\"criticality\":\"Caf\\u00E9\",\"deviceType\":\"Type\",\"enabled\":true,\"hostname\":null,\"id\":\"99999999-9999-9999-9999-999999999999\",\"name\":\"N\\u00E9\",\"owner\":\"O\\u0022\",\"probes\":[{\"agentId\":null,\"agentName\":null,\"lastFreshEventAt\":null,\"lastReceivedAt\":null,\"openIncidentId\":null,\"probeId\":\"10101010-1010-1010-1010-101010101010\",\"stateVersion\":0,\"underlyingStatus\":\"Unknown\",\"visibleStatus\":\"Unknown\"},{\"agentId\":\"30303030-3030-3030-3030-303030303030\",\"agentName\":\"A\\u00E9\",\"lastFreshEventAt\":\"2026-09-07T01:00:00.1234560Z\",\"lastReceivedAt\":\"2026-09-07T01:00:01.0000000Z\",\"openIncidentId\":\"40404040-4040-4040-4040-404040404040\",\"probeId\":\"20202020-2020-2020-2020-202020202020\",\"stateVersion\":7,\"underlyingStatus\":\"Down\",\"visibleStatus\":\"Recovering\"}],\"rowVersion\":9,\"siteId\":\"11111111-1111-1111-1111-111111111111\",\"tags\":[\"A\",\"a\",\"z\"]}";
@@ -303,10 +334,76 @@ public sealed class Wp07DashboardContractTests
         Assert.Equal(DashboardIfNoneMatchClassification.Match, Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["W/" + tag, "\"other\", " + tag], tag));
         Assert.Equal(DashboardIfNoneMatchClassification.Match, Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["*"], tag));
         Assert.Equal(DashboardIfNoneMatchClassification.NoMatch, Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"a,b\""], tag));
+        Assert.Equal(DashboardIfNoneMatchClassification.NoMatch, Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"\""], tag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Match, Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"\", " + tag], tag));
         Assert.Equal(DashboardIfNoneMatchClassification.Invalid, Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["*, " + tag], tag));
         Assert.Equal(DashboardIfNoneMatchClassification.Invalid, Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["W/"], tag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid, Wp07DashboardConditionalGet.ClassifyIfNoneMatch([""], tag));
         var metadata = Wp07DashboardConditionalGet.NotModifiedMetadata(tag, Id);
         Assert.Equal((tag, "private, max-age=0, must-revalidate", "X-Correlation-ID", Id), (metadata.Etag, metadata.CacheControl, metadata.CorrelationHeaderName, metadata.CorrelationId));
+    }
+
+    [Fact]
+    public void Phase2B1ConditionalGetIgnoresBoundedEmptyListMembers()
+    {
+        var currentEtag = Wp07DashboardCanonicalizer.EtagFor([3]);
+        var otherEtag = Wp07DashboardCanonicalizer.EtagFor([4]);
+
+        Assert.Equal(DashboardIfNoneMatchClassification.Match,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch([currentEtag + ","], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Match,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["," + currentEtag], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Match,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch([",," + currentEtag + ",,"], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Match,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch([otherEtag + ",, " + currentEtag + ","], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.NoMatch,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch([", " + otherEtag + ",,"], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.NoMatch,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"\",,"], currentEtag));
+
+        foreach (var emptyList in new[] { "", " ", "\t", ",", ",,,", " , \t, ," })
+            Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+                Wp07DashboardConditionalGet.ClassifyIfNoneMatch([emptyList], currentEtag));
+
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch([new string(',', 17) + currentEtag], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["*,"], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["*, " + currentEtag], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"unterminated,,"], currentEtag));
+    }
+
+    [Fact]
+    public void Phase2B1ConditionalGetAcceptsOnlyRfc9110ObsTextEntityTags()
+    {
+        var currentEtag = Wp07DashboardCanonicalizer.EtagFor([3]);
+        foreach (var opaqueValue in new[] { "\u0080", "\u00FF" })
+        {
+            Assert.Equal(DashboardIfNoneMatchClassification.NoMatch,
+                Wp07DashboardConditionalGet.ClassifyIfNoneMatch([$"\"{opaqueValue}\""], currentEtag));
+        }
+
+        var obsTextTag = "\"\u0080\u00FF\"";
+        Assert.Equal(DashboardIfNoneMatchClassification.NoMatch,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch([obsTextTag], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Match,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch([obsTextTag + ", " + currentEtag], currentEtag));
+
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"\u007F\""], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"\u0100\""], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"\u0000\""], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\" \""], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"before\"after\""], currentEtag));
+        Assert.Equal(DashboardIfNoneMatchClassification.Invalid,
+            Wp07DashboardConditionalGet.ClassifyIfNoneMatch(["\"unterminated"], currentEtag));
     }
 
     [Fact]
