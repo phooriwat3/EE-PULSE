@@ -20,9 +20,7 @@ public sealed class PrincipalIdentityResolver
         var issuers = principal.Claims.Where(claim => claim.Type == "iss").Select(claim => claim.Value).ToArray();
         var subjects = principal.Claims.Where(claim => claim.Type == "sub").Select(claim => claim.Value).ToArray();
         if (issuers.Length != 1 || subjects.Length != 1 ||
-            !TimezonePreferenceContract.IsValidPrincipalComponent(issuers[0], TimezonePreferenceContract.MaximumIssuerLength) ||
-            !TimezonePreferenceContract.IsValidPrincipalComponent(subjects[0], TimezonePreferenceContract.MaximumSubjectLength) ||
-            !HasNoBoundaryWhitespace(issuers[0]) || !HasNoBoundaryWhitespace(subjects[0]))
+            !IncidentActorIdentityContract.HasValidIssuerAndSubject(issuers[0], subjects[0]))
         {
             return false;
         }
@@ -30,7 +28,4 @@ public sealed class PrincipalIdentityResolver
         identity = new PrincipalIdentity(issuers[0], subjects[0]);
         return true;
     }
-
-    private static bool HasNoBoundaryWhitespace(string value) =>
-        string.Equals(value, value.Trim(), StringComparison.Ordinal);
 }

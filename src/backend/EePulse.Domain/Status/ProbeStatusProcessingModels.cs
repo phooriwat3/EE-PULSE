@@ -134,7 +134,6 @@ public sealed class ProbeStatusProjection
 public sealed class AvailabilityIncident
 {
     public const string AvailabilityDownRuleKey = "availability-down";
-    public const string SystemPolicyActor = "system-policy";
     public const string ConfirmedRecoveryReason = "confirmed-recovery";
     public const string RecoveryFailedReason = "recovery-failed";
 
@@ -156,12 +155,13 @@ public sealed class AvailabilityIncident
     public AvailabilityIncidentStatus Status { get; private set; }
     public DateTimeOffset OpenedAt { get; private set; }
     public DateTimeOffset? AcknowledgedAt { get; private set; }
-    public string? AcknowledgedBy { get; private set; }
+    public Guid? AcknowledgedBy { get; private set; }
     public string? AcknowledgementComment { get; private set; }
     public DateTimeOffset? ResolvedAt { get; private set; }
-    public string? ResolvedBy { get; private set; }
+    public Guid? ResolvedBy { get; private set; }
     public string? ResolutionNote { get; private set; }
     public int OccurrenceCount { get; private set; }
+    public long RowVersion { get; private set; }
 
     public void RecordRecoveryFailedOccurrence()
     {
@@ -181,10 +181,11 @@ public sealed class AvailabilityIncident
             throw new DomainValidationException(nameof(Status), "Only an active availability incident can be resolved.");
         }
 
-        ResolvedAt = Guard.Utc(resolvedAt, nameof(resolvedAt));
-        if (ResolvedAt < OpenedAt) throw new DomainValidationException(nameof(resolvedAt), "Resolution cannot precede opening.");
+        var validatedResolvedAt = Guard.Utc(resolvedAt, nameof(resolvedAt));
+        if (validatedResolvedAt < OpenedAt) throw new DomainValidationException(nameof(resolvedAt), "Resolution cannot precede opening.");
+        ResolvedAt = validatedResolvedAt;
         Status = AvailabilityIncidentStatus.Resolved;
-        ResolvedBy = SystemPolicyActor;
+        ResolvedBy = null;
         ResolutionNote = ConfirmedRecoveryReason;
     }
 

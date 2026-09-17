@@ -1,9 +1,9 @@
 # EE Pulse requirements traceability
 
-Last updated: 2026-09-14
+Last updated: 2026-09-16
 Status legend: Not started, In progress, Implemented, Verified, Blocked.
 
-WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. WP-05 durable outbox/delivery/ingestion was merged in `2c22766` (PR #5). WP-06 status projection, transition, incident, lifecycle-event, suppression, maintenance-precedence, freshness, and heartbeat-expiry behavior is merged in `751b6bd5`. WP-07 Phase 2A timezone-preference, Phase 2B1A dashboard-summary, and Phase 2B1B device-status runtime slices are final-verified; Phase 2B2 Commit 1 incident read/action contracts are frozen and runtime is not started. Generated OpenAPI inclusion remains a later explicit checkpoint; incident persistence/runtime, audit listing, timeline, metrics, SignalR runtime, frontend UI, WP-08 notifications, and WP-09 reporting/retention remain pending.
+WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. WP-05 durable outbox/delivery/ingestion was merged in `2c22766` (PR #5). WP-06 status projection, transition, incident, lifecycle-event, suppression, maintenance-precedence, freshness, and heartbeat-expiry behavior is merged in `751b6bd5`. WP-07 Phase 2A timezone-preference, Phase 2B1A dashboard-summary, and Phase 2B1B device-status runtime slices are final-verified; Phase 2B2 Commit 1 incident read/action contracts are frozen and Commit 2 persistence foundation is final-verified. Incident runtime is not started. Generated OpenAPI inclusion remains a later explicit checkpoint; incident runtime, audit listing, timeline, metrics, SignalR runtime, frontend UI, WP-08 notifications, and WP-09 reporting/retention remain pending.
 
 ## Functional requirements
 
@@ -91,6 +91,46 @@ Final Phase 2B1B verification passed on the current eight-file diff against base
 ### WP-07 Phase 2B2 Commit 1 contract status (2026-09-14)
 
 Incident list/detail, device incident history, lifecycle-event/comment reads, acknowledge, add-comment, and constrained manual-resolution contracts and policies are frozen. The DTO contract uses resolved UTC instants for `TotalDowntimeSeconds`, opaque strong incident ETags in headers, and surrogate UUID actor IDs backed in a future runtime by the exact bounded OIDC issuer/subject pair. Comment and resolution-note limits remain 2,000 characters, with indefinite receipt retention until WP-09/UA-09 defines policy. No incident persistence, endpoint/runtime, identity-table, migration, timeline, SignalR, frontend, metrics, notification, reporting, audit-list, or OpenAPI implementation is claimed. Generated OpenAPI remains deferred. The Phase 2B1B runtime verification evidence recorded above is preserved.
+
+### WP-07 Phase 2B2 Commit 2 persistence foundation evidence (2026-09-16)
+
+WP-07 Phase 2B2 Commit 2 human-principal and incident-concurrency persistence foundation, including the C1-control constraint correction, is final-verified. Incident runtime endpoints and commands remain unstarted.
+
+Final verification used pinned .NET SDK 10.0.302 on the Windows host. The serialized fresh Release solution build passed with 0 warnings/errors in 5.71s. Every counted successful test run had discovered = total = passed, with 0 failed, errors, skipped, or not-run tests; both MTP runner and process wall durations are recorded below.
+
+An initial complete-unit-suite MTP launch was blocked before test discovery by host named-pipe access. It executed zero tests and is excluded from the reported counts; this was an environment/access failure, not a test failure. Only the successful permitted rerun contributes to the final 160/160 unit-test result.
+
+| Final verification gate | Discovered / total / passed / failed / errors / skipped / not run | Runner duration; process wall duration |
+| --- | --- | --- |
+| Complete `EePulse.UnitTests` | 160 / 160 / 160 / 0 / 0 / 0 / 0 | MTP 3.020s; 2.779s |
+| `TimezonePreferenceApiTests` | 24 / 24 / 24 / 0 / 0 / 0 / 0 | MTP 1m38.581s; 1m37.603s |
+| `UserTimezonePreferencePersistenceTests` | 1 / 1 / 1 / 0 / 0 / 0 / 0 | MTP 8.683s; 8.426s |
+| `AgentApiTests` | 15 / 15 / 15 / 0 / 0 / 0 / 0 | MTP 1m17.196s; 1m16.945s |
+| `ProbeResultStatusProcessorTests` | 86 / 86 / 86 / 0 / 0 / 0 / 0 | MTP 6m47.385s; 6m47.133s |
+| `Wp06StatusProcessingPersistenceTests` | 23 / 23 / 23 / 0 / 0 / 0 / 0 | MTP 1m29.993s; 1m28.641s |
+| `Wp07IncidentPersistenceTests` | 16 / 16 / 16 / 0 / 0 / 0 / 0 | MTP 1m07.233s; 1m06.987s |
+| Complete `EePulse.IntegrationTests` | 213 / 213 / 213 / 0 / 0 / 0 / 0 | MTP 14m44.108s; 14m43.776s |
+| `dotnet format style --verify-no-changes` | Passed | 27.199s |
+| `dotnet format analyzers --verify-no-changes` | Passed | 35.499s |
+
+The resource gate passed (3.29 GiB free physical memory; 10.53 GiB commit headroom; active pagefile with 16,110 MiB allocated/1,216 MiB used; C: free 38.81 GiB; no GC/MSBuild heap-limit variables; no repository build/test process). Docker Desktop Linux was reachable through the canonical npipe endpoint, and the earlier Roslyn OOM did not reproduce. Final hygiene passed for the exact 22 approved paths (16 tracked modifications and 6 approved new files), with no staged files, no trailing whitespace, final newlines, and clean `git diff --check`.
+
+Database-boundary regressions passed: C1 controls U+0080–U+009F are rejected for both principal columns and U+00A1 remains accepted. Direct principal UPDATE and DELETE fail with SQLSTATE `23514`, fixed safe message `WP07 human principals are immutable.`, and trigger identity `tr_human_principals_immutable`, leaving principal mappings and incident actor references unchanged. The immutability trigger/function are present after migration Up and removed by Down. Both incident actor foreign keys retain PostgreSQL RESTRICT behavior. St09b ledger DELETE fails with SQLSTATE `23001` via one of the two known FK identities and matching referencing table, and the ledger, disposition, and freshness-cause JSONB snapshots remain identical. Both EF ledger relationships use `DeleteBehavior.Restrict`; derived-table append-only checks expect `P0001` from bare `RAISE EXCEPTION`; no append-only trigger was added to `probe_result_ledger`. WP-06 compatibility passed.
+
+The following pre-C1-control table is retained as historical checkpoint evidence; its counts, timings, and status describe that earlier run and are superseded by the final results above.
+
+| Traceability item | Status | Evidence |
+| --- | --- | --- |
+| Human-principal persistence | Verified | Additive migration `20260914145214_WP07Phase2B2IncidentFoundation` adds UUID identity rows, C-collated bounded issuer/subject values, exact pair uniqueness, shape checks, non-empty surrogate IDs, and a PostgreSQL `BEFORE UPDATE OR DELETE` immutability trigger; direct inserts remain supported. |
+| Incident actor and concurrency persistence | Verified | Nullable UUID acknowledged/resolved actor foreign keys use `ON DELETE RESTRICT`; incident `row_version` is positive and supports the frozen opaque ETag/concurrency foundation. |
+| Compatibility and historical behavior | Verified | Current-schema WP-06 confirmed-recovery fixtures use `resolved_by = NULL` and retain `resolution_note = 'confirmed-recovery'`; historical migration evidence and original backfill purpose are unchanged. |
+| Resource gate and Roslyn recovery | Verified | 4.23 GiB free physical memory; 11.22 GiB commit headroom (35.7%); pagefile 16,110 MiB allocated/1,704 MiB used; no `DOTNET_GC*`, `COMPlus_GC*`, or `MSBuild*` heap-limit variables; C: free 38.97 GiB; no repository build/test process. The controlled serialized retry passed and the earlier Roslyn OOM did not reproduce. |
+| Release builds | Verified | Windows-host integration-project rebuild: 0 warnings/errors in 21.95s. Fresh Release solution build: 0 warnings/errors in 16.98s. |
+| Windows-host focused and complete tests | Verified | `TimezonePreferenceApiTests` 24/24 in 1m35.579s; complete unit suite 160/160 in 4.569s; each supplied focused Commit 2 method 1/1; WP-06 St03a 1/1 in 8.043s and St05b 1/1 in 6.989s; `Wp07IncidentPersistenceTests` 12/12 in 49.181s; complete integration suite 209/209, 0 failed/skipped, in 13m23.775s. Previously recorded focused timezone migration and persistence tests remain 1/1 in 14.379s and 13.691s, respectively. |
+| Style, analyzer, hygiene, and scope | Verified | Style/analyzer `--verify-no-changes`, whitespace/final-newline checks, and `git diff --check` passed; exact 22 approved paths (16 tracked modifications and 6 approved new files), no staged files. |
+| Security and artifact integrity | Verified with noted gaps | .NET vulnerability audit found no vulnerable packages. `npm audit` exited 0 with two moderate `@vitest/mocker` advisories. `gitleaks` and `trivy` were unavailable as optional tooling. OpenAPI remains unchanged at 154,533 bytes with SHA-256 `44F2C9D1EB902E1EC44C6395305F328F262A3D592E9EDF7BA40724C030DE435C`. |
+
+This is a persistence-foundation checkpoint, not completion of WP-07. Incident runtime endpoints/actions, SignalR, frontend/UI, and Commit 3 have not started; the historical Commit 1 evidence above is not altered.
 
 ## WP-01 architecture evidence
 

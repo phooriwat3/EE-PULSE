@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EePulse.Contracts.Agents;
@@ -187,6 +188,33 @@ public sealed class Wp07DashboardContractTests
     }
 
     [Fact]
+    public void PrincipalComponentLengthUsesUnicodeScalarValuesForIssuerAndSubject()
+    {
+        var astral512 = string.Concat(Enumerable.Repeat("\U0001F600", 512));
+        var astral513 = string.Concat(Enumerable.Repeat("\U0001F600", 513));
+        var mixed512 = string.Concat(Enumerable.Repeat("a\U0001F600", 256));
+
+        Assert.Equal(512, astral512.EnumerateRunes().Count());
+        Assert.True(TimezonePreferenceContract.IsValidPrincipalComponent(astral512, TimezonePreferenceContract.MaximumIssuerLength));
+        Assert.True(TimezonePreferenceContract.IsValidPrincipalComponent(astral512, TimezonePreferenceContract.MaximumSubjectLength));
+        Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent(astral513, TimezonePreferenceContract.MaximumIssuerLength));
+        Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent(astral513, TimezonePreferenceContract.MaximumSubjectLength));
+
+        Assert.Equal(512, mixed512.EnumerateRunes().Count());
+        Assert.Equal(768, mixed512.Length);
+        Assert.True(TimezonePreferenceContract.IsValidPrincipalComponent(mixed512, TimezonePreferenceContract.MaximumIssuerLength));
+        Assert.True(TimezonePreferenceContract.IsValidPrincipalComponent(mixed512, TimezonePreferenceContract.MaximumSubjectLength));
+        Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent(mixed512 + "a", TimezonePreferenceContract.MaximumIssuerLength));
+        Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent(mixed512 + "a", TimezonePreferenceContract.MaximumSubjectLength));
+
+        foreach (var malformed in new[] { "\ud800", "\udc00" })
+        {
+            Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent(malformed, TimezonePreferenceContract.MaximumIssuerLength));
+            Assert.False(TimezonePreferenceContract.IsValidPrincipalComponent(malformed, TimezonePreferenceContract.MaximumSubjectLength));
+        }
+    }
+
+    [Fact]
     public void BoundedRequestsFiltersAndTimezoneExposeRealValidationMetadata()
     {
         AssertInvalid(new AcknowledgeIncidentRequest(""));
@@ -354,6 +382,27 @@ public sealed class Wp07DashboardContractTests
             typeof(IncidentLifecycleResponse).GetProperty(nameof(IncidentLifecycleResponse.ActorId)),
             typeof(IncidentCommentResponse).GetProperty(nameof(IncidentCommentResponse.AuthorId))
         }, property => Assert.NotNull(property?.GetCustomAttribute<SurrogateUuidAttribute>()));
+    }
+
+    [Fact]
+    public void IncidentActorIdentityUsesTheSharedUnicodeScalarLimit()
+    {
+        var astral512 = string.Concat(Enumerable.Repeat("\U0001F600", 512));
+        var astral513 = string.Concat(Enumerable.Repeat("\U0001F600", 513));
+        var mixed512 = string.Concat(Enumerable.Repeat("a\U0001F600", 256));
+
+        Assert.True(IncidentActorIdentityContract.HasValidIssuerAndSubject(astral512, astral512));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject(astral513, astral512));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject(astral512, astral513));
+        Assert.True(IncidentActorIdentityContract.HasValidIssuerAndSubject(mixed512, mixed512));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject(mixed512 + "a", mixed512));
+        Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject(mixed512, mixed512 + "a"));
+
+        foreach (var malformed in new[] { "\ud800", "\udc00" })
+        {
+            Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject(malformed, "subject"));
+            Assert.False(IncidentActorIdentityContract.HasValidIssuerAndSubject("issuer", malformed));
+        }
     }
 
     [Fact]

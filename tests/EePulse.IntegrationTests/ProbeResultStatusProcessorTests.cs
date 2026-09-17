@@ -1,5 +1,6 @@
 using EePulse.Application.Time;
 using EePulse.Domain.Agents;
+using EePulse.Domain.Identity;
 using EePulse.Domain.Inventory;
 using EePulse.Domain.Status;
 using EePulse.Infrastructure.Persistence;
@@ -17,6 +18,8 @@ namespace EePulse.IntegrationTests;
 
 public sealed class ProbeResultStatusProcessorTests
 {
+    private static readonly Guid OperatorPrincipalId = Guid.Parse("7d37fbd8-5655-43af-8233-7e1d5ce4a683");
+
     public static TheoryData<ProbeStatus, int, int, long> H1KnownVisibleStatuses => new()
     {
         { ProbeStatus.Up, 0, 1, 1 },
@@ -167,7 +170,8 @@ public sealed class ProbeResultStatusProcessorTests
         if (acknowledgeIncident)
         {
             await using var acknowledge = new EePulseDbContext(fixture.Options);
-            await acknowledge.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Acknowledged"}, acknowledged_at = {fixture.Now.AddSeconds(2)}, acknowledged_by = {"operator"}, acknowledgement_comment = {"investigating"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
+            await SeedOperatorPrincipalAsync(acknowledge, fixture.Now);
+            await acknowledge.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Acknowledged"}, acknowledged_at = {fixture.Now.AddSeconds(2)}, acknowledged_by = {OperatorPrincipalId}, acknowledgement_comment = {"investigating"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
         }
 
         await AddLedgerAsync(fixture, fixture.Now.AddSeconds(3), fixture.Now.AddSeconds(3), 3, 0m, averageRtt: averageRtt);
@@ -191,7 +195,7 @@ public sealed class ProbeResultStatusProcessorTests
         Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, disposition.Disposition);
         Assert.Equal(AvailabilityIncidentStatus.Resolved, incident.Status);
         Assert.Equal(fixture.Now.AddSeconds(4), incident.ResolvedAt);
-        Assert.Equal(AvailabilityIncident.SystemPolicyActor, incident.ResolvedBy);
+        Assert.Null(incident.ResolvedBy);
         Assert.Equal(AvailabilityIncident.ConfirmedRecoveryReason, incident.ResolutionNote);
         Assert.Null(projection.OpenIncidentId);
         Assert.Equal((incident.Id, fixture.ProbeId, fixture.AgentId, resolvedResultId, ProbeStatus.Recovering, expectedStatus, "recovery-threshold-met"),
@@ -241,7 +245,9 @@ public sealed class ProbeResultStatusProcessorTests
         Assert.Equal((ProbeStatus.Recovering, ProbeStatus.Up, "recovery-threshold-met"), (transition.FromStatus, transition.ToStatus, transition.ReasonCode));
         Assert.Equal(ProbeResultProcessingDispositionKind.StateDriving, disposition.Disposition);
         Assert.Equal(AvailabilityIncidentStatus.Resolved, incident.Status);
-        Assert.Equal((fixture.Now.AddSeconds(4), AvailabilityIncident.SystemPolicyActor, AvailabilityIncident.ConfirmedRecoveryReason), (incident.ResolvedAt, incident.ResolvedBy, incident.ResolutionNote));
+        Assert.Equal(fixture.Now.AddSeconds(4), incident.ResolvedAt);
+        Assert.Null(incident.ResolvedBy);
+        Assert.Equal(AvailabilityIncident.ConfirmedRecoveryReason, incident.ResolutionNote);
         Assert.Null(projection.OpenIncidentId);
         Assert.Equal((incident.Id, fixture.AgentId, resolvedResultId, ProbeStatus.Recovering, ProbeStatus.Up, "recovery-threshold-met"),
             (lifecycleEvent.IncidentId, lifecycleEvent.SourceAgentId, lifecycleEvent.SourceResultId, lifecycleEvent.SourceFromStatus, lifecycleEvent.SourceToStatus, lifecycleEvent.SourceReasonCode));
@@ -300,7 +306,7 @@ public sealed class ProbeResultStatusProcessorTests
         var mismatchedIncidentId = Guid.NewGuid();
         await using (var corrupt = new EePulseDbContext(fixture.Options))
         {
-            await corrupt.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({mismatchedIncidentId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"system-policy"}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
+            await corrupt.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolution_note) VALUES ({mismatchedIncidentId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
             var projection = await corrupt.ProbeStatusProjections.SingleAsync(row => row.ProbeId == fixture.ProbeId, TestContext.Current.CancellationToken);
             corrupt.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = mismatchedIncidentId;
             await corrupt.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -310,7 +316,7 @@ public sealed class ProbeResultStatusProcessorTests
         ProbeStatusProjection baselineProjection;
         (Guid AgentId, Guid ResultId)[] baselineDispositions;
         (Guid AgentId, Guid ResultId, ProbeStatus FromStatus, ProbeStatus ToStatus, string ReasonCode)[] baselineTransitions;
-        (Guid Id, AvailabilityIncidentStatus Status, DateTimeOffset? ResolvedAt, string? ResolvedBy, string? ResolutionNote)[] baselineIncidents;
+        (Guid Id, AvailabilityIncidentStatus Status, DateTimeOffset? ResolvedAt, Guid? ResolvedBy, string? ResolutionNote)[] baselineIncidents;
         Guid[] baselineEventIds;
         Guid[] baselineContextIds;
         await using (var baseline = new EePulseDbContext(fixture.Options))
@@ -353,7 +359,7 @@ public sealed class ProbeResultStatusProcessorTests
         var inactiveIncidentId = Guid.NewGuid();
         await using (var seed = new EePulseDbContext(fixture.Options))
         {
-            await seed.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({inactiveIncidentId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"system-policy"}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
+            await seed.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolution_note) VALUES ({inactiveIncidentId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
             seed.Add(new ProbeStatusProjection(fixture.ProbeId, ProbeStatus.Recovering, 0, 1, fixture.Now,
                 fixture.Now, fixture.AgentId, Guid.NewGuid(), inactiveIncidentId));
             await seed.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -363,7 +369,7 @@ public sealed class ProbeResultStatusProcessorTests
         ProbeStatusProjection baselineProjection;
         (Guid AgentId, Guid ResultId)[] baselineDispositions;
         (Guid AgentId, Guid ResultId, ProbeStatus FromStatus, ProbeStatus ToStatus, string ReasonCode)[] baselineTransitions;
-        (Guid Id, AvailabilityIncidentStatus Status, DateTimeOffset? ResolvedAt, string? ResolvedBy, string? ResolutionNote)[] baselineIncidents;
+        (Guid Id, AvailabilityIncidentStatus Status, DateTimeOffset? ResolvedAt, Guid? ResolvedBy, string? ResolutionNote)[] baselineIncidents;
         Guid[] baselineEventIds;
         Guid[] baselineContextIds;
         await using (var baseline = new EePulseDbContext(fixture.Options))
@@ -593,7 +599,7 @@ public sealed class ProbeResultStatusProcessorTests
         {
             seedInconsistent.Add(activeIncident);
             await seedInconsistent.SaveChangesAsync(TestContext.Current.CancellationToken);
-            await seedInconsistent.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({resolvedIncidentId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"system-policy"}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
+            await seedInconsistent.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolution_note) VALUES ({resolvedIncidentId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
             var projection = await seedInconsistent.ProbeStatusProjections.SingleAsync(row => row.ProbeId == fixture.ProbeId, TestContext.Current.CancellationToken);
             seedInconsistent.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = resolvedIncidentId;
             await seedInconsistent.SaveChangesAsync(TestContext.Current.CancellationToken);
@@ -802,7 +808,10 @@ public sealed class ProbeResultStatusProcessorTests
         await using var fixture = await CreateFixtureAsync();
         await ProcessToRecoveringAsync(fixture);
         await using (var acknowledge = new EePulseDbContext(fixture.Options))
-            await acknowledge.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Acknowledged"}, acknowledged_at = {fixture.Now.AddSeconds(3)}, acknowledged_by = {"operator"}, acknowledgement_comment = {"investigating"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
+        {
+            await SeedOperatorPrincipalAsync(acknowledge, fixture.Now);
+            await acknowledge.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Acknowledged"}, acknowledged_at = {fixture.Now.AddSeconds(3)}, acknowledged_by = {OperatorPrincipalId}, acknowledgement_comment = {"investigating"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
+        }
 
         var resultId = await AddLedgerAsync(fixture, fixture.Now.AddSeconds(4), fixture.Now.AddSeconds(4), 0, 1m);
         var ledger = await ReadLedgerAsync(fixture, resultId);
@@ -849,14 +858,14 @@ public sealed class ProbeResultStatusProcessorTests
             else
             {
                 var inactiveId = Guid.NewGuid();
-                await corrupt.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({inactiveId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"system-policy"}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
+                await corrupt.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolution_note) VALUES ({inactiveId}, {fixture.ProbeId}, {"availability-down"}, {"Resolved"}, {fixture.Now}, {fixture.Now}, {"confirmed-recovery"})", TestContext.Current.CancellationToken);
                 if (scenario == "inactive-pointer")
                 {
                     var activeOpenedAt = await corrupt.AvailabilityIncidents
                         .Where(incident => incident.ProbeId == fixture.ProbeId && incident.Status == AvailabilityIncidentStatus.Open)
                         .Select(incident => incident.OpenedAt)
                         .SingleAsync(TestContext.Current.CancellationToken);
-                    await corrupt.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Resolved"}, resolved_at = {activeOpenedAt}, resolved_by = {"system-policy"}, resolution_note = {"confirmed-recovery"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
+                    await corrupt.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Resolved"}, resolved_at = {activeOpenedAt}, resolution_note = {"confirmed-recovery"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
                 }
                 corrupt.Entry(projection).Property(nameof(ProbeStatusProjection.OpenIncidentId)).CurrentValue = inactiveId;
             }
@@ -1218,7 +1227,8 @@ public sealed class ProbeResultStatusProcessorTests
         if (acknowledgeIncident)
         {
             await using var acknowledge = new EePulseDbContext(fixture.Options);
-            await acknowledge.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Acknowledged"}, acknowledged_at = {fixture.Now.AddSeconds(3)}, acknowledged_by = {"operator"}, acknowledgement_comment = {"investigating"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
+            await SeedOperatorPrincipalAsync(acknowledge, fixture.Now);
+            await acknowledge.Database.ExecuteSqlInterpolatedAsync($"UPDATE availability_incidents SET status = {"Acknowledged"}, acknowledged_at = {fixture.Now.AddSeconds(3)}, acknowledged_by = {OperatorPrincipalId}, acknowledgement_comment = {"investigating"} WHERE probe_id = {fixture.ProbeId} AND status = {"Open"}", TestContext.Current.CancellationToken);
         }
 
         var baseline = await CaptureDisabledNonMutationSnapshotAsync(fixture);
@@ -1310,6 +1320,13 @@ public sealed class ProbeResultStatusProcessorTests
         await using var processing = new EePulseDbContext(fixture.Options);
         var processor = new ProbeResultStatusProcessor(processing, new FixedClock(fixture.Now));
         for (var index = 0; index < 4; index++) await processor.ProcessNextAsync(fixture.ProbeId, TestContext.Current.CancellationToken);
+    }
+
+    private static async Task SeedOperatorPrincipalAsync(EePulseDbContext db, DateTimeOffset now)
+    {
+        db.HumanPrincipals.Add(new HumanPrincipal(
+            OperatorPrincipalId, "https://issuer.test/wp07-integration", "synthetic-operator", now));
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -4166,7 +4183,7 @@ public sealed class ProbeResultStatusProcessorTests
     private sealed record ProbeHeartbeatExpiryCauseSnapshot(Guid CauseId, Guid ProbeId, ProbeHeartbeatExpiryCauseType CauseType, Guid AuthorityAgentId, Guid SourceResultId, DateTimeOffset SourceCursorEventAt, DateTimeOffset SourceLastHeartbeatAt, int SourceHeartbeatIntervalSeconds, long SourceConfigurationVersion, Guid SourceAgentGroupId, ProbeResultProcessingDispositionKind SourceDisposition, Guid PolicySnapshotId, int PolicyVersion, DateTimeOffset DueAt, DateTimeOffset RequestedAt);
     private sealed record ProbeStatusProjectionSnapshot(Guid ProbeId, ProbeStatus UnderlyingStatus, ProbeStatus VisibleStatus, int ConsecutiveFailureCount, int ConsecutiveSuccessCount, long StateVersion, Guid? WatermarkAgentId, Guid? WatermarkResultId, DateTimeOffset? WatermarkEventAt, DateTimeOffset? LastFreshEventAt, Guid? OpenIncidentId);
     private sealed record AgentShareCommand(ImmutableArray<string> AgentIds);
-    private sealed record IncidentArtifact(Guid Id, Guid ProbeId, string RuleKey, AvailabilityIncidentStatus Status, DateTimeOffset OpenedAt, DateTimeOffset? AcknowledgedAt, string? AcknowledgedBy, string? AcknowledgementComment, DateTimeOffset? ResolvedAt, string? ResolvedBy, string? ResolutionNote, int OccurrenceCount);
+    private sealed record IncidentArtifact(Guid Id, Guid ProbeId, string RuleKey, AvailabilityIncidentStatus Status, DateTimeOffset OpenedAt, DateTimeOffset? AcknowledgedAt, Guid? AcknowledgedBy, string? AcknowledgementComment, DateTimeOffset? ResolvedAt, Guid? ResolvedBy, string? ResolutionNote, int OccurrenceCount);
     private sealed record EventArtifact(Guid EventId, Guid IncidentId, Guid ProbeId, Guid SourceAgentId, Guid SourceResultId, ProbeStatus SourceFromStatus, ProbeStatus SourceToStatus, string SourceReasonCode, Guid PolicySnapshotId, int PolicyVersion, IncidentLifecycleEventType LifecycleEventType, string LifecycleEventKey, ProbeResultProcessingDispositionKind ProcessingDisposition, DateTimeOffset OccurredAt);
     private sealed record ContextArtifact(Guid EventId, Guid IncidentId, string LifecycleEventKey, int PolicyVersion, NotificationSuppressionEligibility Eligibility, string ReasonCode, DateTimeOffset EvaluatedAt);
     private sealed record ProbeArtifacts(IncidentArtifact[] Incidents, EventArtifact[] Events, ContextArtifact[] Contexts);
@@ -4175,8 +4192,8 @@ public sealed class ProbeResultStatusProcessorTests
         DateTimeOffset? LastFreshEventAt, DateTimeOffset? WatermarkEventAt, Guid? WatermarkAgentId, Guid? WatermarkResultId,
         long StateVersion, Guid? OpenIncidentId);
     private sealed record IncidentStateSnapshot(Guid Id, AvailabilityIncidentStatus Status, DateTimeOffset OpenedAt,
-        DateTimeOffset? AcknowledgedAt, string? AcknowledgedBy, string? AcknowledgementComment, DateTimeOffset? ResolvedAt,
-        string? ResolvedBy, string? ResolutionNote, int OccurrenceCount);
+        DateTimeOffset? AcknowledgedAt, Guid? AcknowledgedBy, string? AcknowledgementComment, DateTimeOffset? ResolvedAt,
+        Guid? ResolvedBy, string? ResolutionNote, int OccurrenceCount);
     private sealed record DisabledNonMutationSnapshot(ProjectionSnapshot? Projection, string Incidents, string Transitions,
         string Events, string Contexts);
     private sealed record FreshnessCauseIdentity(Guid SourceAgentId, Guid SourceResultId, Guid ProbeId, DateTimeOffset SourceCursorEventAt);

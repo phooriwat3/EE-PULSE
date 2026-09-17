@@ -10,6 +10,8 @@ namespace EePulse.IntegrationTests;
 
 public sealed class UserTimezonePreferencePersistenceTests
 {
+    private const string TimezonePreferenceMigration = "20260907125526_WP07UserTimezonePreferencePersistence";
+    private const string TimezonePreferencePredecessorMigration = "20260828024353_WP06St10bHeartbeatExpiryPersistence";
     private const string Issuer = "https://issuer.test/wp07";
     private const string Subject = "subject-wp07-001";
     private static readonly DateTimeOffset Now = new(2026, 9, 7, 8, 0, 0, TimeSpan.Zero);
@@ -25,11 +27,9 @@ public sealed class UserTimezonePreferencePersistenceTests
         {
             await migration.Database.MigrateAsync(ct);
             Assert.False(migration.Database.HasPendingModelChanges());
-            var migrations = (await migration.Database.GetAppliedMigrationsAsync(ct)).ToArray();
-            var current = migrations[^1];
-            var previous = migrations[^2];
-            var forwardSql = migration.Database.GetService<IMigrator>().GenerateScript(previous, current);
-            var rollbackSql = migration.Database.GetService<IMigrator>().GenerateScript(current, previous);
+            var migrator = migration.Database.GetService<IMigrator>();
+            var forwardSql = migrator.GenerateScript(TimezonePreferencePredecessorMigration, TimezonePreferenceMigration);
+            var rollbackSql = migrator.GenerateScript(TimezonePreferenceMigration, TimezonePreferencePredecessorMigration);
             Assert.Equal([new SchemaChange("CREATE TABLE", "user_timezone_preferences")], DiscoverSchemaChanges(forwardSql));
             Assert.Equal([new SchemaChange("DROP TABLE", "user_timezone_preferences")], DiscoverSchemaChanges(rollbackSql));
         }

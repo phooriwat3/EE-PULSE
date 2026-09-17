@@ -162,6 +162,47 @@ public sealed class ProbeStatusProcessingPersistenceTests
     }
 
     [Fact]
+    public void AvailabilityIncidentStartsAtDomainVersionZeroAndConfirmedRecoveryHasNoHumanActor()
+    {
+        var incident = new AvailabilityIncident(Guid.NewGuid(), Guid.NewGuid(), Now);
+
+        Assert.Equal(0, incident.RowVersion);
+        Assert.Equal(AvailabilityIncidentStatus.Open, incident.Status);
+        Assert.Equal(1, incident.OccurrenceCount);
+
+        incident.ResolveForConfirmedRecovery(Now.AddSeconds(1));
+
+        Assert.Equal(AvailabilityIncidentStatus.Resolved, incident.Status);
+        Assert.Equal(Now.AddSeconds(1), incident.ResolvedAt);
+        Assert.Null(incident.ResolvedBy);
+        Assert.Equal("confirmed-recovery", incident.ResolutionNote);
+        Assert.Equal(0, incident.RowVersion);
+    }
+
+    [Fact]
+    public void InvalidConfirmedRecoveryDoesNotPartiallyMutateTheIncident()
+    {
+        var incident = new AvailabilityIncident(Guid.NewGuid(), Guid.NewGuid(), Now);
+        var before = (incident.Status, incident.ResolvedAt, incident.ResolvedBy, incident.ResolutionNote);
+
+        Assert.Throws<DomainValidationException>(() => incident.ResolveForConfirmedRecovery(Now.AddSeconds(-1)));
+        Assert.Equal(before, (incident.Status, incident.ResolvedAt, incident.ResolvedBy, incident.ResolutionNote));
+        Assert.Throws<DomainValidationException>(() => incident.ResolveForConfirmedRecovery(Now.ToOffset(TimeSpan.FromHours(1))));
+        Assert.Equal(before, (incident.Status, incident.ResolvedAt, incident.ResolvedBy, incident.ResolutionNote));
+    }
+
+    [Fact]
+    public void RecoveryFailedOccurrenceOverflowDoesNotPartiallyMutateTheIncident()
+    {
+        var incident = new AvailabilityIncident(Guid.NewGuid(), Guid.NewGuid(), Now);
+        typeof(AvailabilityIncident).GetProperty(nameof(AvailabilityIncident.OccurrenceCount))!
+            .GetSetMethod(nonPublic: true)!.Invoke(incident, [int.MaxValue]);
+
+        Assert.Throws<DomainValidationException>(() => incident.RecordRecoveryFailedOccurrence());
+        Assert.Equal(int.MaxValue, incident.OccurrenceCount);
+    }
+
+    [Fact]
     public void St05RecoveryFailedOccurrenceRetainsTheActiveIncidentAndUsesTheDeterministicSuppressedHandoff()
     {
         var incident = new AvailabilityIncident(Guid.NewGuid(), Guid.NewGuid(), Now);

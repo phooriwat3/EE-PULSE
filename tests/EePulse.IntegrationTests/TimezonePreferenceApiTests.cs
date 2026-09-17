@@ -435,29 +435,62 @@ public sealed class TimezonePreferenceApiTests
     public void PrincipalIdentityResolutionRequiresExactlyOneExplicitIssuerAndSubject()
     {
         var resolver = new PrincipalIdentityResolver();
+        var issuer512 = string.Concat(Enumerable.Repeat("\U0001F600", 512));
+        var subject512 = string.Concat(Enumerable.Repeat("\U0001F680", 512));
         var valid = new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim("iss", "https://issuer.example"), new Claim("sub", "subject-1")], "test"));
+            new Claim("iss", issuer512), new Claim("sub", subject512)], "test"));
         Assert.True(resolver.TryResolve(valid, out var identity));
-        Assert.Equal(new PrincipalIdentity("https://issuer.example", "subject-1"), identity);
+        Assert.Equal(new PrincipalIdentity(issuer512, subject512), identity);
 
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([new Claim("iss", "issuer")], "test")), out _));
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "subject")], "test")), out _));
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim("iss", "issuer"), new Claim("iss", "other"), new Claim("sub", "subject")], "test")), out _));
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim(ClaimTypes.NameIdentifier, Actor), new Claim(ClaimTypes.Email, "person@example.test")], "test")), out _));
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim("iss", " "), new Claim("sub", "subject")], "test")), out _));
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim("iss", "issuer"), new Claim("sub", "subject")], AgentContract.CredentialAuthenticationScheme)), out _));
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim("iss", "issuer\tvalue"), new Claim("sub", "subject")], "test")), out _));
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim("iss", "issuer\u2028value"), new Claim("sub", "subject")], "test")), out _));
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim("iss", new string('i', TimezonePreferenceContract.MaximumIssuerLength + 1)), new Claim("sub", "subject")], "test")), out _));
-        Assert.False(resolver.TryResolve(new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim("iss", "issuer"), new Claim("sub", "subject"), new Claim("sub", "subject")], "test")), out _));
+        var mixed512 = string.Concat(Enumerable.Repeat("a\U0001F600", 256));
+        var validMixed = new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", mixed512), new Claim("sub", mixed512)], "test"));
+        Assert.True(resolver.TryResolve(validMixed, out var mixedIdentity));
+        Assert.Equal(new PrincipalIdentity(mixed512, mixed512), mixedIdentity);
+
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([new Claim("iss", "issuer")], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "subject")], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", "issuer"), new Claim("iss", "other"), new Claim("sub", "subject")], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim(ClaimTypes.NameIdentifier, Actor), new Claim(ClaimTypes.Email, "person@example.test")], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", " "), new Claim("sub", "subject")], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", "issuer"), new Claim("sub", "subject")], AgentContract.CredentialAuthenticationScheme)));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", "issuer\tvalue"), new Claim("sub", "subject")], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", "issuer\u2028value"), new Claim("sub", "subject")], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", new string('i', TimezonePreferenceContract.MaximumIssuerLength + 1)), new Claim("sub", "subject")], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", "issuer"), new Claim("sub", new string('s', TimezonePreferenceContract.MaximumSubjectLength + 1))], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", "issuer"), new Claim("sub", "subject"), new Claim("sub", "subject")], "test")));
+
+        var astral513 = string.Concat(Enumerable.Repeat("\U0001F600", 513));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", astral513), new Claim("sub", subject512)], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", issuer512), new Claim("sub", astral513)], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", mixed512 + "a"), new Claim("sub", mixed512)], "test")));
+        AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim("iss", mixed512), new Claim("sub", mixed512 + "a")], "test")));
+        foreach (var malformed in new[] { "\ud800", "\udc00" })
+        {
+            AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+                new Claim("iss", malformed), new Claim("sub", "subject")], "test")));
+            AssertRejected(new ClaimsPrincipal(new ClaimsIdentity([
+                new Claim("iss", "issuer"), new Claim("sub", malformed)], "test")));
+        }
+
+        void AssertRejected(ClaimsPrincipal candidate)
+        {
+            Assert.False(resolver.TryResolve(candidate, out var rejectedIdentity));
+            Assert.Null(rejectedIdentity);
+        }
     }
 
     [Fact]

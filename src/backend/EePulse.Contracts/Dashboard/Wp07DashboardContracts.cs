@@ -238,14 +238,16 @@ public static partial class TimezonePreferenceContract
     }
 
     public static bool IsValidPrincipalComponent(string? value, int maximumLength) =>
-        value is { Length: > 0 } && value.Length <= maximumLength && !string.IsNullOrWhiteSpace(value) &&
-        string.Equals(value, value.Trim(), StringComparison.Ordinal) && HasSafePrincipalCharacters(value);
+        value is { Length: > 0 } && !string.IsNullOrWhiteSpace(value) &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) && HasSafePrincipalCharacters(value, maximumLength);
 
-    private static bool HasSafePrincipalCharacters(string value)
+    private static bool HasSafePrincipalCharacters(string value, int maximumScalarCount)
     {
+        var scalarCount = 0;
         for (var offset = 0; offset < value.Length;)
         {
-            if (Rune.DecodeFromUtf16(value.AsSpan(offset), out var rune, out var consumed) != OperationStatus.Done) return false;
+            if (Rune.DecodeFromUtf16(value.AsSpan(offset), out var rune, out var consumed) != OperationStatus.Done ||
+                ++scalarCount > maximumScalarCount) return false;
             var category = Rune.GetUnicodeCategory(rune);
             if (category is UnicodeCategory.Control or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator) return false;
             offset += consumed;
@@ -656,8 +658,8 @@ public static class IncidentConcurrencyContract
 
 public static class IncidentActorIdentityContract
 {
-    public const int MaximumIssuerLength = 512;
-    public const int MaximumSubjectLength = 512;
+    public const int MaximumIssuerLength = TimezonePreferenceContract.MaximumIssuerLength;
+    public const int MaximumSubjectLength = TimezonePreferenceContract.MaximumSubjectLength;
 
     public static bool HasValidIssuerAndSubject(string? issuer, string? subject) =>
         TimezonePreferenceContract.IsValidPrincipalComponent(issuer, MaximumIssuerLength) &&

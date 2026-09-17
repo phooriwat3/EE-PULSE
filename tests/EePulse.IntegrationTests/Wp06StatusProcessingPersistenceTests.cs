@@ -137,7 +137,7 @@ public sealed class Wp06StatusProcessingPersistenceTests
         await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO incident_lifecycle_events (event_id, incident_id, probe_id, source_agent_id, source_result_id, source_from_status, source_to_status, source_reason_code, policy_snapshot_id, policy_version, lifecycle_event_type, lifecycle_event_key, processing_disposition, occurred_at) VALUES ({Guid.NewGuid()}, {incident.Id}, {seed.ProbeId}, {seed.AgentId}, {seed.ResultId}, {"Unknown"}, {"Up"}, {"bootstrap-success"}, {policy.Id}, {policy.PolicyVersion}, {"Opened"}, {"opened"}, {"StateDriving"}, {seed.Now})", ct));
         await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO incident_lifecycle_events (event_id, incident_id, probe_id, source_agent_id, source_result_id, source_from_status, source_to_status, source_reason_code, policy_snapshot_id, policy_version, lifecycle_event_type, lifecycle_event_key, processing_disposition, occurred_at) VALUES ({Guid.NewGuid()}, {incident.Id}, {seed.ProbeId}, {seed.AgentId}, {mismatchResultId}, {"Degraded"}, {"Down"}, {"failure-threshold-met"}, {unrelatedPolicy.Id}, {unrelatedPolicy.PolicyVersion}, {"Opened"}, {"opened"}, {"StateDriving"}, {seed.Now})", ct));
         var resolvedIncidentId = Guid.NewGuid();
-        await direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({resolvedIncidentId}, {seed.ProbeId}, {"availability-down"}, {"Resolved"}, {seed.Now}, {seed.Now}, {"system-policy"}, {"confirmed-recovery"})", ct);
+        await direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({resolvedIncidentId}, {seed.ProbeId}, {"availability-down"}, {"Resolved"}, {seed.Now}, {seed.Now}, NULL, {"confirmed-recovery"})", ct);
         await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO incident_lifecycle_events (event_id, incident_id, probe_id, source_agent_id, source_result_id, source_from_status, source_to_status, source_reason_code, policy_snapshot_id, policy_version, lifecycle_event_type, lifecycle_event_key, processing_disposition, occurred_at) VALUES ({Guid.NewGuid()}, {resolvedIncidentId}, {seed.ProbeId}, {seed.AgentId}, {seed.SecondResultId}, {"Up"}, {"Down"}, {"failure-threshold-met"}, {policy.Id}, {policy.PolicyVersion}, {"Opened"}, {"opened"}, {"StateDriving"}, {seed.Now})", ct));
         await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO notification_suppression_contexts (event_id, incident_id, lifecycle_event_key, policy_version, eligibility, reason_code, evaluated_at) VALUES ({lifecycleEvent.EventId}, {incident.Id}, {"opened"}, {policy.PolicyVersion}, {"Eligible"}, {"availability-down"}, {seed.Now})", ct));
         await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE incident_lifecycle_events SET occurred_at = {seed.Now.AddSeconds(1)} WHERE event_id = {lifecycleEvent.EventId}", ct));
@@ -282,7 +282,7 @@ public sealed class Wp06StatusProcessingPersistenceTests
         await AssertCheckViolationAsync(() => InsertSuppressionContextAsync(direct, reasonEventId, reasonSource.IncidentId, reasonKey, policy.PolicyVersion, "Suppressed", "availability-down", null, ct), "ck_notification_suppression_contexts_reason");
 
         var duplicateSourceIncidentId = Guid.NewGuid();
-        await direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({duplicateSourceIncidentId}, {occurrence.ProbeId}, {"availability-down"}, {"Resolved"}, {occurrence.EventAt}, {occurrence.EventAt}, {"system-policy"}, {"confirmed-recovery"})", ct);
+        await direct.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO availability_incidents (id, probe_id, rule_key, status, opened_at, resolved_at, resolved_by, resolution_note) VALUES ({duplicateSourceIncidentId}, {occurrence.ProbeId}, {"availability-down"}, {"Resolved"}, {occurrence.EventAt}, {occurrence.EventAt}, NULL, {"confirmed-recovery"})", ct);
         var duplicateSourceWithDistinctIncident = occurrence with { IncidentId = duplicateSourceIncidentId };
         // The distinct incident makes the incident/key/policy alternate key valid while retaining the duplicated source identity.
         await AssertUniqueViolationAsync(() => InsertLifecycleEventAsync(direct, Guid.NewGuid(), duplicateSourceWithDistinctIncident, policy, "Occurrence", occurrenceKey, ProbeResultProcessingDispositionKind.StateDriving, ct), "ux_incident_lifecycle_events_opening_source");
@@ -310,9 +310,23 @@ public sealed class Wp06StatusProcessingPersistenceTests
         }
 
         await migrator.MigrateAsync("20260826090858_WP06St05bRecoveryFailedOccurrences", ct);
-        await using var afterSt05b = new EePulseDbContext(options);
-        var incident = await afterSt05b.AvailabilityIncidents.AsNoTracking().SingleAsync(row => row.Id == incidentId, ct);
-        Assert.Equal(1, incident.OccurrenceCount);
+        await using var historicalConnection = new NpgsqlConnection(postgres.ConnectionString);
+        await historicalConnection.OpenAsync(ct);
+        await using var historicalCommand = new NpgsqlCommand("""
+            SELECT id, probe_id, rule_key, status, opened_at, occurrence_count
+            FROM availability_incidents
+            WHERE id = @incident_id
+            """, historicalConnection);
+        historicalCommand.Parameters.AddWithValue("incident_id", incidentId);
+        await using var historicalReader = await historicalCommand.ExecuteReaderAsync(ct);
+        Assert.True(await historicalReader.ReadAsync(ct));
+        Assert.Equal(incidentId, historicalReader.GetGuid(0));
+        Assert.Equal(seed.ProbeId, historicalReader.GetGuid(1));
+        Assert.Equal(AvailabilityIncident.AvailabilityDownRuleKey, historicalReader.GetString(2));
+        Assert.Equal("Open", historicalReader.GetString(3));
+        Assert.Equal(seed.Now.UtcDateTime, historicalReader.GetDateTime(4));
+        Assert.Equal(1, historicalReader.GetInt32(5));
+        Assert.False(await historicalReader.ReadAsync(ct));
     }
 
     private static void AssertSt03aModel(EePulseDbContext db)
@@ -1123,8 +1137,50 @@ public sealed class Wp06StatusProcessingPersistenceTests
 
         await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_freshness_expiry_causes SET due_at = {source.Cause.DueAt} WHERE cause_id = {source.Cause.CauseId}", ct), "probe_freshness_expiry_causes");
         await AssertAppendOnlyViolationAsync(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_freshness_expiry_causes WHERE cause_id = {source.Cause.CauseId}", ct), "probe_freshness_expiry_causes");
+        var ledgerRowBeforeDelete = await direct.Database.SqlQuery<string>($"""
+            SELECT to_jsonb(ledger_row)::text AS "Value"
+            FROM probe_result_ledger AS ledger_row
+            WHERE agent_id = {seed.AgentId} AND result_id = {seed.ResultId}
+            """).SingleAsync(ct);
+        var dispositionRowBeforeDelete = await direct.Database.SqlQuery<string>($"""
+            SELECT to_jsonb(disposition_row)::text AS "Value"
+            FROM probe_result_processing_dispositions AS disposition_row
+            WHERE agent_id = {seed.AgentId} AND result_id = {seed.ResultId}
+            """).SingleAsync(ct);
+        var causeRowBeforeDelete = await direct.Database.SqlQuery<string>($"""
+            SELECT to_jsonb(cause_row)::text AS "Value"
+            FROM probe_freshness_expiry_causes AS cause_row
+            WHERE cause_id = {source.Cause.CauseId}
+            """).SingleAsync(ct);
         var restrictiveDelete = await Assert.ThrowsAsync<PostgresException>(() => direct.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM probe_result_ledger WHERE agent_id = {seed.AgentId} AND result_id = {seed.ResultId}", ct));
         Assert.Equal(PostgresErrorCodes.RestrictViolation, restrictiveDelete.SqlState);
+        var expectedReferencingTable = restrictiveDelete.ConstraintName switch
+        {
+            "FK_probe_result_processing_dispositions_probe_result_ledger_ag~" => "probe_result_processing_dispositions",
+            "FK_probe_freshness_expiry_causes_probe_result_ledger_source_ag~" => "probe_freshness_expiry_causes",
+            _ => string.Empty,
+        };
+        Assert.NotEqual(string.Empty, expectedReferencingTable);
+        Assert.Equal(expectedReferencingTable, restrictiveDelete.TableName);
+
+        var ledgerRowAfterDelete = await direct.Database.SqlQuery<string>($"""
+            SELECT to_jsonb(ledger_row)::text AS "Value"
+            FROM probe_result_ledger AS ledger_row
+            WHERE agent_id = {seed.AgentId} AND result_id = {seed.ResultId}
+            """).SingleAsync(ct);
+        var dispositionRowAfterDelete = await direct.Database.SqlQuery<string>($"""
+            SELECT to_jsonb(disposition_row)::text AS "Value"
+            FROM probe_result_processing_dispositions AS disposition_row
+            WHERE agent_id = {seed.AgentId} AND result_id = {seed.ResultId}
+            """).SingleAsync(ct);
+        var causeRowAfterDelete = await direct.Database.SqlQuery<string>($"""
+            SELECT to_jsonb(cause_row)::text AS "Value"
+            FROM probe_freshness_expiry_causes AS cause_row
+            WHERE cause_id = {source.Cause.CauseId}
+            """).SingleAsync(ct);
+        Assert.Equal(ledgerRowBeforeDelete, ledgerRowAfterDelete);
+        Assert.Equal(dispositionRowBeforeDelete, dispositionRowAfterDelete);
+        Assert.Equal(causeRowBeforeDelete, causeRowAfterDelete);
 
         var nextResultId = Guid.NewGuid();
         var nextEventAt = seed.EventAt.AddSeconds(1);
@@ -1215,6 +1271,7 @@ public sealed class Wp06StatusProcessingPersistenceTests
         await using var db = new EePulseDbContext(options);
         var model = db.GetService<IDesignTimeModel>().Model;
         var cause = model.FindEntityType(typeof(ProbeFreshnessExpiryCause))!;
+        var processingDisposition = model.FindEntityType(typeof(ProbeResultProcessingDisposition))!;
 
         Assert.Contains(cause.GetKeys(), key => key.Properties.Select(property => property.Name)
             .SequenceEqual([nameof(ProbeFreshnessExpiryCause.ProbeId), nameof(ProbeFreshnessExpiryCause.SourceAgentId),
@@ -1237,6 +1294,13 @@ public sealed class Wp06StatusProcessingPersistenceTests
         AssertRestrictiveForeignKey(cause, [nameof(ProbeFreshnessExpiryCause.SourceAgentId), nameof(ProbeFreshnessExpiryCause.SourceResultId), nameof(ProbeFreshnessExpiryCause.SourceDisposition)], typeof(ProbeResultProcessingDisposition), [nameof(ProbeResultProcessingDisposition.AgentId), nameof(ProbeResultProcessingDisposition.ResultId), nameof(ProbeResultProcessingDisposition.Disposition)]);
         AssertRestrictiveForeignKey(cause, [nameof(ProbeFreshnessExpiryCause.SourceAgentGroupId), nameof(ProbeFreshnessExpiryCause.SourceConfigurationVersion)], typeof(AgentConfigurationSnapshot), [nameof(AgentConfigurationSnapshot.AgentGroupId), nameof(AgentConfigurationSnapshot.Version)]);
         AssertRestrictiveForeignKey(cause, [nameof(ProbeFreshnessExpiryCause.PolicySnapshotId), nameof(ProbeFreshnessExpiryCause.PolicyVersion)], typeof(ProbeStatusPolicySnapshot), [nameof(ProbeStatusPolicySnapshot.Id), nameof(ProbeStatusPolicySnapshot.PolicyVersion)]);
+        Assert.Equal("probe_result_processing_dispositions", processingDisposition.GetTableName());
+        AssertRestrictiveForeignKey(processingDisposition,
+            [nameof(ProbeResultProcessingDisposition.AgentId), nameof(ProbeResultProcessingDisposition.ResultId),
+                nameof(ProbeResultProcessingDisposition.ProbeId), nameof(ProbeResultProcessingDisposition.EventAt)],
+            typeof(ProbeResultLedgerEntry),
+            [nameof(ProbeResultLedgerEntry.AgentId), nameof(ProbeResultLedgerEntry.ResultId),
+                nameof(ProbeResultLedgerEntry.ProbeId), nameof(ProbeResultLedgerEntry.EndedAt)]);
 
         var expiryCause = new ProbeFreshnessExpiryCause(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
             new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero),

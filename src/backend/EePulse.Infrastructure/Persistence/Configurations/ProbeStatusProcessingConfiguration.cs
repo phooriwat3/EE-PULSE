@@ -1,4 +1,5 @@
 using EePulse.Domain.Agents;
+using EePulse.Domain.Identity;
 using EePulse.Domain.Inventory;
 using EePulse.Domain.Status;
 using Microsoft.EntityFrameworkCore;
@@ -399,9 +400,10 @@ internal sealed class AvailabilityIncidentConfiguration : IEntityTypeConfigurati
             t.HasCheckConstraint("ck_availability_incidents_rule_key", "rule_key = 'availability-down'");
             t.HasCheckConstraint("ck_availability_incidents_status", "status IN ('Open', 'Acknowledged', 'Resolved')");
             t.HasCheckConstraint("ck_availability_incidents_occurrence_count", "occurrence_count >= 1");
-            t.HasCheckConstraint("ck_availability_incidents_lifecycle", "(acknowledged_at IS NULL AND acknowledged_by IS NULL AND acknowledgement_comment IS NULL) OR (acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledgement_comment IS NOT NULL)");
-            t.HasCheckConstraint("ck_availability_incidents_resolution", "(resolved_at IS NULL AND resolved_by IS NULL AND resolution_note IS NULL) OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution_note IS NOT NULL)");
-            t.HasCheckConstraint("ck_availability_incidents_status_lifecycle", "(status = 'Open' AND acknowledged_at IS NULL AND resolved_at IS NULL) OR (status = 'Acknowledged' AND acknowledged_at IS NOT NULL AND resolved_at IS NULL) OR (status = 'Resolved' AND resolved_at IS NOT NULL)");
+            t.HasCheckConstraint("ck_availability_incidents_row_version", "row_version > 0");
+            t.HasCheckConstraint("ck_availability_incidents_lifecycle", "(acknowledged_at IS NULL AND acknowledged_by IS NULL AND acknowledgement_comment IS NULL) OR (acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND char_length(COALESCE(acknowledgement_comment, '')) BETWEEN 1 AND 2000)");
+            t.HasCheckConstraint("ck_availability_incidents_resolution", "(resolved_at IS NULL AND resolved_by IS NULL AND resolution_note IS NULL) OR (resolved_at IS NOT NULL AND char_length(COALESCE(resolution_note, '')) BETWEEN 1 AND 2000 AND (resolved_by IS NOT NULL OR resolution_note = 'confirmed-recovery'))");
+            t.HasCheckConstraint("ck_availability_incidents_status_lifecycle", "(status = 'Open' AND acknowledged_at IS NULL AND acknowledged_by IS NULL AND acknowledgement_comment IS NULL AND resolved_at IS NULL AND resolved_by IS NULL AND resolution_note IS NULL) OR (status = 'Acknowledged' AND acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND char_length(COALESCE(acknowledgement_comment, '')) BETWEEN 1 AND 2000 AND resolved_at IS NULL AND resolved_by IS NULL AND resolution_note IS NULL) OR (status = 'Resolved' AND resolved_at IS NOT NULL AND char_length(COALESCE(resolution_note, '')) BETWEEN 1 AND 2000 AND (resolved_by IS NOT NULL OR resolution_note = 'confirmed-recovery') AND ((acknowledged_at IS NULL AND acknowledged_by IS NULL AND acknowledgement_comment IS NULL) OR (acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND char_length(COALESCE(acknowledgement_comment, '')) BETWEEN 1 AND 2000)))");
             t.HasCheckConstraint("ck_availability_incidents_timestamps", "(acknowledged_at IS NULL OR opened_at <= acknowledged_at) AND (resolved_at IS NULL OR opened_at <= resolved_at) AND (acknowledged_at IS NULL OR resolved_at IS NULL OR acknowledged_at <= resolved_at)");
         });
         b.HasKey(x => x.Id);
@@ -412,14 +414,19 @@ internal sealed class AvailabilityIncidentConfiguration : IEntityTypeConfigurati
         b.Property(x => x.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20);
         b.Property(x => x.OpenedAt).HasColumnName("opened_at");
         b.Property(x => x.AcknowledgedAt).HasColumnName("acknowledged_at");
-        b.Property(x => x.AcknowledgedBy).HasColumnName("acknowledged_by").HasMaxLength(128);
-        b.Property(x => x.AcknowledgementComment).HasColumnName("acknowledgement_comment").HasMaxLength(1_000);
+        b.Property(x => x.AcknowledgedBy).HasColumnName("acknowledged_by");
+        b.Property(x => x.AcknowledgementComment).HasColumnName("acknowledgement_comment").HasMaxLength(2_000);
         b.Property(x => x.ResolvedAt).HasColumnName("resolved_at");
-        b.Property(x => x.ResolvedBy).HasColumnName("resolved_by").HasMaxLength(128);
-        b.Property(x => x.ResolutionNote).HasColumnName("resolution_note").HasMaxLength(1_000);
+        b.Property(x => x.ResolvedBy).HasColumnName("resolved_by");
+        b.Property(x => x.ResolutionNote).HasColumnName("resolution_note").HasMaxLength(2_000);
         b.Property(x => x.OccurrenceCount).HasColumnName("occurrence_count");
+        b.Property(x => x.RowVersion).HasColumnName("row_version").HasColumnType("bigint").IsRequired().IsConcurrencyToken();
         b.HasIndex(x => new { x.ProbeId, x.RuleKey }).IsUnique().HasFilter("status IN ('Open', 'Acknowledged')").HasDatabaseName("ux_availability_incidents_active_probe_rule");
         b.HasOne<Probe>().WithMany().HasForeignKey(x => x.ProbeId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<HumanPrincipal>().WithMany().HasForeignKey(x => x.AcknowledgedBy)
+            .HasConstraintName("fk_availability_incidents_human_principals_acknowledged_by").OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<HumanPrincipal>().WithMany().HasForeignKey(x => x.ResolvedBy)
+            .HasConstraintName("fk_availability_incidents_human_principals_resolved_by").OnDelete(DeleteBehavior.Restrict);
     }
 }
 

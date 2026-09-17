@@ -1,7 +1,7 @@
 # WP-07 dashboard and device experience — contract and policy design
 
-Status: Phase 2A, Phase 2B1A, and Phase 2B1B runtime final-verified; Phase 2B2 Commit 1 incident contracts frozen and runtime not started (2026-09-14)
-Scope: Phase 2A implements the timezone-preference contract, persistence foundation, API slice, authorization, and generated OpenAPI. Phase 2B1A implements `GET /api/v1/dashboard/summary`; Phase 2B1B implements `GET /api/v1/devices/{id}/status`. Phase 2B2 Commit 1 freezes incident read/action contracts only; it adds no runtime, and the explicit OpenAPI checkpoint remains pending.
+Status: Phase 2A, Phase 2B1A, and Phase 2B1B runtime final-verified; Phase 2B2 Commit 1 incident contracts frozen and Commit 2 persistence foundation final-verified (2026-09-16); incident runtime remains unstarted.
+Scope: Phase 2A implements the timezone-preference contract, persistence foundation, API slice, authorization, and generated OpenAPI. Phase 2B1A implements `GET /api/v1/dashboard/summary`; Phase 2B1B implements `GET /api/v1/devices/{id}/status`. Phase 2B2 Commit 1 freezes incident read/action contracts; Commit 2 adds the verified human-principal and incident-concurrency persistence foundation only. Runtime endpoints, actions, and the explicit OpenAPI checkpoint remain pending.
 
 ## Phase 2B1A and Phase 2B1B frozen runtime contracts
 
@@ -55,6 +55,52 @@ Incident duration is `TotalDowntimeSeconds`, nullable. For a resolved incident i
 Public `AcknowledgedBy`, `ResolvedBy`, lifecycle `ActorId`, and comment `AuthorId` values are nullable surrogate UUIDs only. The future mapping key is the exact authenticated, non-empty, bounded OIDC `iss` + `sub` pair, uniquely mapped to an internal surrogate UUID; email, display name, role, `NameIdentifier`, and `Guid.Empty` are never fallbacks. Issuer, subject, tokens, authorization values, and mapping internals are not exposed or logged. This freezes identity requirements only; it does not add an identity table or migration.
 
 Incident reads use `incidents.read` for Viewer, Operator, Engineer, Administrator, and Auditor. Acknowledge, comment, and manual resolution use `incidents.operate` for Operator and Administrator. The existing role matrix is unchanged. Manual resolution while the underlying Probe status is `Down` or `Recovering` returns `409 incident-manual-resolution-state-conflict`, includes the unchanged ETag in the header and `currentEtag` extension, and makes no incident, lifecycle, comment, or audit mutation.
+
+## Phase 2B2 Commit 2 persistence foundation verification (2026-09-16)
+
+WP-07 Phase 2B2 Commit 2 human-principal and incident-concurrency persistence foundation, including the C1-control constraint correction, is final-verified. Incident runtime endpoints and commands remain unstarted.
+
+The additive EF migration `20260914145214_WP07Phase2B2IncidentFoundation` creates the UUID-backed `human_principals` identity table with the exact issuer/subject uniqueness boundary, migrates incident actor columns to nullable UUID foreign keys with restrict semantics, and adds the incident `row_version` concurrency foundation. PostgreSQL enforces principal-row immutability with a schema-qualified `BEFORE UPDATE OR DELETE` trigger and fixed safe error; direct inserts remain supported. The approved compatibility fixture adaptations preserve the WP-06 confirmed-recovery behavior without creating a synthetic system principal.
+
+Operationally, downgrading this migration requires quiesced writes to `human_principals` and `availability_incidents`. The `Down` migration acquires `availability_incidents` and then `human_principals` with PostgreSQL `ACCESS EXCLUSIVE NOWAIT` locks inside its transaction before validation or destructive work; if either table is busy, it fails closed immediately with SQLSTATE `55P03` (`lock_not_available`) and leaves the current schema and data intact. Once both locks are held, values longer than the legacy 1,000-character limit fail closed with SQLSTATE `23514` before column conversion, followed by the protected identity or actor and row-version checks. A successful downgrade also requires no principal rows or actor references, every incident `row_version` to equal `1`, and lifecycle text to fit the legacy limit; actor-free automatic resolution must retain `resolution_note = 'confirmed-recovery'`.
+
+Final verification used pinned .NET SDK 10.0.302 on the Windows host. The serialized fresh Release solution build passed with 0 warnings/errors in 5.71s; the complete unit and integration suites, all six affected integration classes, style/analyzer verification, and final hygiene passed. Every counted successful test run had discovered = total = passed, with 0 failed, errors, skipped, or not-run tests.
+
+An initial complete-unit-suite MTP launch was blocked before test discovery by host named-pipe access. It executed zero tests and is excluded from the reported counts; this was an environment/access failure, not a test failure. Only the successful permitted rerun contributes to the final 160/160 unit-test result.
+
+| Final gate | Discovered / total / passed / failed / errors / skipped / not run | Runner duration; process wall duration |
+| --- | --- | --- |
+| Complete `EePulse.UnitTests` | 160 / 160 / 160 / 0 / 0 / 0 / 0 | MTP 3.020s; 2.779s |
+| `TimezonePreferenceApiTests` | 24 / 24 / 24 / 0 / 0 / 0 / 0 | MTP 1m38.581s; 1m37.603s |
+| `UserTimezonePreferencePersistenceTests` | 1 / 1 / 1 / 0 / 0 / 0 / 0 | MTP 8.683s; 8.426s |
+| `AgentApiTests` | 15 / 15 / 15 / 0 / 0 / 0 / 0 | MTP 1m17.196s; 1m16.945s |
+| `ProbeResultStatusProcessorTests` | 86 / 86 / 86 / 0 / 0 / 0 / 0 | MTP 6m47.385s; 6m47.133s |
+| `Wp06StatusProcessingPersistenceTests` | 23 / 23 / 23 / 0 / 0 / 0 / 0 | MTP 1m29.993s; 1m28.641s |
+| `Wp07IncidentPersistenceTests` | 16 / 16 / 16 / 0 / 0 / 0 / 0 | MTP 1m07.233s; 1m06.987s |
+| Complete `EePulse.IntegrationTests` | 213 / 213 / 213 / 0 / 0 / 0 / 0 | MTP 14m44.108s; 14m43.776s |
+| `dotnet format style --verify-no-changes` | Passed | 27.199s |
+| `dotnet format analyzers --verify-no-changes` | Passed | 35.499s |
+
+The resource admission gate passed (3.29 GiB free physical memory, 10.53 GiB commit headroom, pagefile active with 16,110 MiB allocated/1,216 MiB used, 38.81 GiB free on C:, no GC/MSBuild heap-limit variables, and no repository build/test process). Docker Desktop Linux was available through the canonical npipe endpoint. The earlier Roslyn OOM did not reproduce. `git diff --check`, trailing-whitespace/final-newline hygiene, exact 22-path scope, and no-staged-files checks passed. The complete integration run includes the WP-06 migration/backfill and St09b ledger compatibility coverage; the focused class runs above independently passed.
+
+Principal database-boundary evidence passed: C1 controls U+0080–U+009F are rejected independently for issuer and subject while U+00A1 remains accepted; direct principal UPDATE and DELETE fail with SQLSTATE `23514`, fixed message `WP07 human principals are immutable.`, and trigger identity `tr_human_principals_immutable`, without changing principal mapping or incident actor references. The trigger/function exist after migration Up and are removed by Down. Incident actor foreign keys retain PostgreSQL RESTRICT behavior. St09b proves ledger deletion fails with SQLSTATE `23001`, accepts only the two known ledger-referencing FK identities with their matching referencing tables, and verifies unchanged JSONB snapshots for ledger, disposition, and freshness-cause rows. Both EF ledger relationships use `DeleteBehavior.Restrict`; derived-table append-only tests expect PostgreSQL `P0001` from the migration's bare `RAISE EXCEPTION`; no append-only trigger was added to `probe_result_ledger`. WP-06 compatibility remains intact.
+
+The pre-C1-control checkpoint evidence below is retained unchanged as historical evidence; its counts, timings, and checkpoint status describe that earlier run and are superseded by the final results above.
+
+Previously verified evidence:
+
+- Windows-host resource gate passed: 4.23 GiB free physical memory; 11.22 GiB commit headroom (35.7%); pagefile 16,110 MiB allocated and 1,704 MiB used; no `DOTNET_GC*`, `COMPlus_GC*`, or `MSBuild*` heap-limit variables; C: had 38.97 GiB free; no repository build/test process was active.
+- Release integration-project rebuild: 0 warnings/errors in 21.95s. Fresh Release solution build: 0 warnings/errors in 16.98s. The controlled Roslyn retry did not reproduce the earlier OOM.
+- `TimezonePreferenceApiTests`: 24/24 passed in 1m35.579s. Complete unit suite: 160/160 passed in 4.569s.
+- Focused Commit 2 methods each passed 1/1: `EfModelMapsHumanPrincipalAndIncidentPersistenceFoundation`, `HumanPrincipalSqlConstraintsUsePostgreSqlCharacterLengthForAstralBoundaries`, `LongIncidentTextDowngradeFailsClosedBeforeLegacyColumnConversion`, `NontrivialRowVersionDowngradeFailsClosedWithoutLosingCurrentSchemaData`, `ConcurrentActorWriteFailsFastBeforeDowngradeGuardRuns`, `ConcurrentPrincipalWriteIsObservedBeforeDowngradeGuardRuns`, `PopulatedPrincipalDowngradeFailsClosedWithoutLosingCurrentSchemaData`, and `CleanAndBaselineMigrationsPreserveSupportedWp06DataAndRejectUnknownActors`.
+- WP-06 `St03aPersistenceEnforcesOpeningEvidenceUniquenessAndAppendOnlyHandoff`: 1/1 passed in 8.043s. `St05bMigrationBackfillsPreExistingIncidentsToOne`: 1/1 passed in 6.989s.
+- Complete `Wp07IncidentPersistenceTests`: 12/12 passed in 49.181s. Complete PostgreSQL-backed integration suite: 209/209 passed, 0 failed/skipped, in 13m23.775s.
+- `dotnet format style --verify-no-changes` and `dotnet format analyzers --verify-no-changes` passed. Final hygiene passed: exact 22-path approved scope (16 tracked modifications and 6 approved new files), no staged files, and no whitespace or final-newline issues.
+- The quality/security gate passed. The .NET vulnerability audit found no vulnerable packages. `npm audit` exited 0 with two moderate `@vitest/mocker` advisories; no dependency changes were made.
+- `gitleaks` and `trivy` were unavailable and remain optional tooling gaps.
+- `docs/api/openapi-v1.json` was not regenerated and remains unchanged at 154,533 bytes with SHA-256 `44F2C9D1EB902E1EC44C6395305F328F262A3D592E9EDF7BA40724C030DE435C`.
+
+This evidence covers the persistence foundation only. Runtime incident endpoints/actions, SignalR, frontend/UI, and Commit 3 have not started. WP-07 overall is not complete.
 
 ## 1. Boundaries and compatibility
 
@@ -110,7 +156,7 @@ Storage, event processing, query bounds, cursor ordering, audit, and SignalR pay
 
 ### Frozen timezone-preference contract (implemented in Phase 2A)
 
-The eventual implementation retains at most one global PostgreSQL row for each authenticated human principal after its first state-changing write. Its identity key is exactly the explicit authenticated `iss` plus `sub` claim pair. Both are required, non-empty, and at most 512 characters. Email, display name, role, `NameIdentifier`, and `Guid.Empty` are never fallbacks; missing either claim fails closed. Development authentication will supply constant issuer `https://ee-pulse.invalid/development` and a stable canonical synthetic subject derived from `X-EE-Pulse-Actor`. Production endpoints remain unavailable to identities without explicit issuer and subject claims.
+The eventual implementation retains at most one global PostgreSQL row for each authenticated human principal after its first state-changing write. Its identity key is exactly the explicit authenticated `iss` plus `sub` claim pair. Both are required, non-empty, and at most 512 Unicode scalar values (PostgreSQL characters/code points). Email, display name, role, `NameIdentifier`, and `Guid.Empty` are never fallbacks; missing either claim fails closed. Development authentication will supply constant issuer `https://ee-pulse.invalid/development` and a stable canonical synthetic subject derived from `X-EE-Pulse-Actor`. Production endpoints remain unavailable to identities without explicit issuer and subject claims.
 
 The sole preference field is nullable `timezone`. `GET /api/v1/users/me/timezone-preference` is read-only and never creates a row. With no row it returns HTTP 200, `{ "timezone": null, "etag": "\"tz-0\"" }`, and `ETag: "tz-0"`. The no-row ETag is therefore exactly `"tz-0"`. A retained row has monotonically increasing positive version `n` and exactly `ETag: "tz-n"`; this cannot collide with `"tz-0"`. Response-body `etag` and response-header `ETag` are byte-identical. GET supports `If-None-Match`; a 304 includes the current ETag. The generated OpenAPI documents the conditional request header, strong ETag response header, server-controlled `X-Correlation-ID`, and 200/304/400/401/403 outcomes.
 
@@ -154,4 +200,4 @@ Clients reconnect with bounded exponential backoff and jitter. On successful rec
 
 When a route reaches its explicit OpenAPI generation/documentation checkpoint, its generated OpenAPI metadata declares operation IDs, security, headers, schemas, `401`, `403`, `404`, validation `400`, rate/dependency failures where applicable, and the command-specific `412`, `428`, and `409` responses. Runtime implementation alone does not imply generated OpenAPI inclusion: an implemented route may remain excluded from endpoint description until that checkpoint. Problem Details have a stable machine-readable code and correlation ID; sensitive infrastructure details, metrics query text, and audit before/after data are excluded.
 
-Phase 2A acceptance includes the generated OpenAPI artifact, contract/API tests, PostgreSQL persistence tests, deterministic race and rollback tests, complete unit/integration verification, pinned Release build, format/analyzer checks, and scoped whitespace checks. The Phase 2B1A summary and Phase 2B1B device-status reads are implemented and focused-verified. Phase 2B2 incident read/action contracts are frozen, while incident persistence and API runtime remain pending; metrics, timeline, and audit-list contracts/runtime remain later WP-07 work. SignalR runtime and frontend UI remain later slices. WP-08 owns notification fan-out; WP-09 owns reporting/retention boundaries.
+Phase 2A acceptance includes the generated OpenAPI artifact, contract/API tests, PostgreSQL persistence tests, deterministic race and rollback tests, complete unit/integration verification, pinned Release build, format/analyzer checks, and scoped whitespace checks. The Phase 2B1A summary and Phase 2B1B device-status reads are implemented and focused-verified. Phase 2B2 incident read/action contracts are frozen, and the Commit 2 persistence foundation—including the C1-control correction—has passed its complete unit/integration, pinned Release build, format/analyzer, and scoped hygiene gates. Incident runtime persistence, APIs/services, and actions remain unstarted. Generated OpenAPI inclusion remains deferred to its later explicit checkpoint. Metrics, timeline, and audit-list contracts/runtime remain later WP-07 work. SignalR runtime and frontend UI remain later slices. WP-08 owns notification fan-out; WP-09 owns reporting/retention boundaries.

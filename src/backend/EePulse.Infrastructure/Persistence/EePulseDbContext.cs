@@ -1,5 +1,6 @@
 using EePulse.Domain.Auditing;
 using EePulse.Domain.Agents;
+using EePulse.Domain.Identity;
 using EePulse.Domain.Inventory;
 using EePulse.Domain.Preferences;
 using EePulse.Domain.Status;
@@ -42,6 +43,7 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
     public DbSet<IncidentLifecycleEvent> IncidentLifecycleEvents => Set<IncidentLifecycleEvent>();
     public DbSet<NotificationSuppressionContext> NotificationSuppressionContexts => Set<NotificationSuppressionContext>();
     public DbSet<UserTimezonePreference> UserTimezonePreferences => Set<UserTimezonePreference>();
+    public DbSet<HumanPrincipal> HumanPrincipals => Set<HumanPrincipal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -87,6 +89,7 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         RejectChanges(ChangeTracker.Entries<ProbeResultStatusTransition>(), "Probe result status transitions are immutable.");
         RejectChanges(ChangeTracker.Entries<IncidentLifecycleEvent>(), "Incident lifecycle events are immutable.");
         RejectChanges(ChangeTracker.Entries<NotificationSuppressionContext>(), "Notification suppression contexts are immutable.");
+        RejectChanges(ChangeTracker.Entries<HumanPrincipal>(), "Human principal mappings are immutable.");
 
         IncrementVersion(ChangeTracker.Entries<Site>());
         IncrementVersion(ChangeTracker.Entries<Device>());
@@ -95,6 +98,7 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
         IncrementVersion(ChangeTracker.Entries<MaintenanceWindow>());
         IncrementVersion(ChangeTracker.Entries<Agent>());
         IncrementVersion(ChangeTracker.Entries<AgentEnrollmentToken>());
+        IncrementVersion(ChangeTracker.Entries<AvailabilityIncident>());
         IncrementStateVersion(ChangeTracker.Entries<ProbeStatusProjection>());
     }
 
