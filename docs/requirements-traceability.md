@@ -1,9 +1,9 @@
 # EE Pulse requirements traceability
 
-Last updated: 2026-09-16
+Last updated: 2026-09-18
 Status legend: Not started, In progress, Implemented, Verified, Blocked.
 
-WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. WP-05 durable outbox/delivery/ingestion was merged in `2c22766` (PR #5). WP-06 status projection, transition, incident, lifecycle-event, suppression, maintenance-precedence, freshness, and heartbeat-expiry behavior is merged in `751b6bd5`. WP-07 Phase 2A timezone-preference, Phase 2B1A dashboard-summary, and Phase 2B1B device-status runtime slices are final-verified; Phase 2B2 Commit 1 incident read/action contracts are frozen and Commit 2 persistence foundation is final-verified. Incident runtime is not started. Generated OpenAPI inclusion remains a later explicit checkpoint; incident runtime, audit listing, timeline, metrics, SignalR runtime, frontend UI, WP-08 notifications, and WP-09 reporting/retention remain pending.
+WP-02 backend inventory and its inventory frontend slice are implemented and integration-verified. WP-04 is locally integration-verified as a deterministic probe-runtime foundation using fake time and transport. WP-05 durable outbox/delivery/ingestion was merged in `2c22766` (PR #5). WP-06 status projection, transition, incident, lifecycle-event, suppression, maintenance-precedence, freshness, and heartbeat-expiry behavior is merged in `751b6bd5`. WP-07 Phase 2A timezone-preference, Phase 2B1A dashboard-summary, and Phase 2B1B device-status runtime slices are final-verified; Phase 2B2 Commit 1 incident read/action contracts and Commit 3 runtime design are frozen by [ADR-013](adr/ADR-013-wp07-phase2b2-incident-runtime.md), and Commit 2 persistence foundation is final-verified. Commit 3 incident runtime is not started. Generated OpenAPI inclusion remains a later explicit checkpoint; incident runtime, audit listing, timeline, metrics, SignalR runtime, frontend UI, WP-08 notifications, and WP-09 reporting/retention remain pending.
 
 ## Functional requirements
 
@@ -90,7 +90,7 @@ Final Phase 2B1B verification passed on the current eight-file diff against base
 
 ### WP-07 Phase 2B2 Commit 1 contract status (2026-09-14)
 
-Incident list/detail, device incident history, lifecycle-event/comment reads, acknowledge, add-comment, and constrained manual-resolution contracts and policies are frozen. The DTO contract uses resolved UTC instants for `TotalDowntimeSeconds`, opaque strong incident ETags in headers, and surrogate UUID actor IDs backed in a future runtime by the exact bounded OIDC issuer/subject pair. Comment and resolution-note limits remain 2,000 characters, with indefinite receipt retention until WP-09/UA-09 defines policy. No incident persistence, endpoint/runtime, identity-table, migration, timeline, SignalR, frontend, metrics, notification, reporting, audit-list, or OpenAPI implementation is claimed. Generated OpenAPI remains deferred. The Phase 2B1B runtime verification evidence recorded above is preserved.
+Incident list/detail, device incident history, lifecycle-event/comment reads, acknowledge, add-comment, and constrained manual-resolution contracts and policies are frozen. The DTO contract uses resolved UTC instants for `TotalDowntimeSeconds`, opaque strong incident ETags in headers, and surrogate UUID actor IDs backed in a future runtime by the exact bounded OIDC issuer/subject pair. Comment and resolution-note limits remain 2,000 UTF-16 code units, with indefinite receipt retention until WP-09/UA-09 defines policy. No incident persistence, endpoint/runtime, identity-table, migration, timeline, SignalR, frontend, metrics, notification, reporting, audit-list, or OpenAPI implementation is claimed. Generated OpenAPI remains deferred. The Phase 2B1B runtime verification evidence recorded above is preserved.
 
 ### WP-07 Phase 2B2 Commit 2 persistence foundation evidence (2026-09-16)
 
@@ -131,6 +131,17 @@ The following pre-C1-control table is retained as historical checkpoint evidence
 | Security and artifact integrity | Verified with noted gaps | .NET vulnerability audit found no vulnerable packages. `npm audit` exited 0 with two moderate `@vitest/mocker` advisories. `gitleaks` and `trivy` were unavailable as optional tooling. OpenAPI remains unchanged at 154,533 bytes with SHA-256 `44F2C9D1EB902E1EC44C6395305F328F262A3D592E9EDF7BA40724C030DE435C`. |
 
 This is a persistence-foundation checkpoint, not completion of WP-07. Incident runtime endpoints/actions, SignalR, frontend/UI, and Commit 3 have not started; the historical Commit 1 evidence above is not altered.
+
+### WP-07 Phase 2B2 Commit 3 design freeze (2026-09-18)
+
+[ADR-013](adr/ADR-013-wp07-phase2b2-incident-runtime.md) is accepted and freezes the documentation-only runtime design. Traceability retains the previous exact receipt/child composites, action/reason tokens, engine `0` and public-action `1` source ranks, two-integer namespace `1464873015` derivation, ETag-before-state-conflict rule, manual-resolution projection mutation, and general-comment concurrency/no-lifecycle behavior. Review 3 adds `request_fingerprint_version = 1` with exact versioned length-prefixed SHA-256 bytes and retained-v1 comparison; determinate rollback before `COMMIT` versus indeterminate post-COMMIT transport/cancellation retry; pre-database rejection of U+0000–U+001F, U+007F–U+009F, U+2028, and U+2029; and the post-role `PrincipalIdentityResolver` boundary (`403 invalid-incident-actor-identity`) before any command input/database work. It corrects whitespace-only raw text to the `[Required]` stage, permits the mandatory immutable HumanPrincipal replay read, operationalizes the separate disposable `wp07_non_utf8_fixture`, and freezes missing Idempotency-Key as `400 invalid-idempotency-key`. The final Review 4 corrections require non-replacing strict UTF-8/JSON surrogate decoding before DTO construction (`400 invalid-json`) and `Pooling=false` plus mandatory administrative cleanup for every disposable-fixture connection. The exact two-flush/one-commit transaction, SQLSTATE `23514` append-only triggers, SQLSTATE `55000` first-Up UTF8 preflight, non-null authors/actors, and future eight-route acceptance matrix remain in force. None of this runtime or coverage has started or passed. Commit 2 remains the verified baseline; SignalR, frontend/UI, audit listing, generated OpenAPI inclusion, WP-08, and WP-09 remain outside scope. WP-07 overall remains incomplete.
+
+The final fixture and Unicode additions retain the Review 4 strict decoding
+boundary: each command separately proves paired-surrogate, direct valid-UTF8
+supplementary-scalar, and literal-U+FFFD behavior through persistence,
+fingerprint, response, and replay. The disposable non-UTF8 database is created
+and dropped transaction-free by the privileged Testcontainer `postgres` role,
+with `Pooling=false` fixture connections and mandatory cleanup.
 
 ## WP-01 architecture evidence
 
