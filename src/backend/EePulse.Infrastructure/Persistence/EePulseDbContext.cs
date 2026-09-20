@@ -44,6 +44,9 @@ public sealed class EePulseDbContext(DbContextOptions<EePulseDbContext> options)
     public DbSet<NotificationSuppressionContext> NotificationSuppressionContexts => Set<NotificationSuppressionContext>();
     public DbSet<UserTimezonePreference> UserTimezonePreferences => Set<UserTimezonePreference>();
     public DbSet<HumanPrincipal> HumanPrincipals => Set<HumanPrincipal>();
+    public DbSet<IncidentComment> IncidentComments => Set<IncidentComment>();
+    public DbSet<IncidentLifecycleAction> IncidentLifecycleActions => Set<IncidentLifecycleAction>();
+    public DbSet<IdempotencyReceipt> IdempotencyReceipts => Set<IdempotencyReceipt>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -84,8 +84,9 @@ public sealed class Wp07IncidentPersistenceTests
         Assert.True(activeIndex.IsUnique);
         Assert.Equal("status IN ('Open', 'Acknowledged')", activeIndex.GetFilter());
 
-        Assert.DoesNotContain(model.GetEntityTypes(), entity =>
-            entity.GetTableName() is "incident_comments" or "incident_lifecycle_actions" or "idempotency_receipts");
+        Assert.NotNull(model.FindEntityType(typeof(IncidentComment)));
+        Assert.NotNull(model.FindEntityType(typeof(IncidentLifecycleAction)));
+        Assert.NotNull(model.FindEntityType(typeof(IdempotencyReceipt)));
 
         var persisted = new HumanPrincipal(Guid.NewGuid(), "https://issuer.example.test", "synthetic-subject", DateTimeOffset.UtcNow);
         await using (var modified = new EePulseDbContext(options))
