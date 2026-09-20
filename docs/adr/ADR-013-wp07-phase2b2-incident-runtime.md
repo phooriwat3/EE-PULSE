@@ -1365,7 +1365,103 @@ Every command also requires exactly one non-empty canonical lowercase UUID-D
 `Idempotency-Key` header. An absent, empty, malformed, or repeated header value
 is exactly `400 invalid-idempotency-key`.
 
-#### 5.1 Exact request-fingerprint v1 byte encoding
+#### 5.1 Exact incident ETag v1 byte encoding
+
+Incident ETag v1 is immutable. It is exactly the following canonical byte
+sequence, with `||` denoting concatenation:
+
+```text
+canonicalBytes =
+    ASCII("EE-PULSE/WP07/INCIDENT-ETAG/V1")
+    || 0x00
+    || u32be(length(incidentIdBytes))
+    || incidentIdBytes
+    || u32be(length(rowVersionBytes))
+    || rowVersionBytes
+```
+
+The marker is exactly `EE-PULSE/WP07/INCIDENT-ETAG/V1`, whose exact hexadecimal
+bytes are `45452D50554C53452F575030372F494E434944454E542D455441472F5631`.
+The separator after the marker is exactly one `0x00`. `u32be` is exactly four
+unsigned big-endian bytes. `incidentIdBytes` is a non-empty Guid formatted only
+as lowercase UUID-D: exactly 36 ASCII/UTF-8 bytes. Guid.Empty is rejected before
+hashing. The implementation must not use Guid.ToByteArray, TryWriteBytes, a
+database GUID byte layout, caller spelling, or culture-sensitive formatting.
+
+`rowVersionBytes` comes from a signed Int64 input in the inclusive range 1
+through Int64.MaxValue. It is invariant-culture minimal base-10 ASCII digits:
+no sign, leading zero, grouping, whitespace, or locale digits; its length is 1
+through 19 bytes. A row version less than or equal to zero is rejected before
+hashing. Int64.MaxValue is valid for read/vector generation, but a command that
+would advance it fails the checked advancement: no mutation or receipt commits,
+and sanitized server-failure handling applies. UTF-8 has no BOM. No JSON
+serializer, Unicode normalization, delimiter in place of a length, or
+platform-native endianness participates in this encoding.
+
+The final strong ETag is exactly the quoted result returned by
+`Wp07DashboardCanonicalizer.EtagFor(canonicalBytes)`: the literal
+`"wp07-2b1-sha256-"` prefix, followed by the raw unpadded base64url SHA-256
+digest, followed by the closing quote.
+Clients treat it as opaque even though this internal generation algorithm is
+frozen. Every successful acknowledge, comment, and resolve advances
+`row_version` exactly once; current ETag comparison remains mandatory before
+state-conflict evaluation. Replay returns `IdempotencyReceipt.ResponseEtag`
+exactly and never recomputes it, including for retained receipts after later
+state changes. Commit 3C detail reads reuse this provider. A v2 requires a new
+marker, vectors, ADR decision, and coordinated rollout.
+
+The following vectors were independently calculated from the specified bytes;
+each canonical hexadecimal value is one complete uninterrupted byte string.
+
+Vector 1:
+
+```text
+incident ID: 01234567-89ab-cdef-0123-456789abcdef
+row version: 1
+canonical hex: 45452D50554C53452F575030372F494E434944454E542D455441472F5631000000002430313233343536372D383961622D636465662D303132332D3435363738396162636465660000000131
+byte count: 76
+raw SHA-256: 7B5C71860C8A67B247BDDC90B7E63522832F598BD627BA44156FD77915A2786C
+raw unpadded base64url digest: e1xxhgyKZ7JHvdyQt-Y1IoMvWYvWJ7pEFW_XeRWieGw
+final strong ETag: "wp07-2b1-sha256-e1xxhgyKZ7JHvdyQt-Y1IoMvWYvWJ7pEFW_XeRWieGw"
+```
+
+Vector 2:
+
+```text
+incident ID: 01234567-89ab-cdef-0123-456789abcdef
+row version: 123456789
+canonical hex: 45452D50554C53452F575030372F494E434944454E542D455441472F5631000000002430313233343536372D383961622D636465662D303132332D34353637383961626364656600000009313233343536373839
+byte count: 84
+raw SHA-256: B16C53AC0053A82BB3B1AEC63E7647927089D7E79ED93B75426B205FECC97727
+raw unpadded base64url digest: sWxTrABTqCuzsa7GPnZHknCJ1-ee2Tt1QmsgX-zJdyc
+final strong ETag: "wp07-2b1-sha256-sWxTrABTqCuzsa7GPnZHknCJ1-ee2Tt1QmsgX-zJdyc"
+```
+
+Vector 3:
+
+```text
+incident ID: 00112233-4455-6677-8899-aabbccddeeff
+row version: 9223372036854775807
+canonical hex: 45452D50554C53452F575030372F494E434944454E542D455441472F5631000000002430303131323233332D343435352D363637372D383839392D6161626263636464656566660000001339323233333732303336383534373735383037
+byte count: 94
+raw SHA-256: 54A6D3300D79FB35D122D05A3DCE69BD678CF41D411D13FDE3546FEF6A049B09
+raw unpadded base64url digest: VKbTMA15-zXRItBaPc5pvWeM9B1BHRP941Rv72oEmwk
+final strong ETag: "wp07-2b1-sha256-VKbTMA15-zXRItBaPc5pvWeM9B1BHRP941Rv72oEmwk"
+```
+
+Vector 4:
+
+```text
+incident ID: ffeeddcc-bbaa-9988-7766-554433221100
+row version: 42
+canonical hex: 45452D50554C53452F575030372F494E434944454E542D455441472F5631000000002466666565646463632D626261612D393938382D373736362D353534343333323231313030000000023432
+byte count: 77
+raw SHA-256: 3E9584F118D29E9D633B68AD31E02E395D78F4DF9865641E1716CCCBBC4D0BA5
+raw unpadded base64url digest: PpWE8RjSnp1jO2itMeAuOV149N-YZWQeFxbMy7xNC6U
+final strong ETag: "wp07-2b1-sha256-PpWE8RjSnp1jO2itMeAuOV149N-YZWQeFxbMy7xNC6U"
+```
+
+#### 5.2 Exact request-fingerprint v1 byte encoding
 
 Every new receipt stores `request_fingerprint_version = 1` and a 32-byte
 `request_digest`. Version 1 is exactly SHA-256 over this one unambiguous byte
@@ -1419,7 +1515,7 @@ identity fields. Receipt comparison dispatches on the stored version. The v1
 encoder and comparer remain available for every retained version-1 receipt;
 there is no fallback encoding or reinterpretation of a stored v1 digest.
 
-#### 5.2 Exact idempotency-key advisory-lock derivation
+#### 5.3 Exact idempotency-key advisory-lock derivation
 
 For every valid command request, the lock identity starts with the exact
 validated, case-sensitive Idempotency-Key value after only the already-frozen
@@ -1850,6 +1946,14 @@ weakens every focused coverage requirement elsewhere in this ADR.
 The later runtime work is subdivided as follows. None of these subdivisions has
 started in this checkpoint.
 
+Commit 3B keeps `IncidentEtagV1`, fingerprint v1, advisory-key derivation, the
+coordinator, and related runtime types internal to EePulse.Api. It introduces no
+public Contracts DTO or public runtime API. UnitTests will reference EePulse.Api,
+which will grant only `InternalsVisibleTo("EePulse.UnitTests")` from the new API
+`Properties/AssemblyInfo.cs`; this is a test-to-API dependency only and creates
+no production circular dependency. Commit 3C reuses the API-internal ETag
+provider.
+
 | Subdivision | Later scope | Required boundary |
 | --- | --- | --- |
 | 3A | Additive runtime persistence: UTF8 preflight with the separate disposable non-UTF8 fixture, public lifecycle actions, comments, idempotency receipts, exact reciprocal composite child linkage, action-kind/reason constraints, append-only triggers/EF behavior, and UTF-16/.NET Trim PostgreSQL checks. | One new additive migration; exact Up/Down order; no historical migration rewrite and no OpenAPI change. |
@@ -1867,6 +1971,8 @@ not authorize any change in this documentation-only freeze.
 
 Future production paths:
 
+- `src/backend/EePulse.Api/EePulse.Api.csproj`
+- `src/backend/EePulse.Api/Properties/AssemblyInfo.cs` (new)
 - `src/backend/EePulse.Api/Program.cs`
 - `src/backend/EePulse.Api/Dashboard/IncidentEndpoints.cs` (new)
 - `src/backend/EePulse.Api/Dashboard/IncidentRuntimeService.cs` (new)
@@ -1883,6 +1989,7 @@ Future production paths:
 
 Future test paths:
 
+- `tests/EePulse.UnitTests/EePulse.UnitTests.csproj`
 - `tests/EePulse.UnitTests/Wp07IncidentRuntimeTests.cs` (new)
 - `tests/EePulse.IntegrationTests/Wp07IncidentRuntimeApiTests.cs` (new)
 - `tests/EePulse.IntegrationTests/Wp07IncidentRuntimePersistenceTests.cs` (new)
