@@ -1947,11 +1947,18 @@ The later runtime work is subdivided as follows. None of these subdivisions has
 started in this checkpoint.
 
 Commit 3B keeps `IncidentEtagV1`, fingerprint v1, advisory-key derivation, the
-coordinator, and related runtime types internal to EePulse.Api. It introduces no
-public Contracts DTO or public runtime API. UnitTests will reference EePulse.Api,
-which will grant only `InternalsVisibleTo("EePulse.UnitTests")` from the new API
-`Properties/AssemblyInfo.cs`; this is a test-to-API dependency only and creates
-no production circular dependency. Commit 3C reuses the API-internal ETag
+coordinator, handlers, contexts, results, and related runtime types internal to
+EePulse.Api. The new API `Properties/AssemblyInfo.cs` grants both
+`InternalsVisibleTo("EePulse.UnitTests")` and
+`InternalsVisibleTo("EePulse.IntegrationTests")`; both are test-to-API
+dependencies only and create no production circular dependency. No public
+facade, public Contracts DTO, reflection/dynamic boundary, or test-only HTTP
+route is introduced. `EePulse.IntegrationTests` may directly resolve and
+compose the internal coordinator and typed generic handler/context/result types
+through its PostgreSQL `WebApplicationFactory` test host. Its existing project
+reference to EePulse.Api requires no project-file change. HTTP command routes
+remain deferred to Commit 3E/3F, while mandatory PostgreSQL coordinator
+verification remains in Commit 3B. Commit 3C reuses the API-internal ETag
 provider.
 
 | Subdivision | Later scope | Required boundary |
