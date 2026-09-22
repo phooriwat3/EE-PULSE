@@ -10,6 +10,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\backend\EePulse.Application\EePulse.Application.csproj" />
+    <ProjectReference Include="..\..\src\backend\EePulse.Api\EePulse.Api.csproj" />
     <ProjectReference Include="..\..\src\backend\EePulse.Contracts\EePulse.Contracts.csproj" />
     <ProjectReference Include="..\..\src\backend\EePulse.Infrastructure\EePulse.Infrastructure.csproj" />
   </ItemGroup>

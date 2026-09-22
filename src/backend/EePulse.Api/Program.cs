@@ -51,6 +51,12 @@ try
     builder.Services.AddDashboardAuthorization();
     builder.Services.AddSingleton<PrincipalIdentityResolver>();
     builder.Services.AddScoped<TimezonePreferenceStore>();
+    builder.Services.AddScoped<IIncidentCommandCoordinator, IncidentCommandCoordinator>();
+    builder.Services.AddSingleton<IIncidentEtagProvider, IncidentEtagV1>();
+    builder.Services.AddSingleton<IIncidentRequestFingerprintProvider, IncidentRequestFingerprintV1Provider>();
+    builder.Services.AddSingleton<IIncidentIdempotencyAdvisoryKeyProvider, IncidentIdempotencyAdvisoryKeyProvider>();
+    builder.Services.AddSingleton<IIncidentCommitBoundary, IncidentCommitBoundary>();
+    builder.Services.AddSingleton<IIncidentTransactionBoundary, IncidentTransactionBoundary>();
     builder.Services.AddSingleton<DeviceCsvImportService>();
     builder.Services.AddHostedService<AgentOfflineService>();
     builder.Services.AddSingleton<AgentRateLimiter>();
