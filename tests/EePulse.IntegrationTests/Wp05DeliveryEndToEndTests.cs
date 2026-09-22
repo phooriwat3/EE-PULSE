@@ -21,6 +21,8 @@ public sealed class Wp05DeliveryEndToEndTests
 {
     private static readonly Guid ActorId = Guid.Parse("be2e5861-20f7-488e-b7e9-b7b0d4cdfecb");
     private static readonly JsonSerializerOptions AgentJson = CreateAgentJson();
+    private static readonly IOutboxDiskCapacityProvider DeliveryFixtureCapacityProvider =
+        new FixedDiskCapacityProvider(new(30L * 1024 * 1024 * 1024, 20L * 1024 * 1024 * 1024));
 
     [Fact]
     public async Task DurableLocalResultDeliversToPostgresAndAcknowledgedRowIsCleanupEligibleAfterReopen()
@@ -46,14 +48,14 @@ public sealed class Wp05DeliveryEndToEndTests
                 new DateTimeOffset(2026, 8, 24, 9, 0, 0, TimeSpan.Zero),
                 new DateTimeOffset(2026, 8, 24, 9, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null);
 
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
                 sink.Publish(expectedResult);
                 resultId = Assert.Single(await outbox.ReadPendingAsync(new(10, 1_000_000), ct)).Envelope.ResultId;
             }
 
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 using var deliveryClient = factory.CreateClient();
                 await using var apiClient = new AgentApiClient(deliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
@@ -66,13 +68,13 @@ public sealed class Wp05DeliveryEndToEndTests
                 await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultId, expectedResult, ct);
             }
 
-            await using (var reopened = new SqliteProbeResultOutbox(databasePath))
+            await using (var reopened = CreateDeliveryOutbox(databasePath))
             {
                 Assert.Empty(await reopened.ReadPendingAsync(new(10, 1_000_000), ct));
                 Assert.Equal(1, await reopened.CleanupAcknowledgedAsync(DateTimeOffset.MaxValue, 10, ct));
             }
 
-            await using var afterCleanup = new SqliteProbeResultOutbox(databasePath);
+            await using var afterCleanup = CreateDeliveryOutbox(databasePath);
             Assert.Empty(await afterCleanup.ReadPendingAsync(new(10, 1_000_000), ct));
         }
         finally
@@ -105,7 +107,7 @@ public sealed class Wp05DeliveryEndToEndTests
                 new DateTimeOffset(2026, 8, 24, 9, 0, 0, TimeSpan.Zero),
                 new DateTimeOffset(2026, 8, 24, 9, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null);
 
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
                 sink.Publish(expectedResult);
@@ -118,7 +120,7 @@ public sealed class Wp05DeliveryEndToEndTests
             {
                 BaseAddress = forwardingClient.BaseAddress,
             })
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             await using (var apiClient = new AgentApiClient(faultedDeliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
                              new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false)))
             {
@@ -143,7 +145,7 @@ public sealed class Wp05DeliveryEndToEndTests
             }
             await AssertImmutableLedgerEntryAsync(factory, enrolled.AgentId, resultId, expectedResult, ct);
 
-            await using (var reopenedOutbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var reopenedOutbox = CreateDeliveryOutbox(databasePath))
             {
                 using var replayDeliveryClient = factory.CreateClient();
                 await using var replayApiClient = new AgentApiClient(replayDeliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
@@ -165,7 +167,7 @@ public sealed class Wp05DeliveryEndToEndTests
                 Assert.Equal(1, await ledger.CountAsync(entry => entry.AgentId == enrolled.AgentId && entry.ResultId == resultId, ct));
             }
 
-            await using var afterCleanup = new SqliteProbeResultOutbox(databasePath);
+            await using var afterCleanup = CreateDeliveryOutbox(databasePath);
             Assert.Empty(await afterCleanup.ReadPendingAsync(new(10, 1_000_000), ct));
         }
         finally
@@ -204,7 +206,7 @@ public sealed class Wp05DeliveryEndToEndTests
                     new DateTimeOffset(2026, 8, 24, 11, 1, 1, TimeSpan.Zero), 1, 1, 0m, 2m, 2m, 2m, null),
             };
 
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
                 sink.Publish(expectedResults[0]);
@@ -222,7 +224,7 @@ public sealed class Wp05DeliveryEndToEndTests
                 new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false));
             var retryDelay = new DeterministicDeliveryDelay();
 
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var delivery = new ProbeResultDeliveryCoordinator(outbox, apiClient, TimeProvider.System, new FixedRandom());
                 var unavailable = await delivery.DeliverOnceAsync(identity, ct);
@@ -311,7 +313,7 @@ public sealed class Wp05DeliveryEndToEndTests
                     new DateTimeOffset(2026, 8, 24, 10, 2, 1, TimeSpan.Zero), 1, 1, 0m, 2m, 2m, 2m, null),
             };
 
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
                 sink.Publish(expectedResults[0]);
@@ -330,7 +332,7 @@ public sealed class Wp05DeliveryEndToEndTests
             await using var apiClient = new AgentApiClient(deliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
                 new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false));
 
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var delivery = new ProbeResultDeliveryCoordinator(outbox, apiClient, TimeProvider.System, new FixedRandom(),
                     new ProbeResultDeliveryOptions(MaximumBatchCount: 2));
@@ -357,7 +359,7 @@ public sealed class Wp05DeliveryEndToEndTests
                 Assert.Equal([resultIds[0]], ledgerResultIds);
             }
 
-            await using (var reopenedOutbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var reopenedOutbox = CreateDeliveryOutbox(databasePath))
             {
                 var pending = Assert.Single(await reopenedOutbox.ReadPendingAsync(new(10, 1_000_000), ct));
                 Assert.Equal(resultIds[2], pending.Envelope.ResultId);
@@ -428,7 +430,7 @@ public sealed class Wp05DeliveryEndToEndTests
                 new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero),
                 new DateTimeOffset(2026, 8, 24, 12, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null);
 
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
                 sink.Publish(expectedResult);
@@ -440,7 +442,7 @@ public sealed class Wp05DeliveryEndToEndTests
             using var deliveryClient = new HttpClient(observer, disposeHandler: false) { BaseAddress = forwardingClient.BaseAddress };
             await using var apiClient = new AgentApiClient(deliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
                 new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false));
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var delivery = new ProbeResultDeliveryCoordinator(outbox, apiClient, TimeProvider.System, new FixedRandom());
 
@@ -512,7 +514,7 @@ public sealed class Wp05DeliveryEndToEndTests
                 new DateTimeOffset(2026, 8, 24, 13, 0, 0, TimeSpan.Zero),
                 new DateTimeOffset(2026, 8, 24, 13, 0, 1, TimeSpan.Zero), 1, 1, 0m, 1m, 1m, 1m, null);
 
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var sink = new DurableLocalProbeResultSink(outbox, identities);
                 sink.Publish(expectedResult);
@@ -524,7 +526,7 @@ public sealed class Wp05DeliveryEndToEndTests
             using var deliveryClient = new HttpClient(observer, disposeHandler: false) { BaseAddress = forwardingClient.BaseAddress };
             await using var apiClient = new AgentApiClient(deliveryClient, identities, new NullRevocationHandler(), new NoDelay(),
                 new AgentClientOptions(forwardingClient.BaseAddress!, IsProduction: false));
-            await using (var outbox = new SqliteProbeResultOutbox(databasePath))
+            await using (var outbox = CreateDeliveryOutbox(databasePath))
             {
                 var delivery = new ProbeResultDeliveryCoordinator(outbox, apiClient, TimeProvider.System, new FixedRandom());
 
@@ -564,6 +566,15 @@ public sealed class Wp05DeliveryEndToEndTests
         {
             DeleteOutboxDirectory(directory);
         }
+    }
+
+    private static SqliteProbeResultOutbox CreateDeliveryOutbox(string databasePath) =>
+        new(databasePath, DeliveryFixtureCapacityProvider);
+
+    private sealed class FixedDiskCapacityProvider(OutboxDiskCapacity capacity) : IOutboxDiskCapacityProvider
+    {
+        public ValueTask<OutboxDiskCapacity> GetAsync(string databasePath, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(capacity);
     }
 
     private static void DeleteOutboxDirectory(string directory)
