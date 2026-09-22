@@ -103,11 +103,20 @@ contract:
    exactly `400 invalid-idempotency-key`; empty, malformed, or repeated values
    return that same response. Read routes omit this step without changing later
    relative order.
-8. On command routes, validate required `If-Match` syntax. Incident detail
-   instead validates applicable `If-None-Match` syntax at this header step; the
-   other read routes omit conditional-header validation. Header syntax here is
-   pre-database; current/stale ETag comparison remains inside the locked command
-   transaction as already frozen.
+8. On command routes, validate required `If-Match` syntax. For each Commit 3C
+   GET route (`/api/v1/incidents`, `/api/v1/incidents/{id}`, and
+   `/api/v1/devices/{id}/incidents`), reject any supplied `If-Match` field,
+   including an empty, malformed, or repeated field, with `400
+   if-match-unsupported`. This check follows the applicable query and canonical
+   route-value checks, precedes every database command, and, for detail, precedes
+   `If-None-Match` parsing. Only when that `If-Match` check is inapplicable or
+   passes by header absence does incident detail validate applicable
+   `If-None-Match` syntax. Within those three routes, incident list and Device
+   history ignore every supplied `If-None-Match` field without parsing it,
+   including malformed or repeated values, and never return `304`; detail alone
+   parses that header and may return `304`. Header syntax here is pre-database;
+   current/stale ETag comparison remains inside the locked command transaction as
+   already frozen.
 9. On command routes, validate content type and then perform the following
    staged JSON/body read before constructing any DTO. First decode the complete
    request-body byte sequence with exactly
@@ -170,6 +179,21 @@ filter set and sort, so changing either returns `400 cursor-filter-mismatch`.
 An absent cursor begins the query. A missing incident or Device returns `404`;
 validation, authentication, authorization, and dependency errors use the
 existing safe Problem Details boundary.
+
+For the three Commit 3C GET routes, malformed or noncanonical incident detail
+`id` is exactly `400 invalid-incident-id`; malformed or noncanonical Device
+history `id` is exactly `400 invalid-device-id`. Any invalid, repeated,
+unknown, out-of-range, or inconsistent read query value, including every query
+value on incident detail, is exactly `400 invalid-incident-query`. Therefore a
+repeated `cursor` is an invalid query, while a single cursor that passes query
+shape validation is evaluated as a protected cursor at the later cursor stage.
+After authorization, the applicable query and route checks, and the Commit 3C
+`If-Match` rejection (and, for detail, `If-None-Match` parsing), cursor
+validation occurs before database work. A malformed detail `If-None-Match` is
+exactly `400 invalid-if-none-match`. A sanitized provider, read-model, or
+cursor-key dependency failure after startup is exactly `503
+incident-read-unavailable`; caller-request cancellation remains cancellation or
+abort and is never translated to `503`.
 
 ### 2. Incident representation, time, and text invariants
 
@@ -1846,11 +1870,113 @@ Every alternate direction reverses the timestamp and retains the ID/source
 tie-breakers.
 
 Every cursor is a protected, versioned, base64url envelope with a server-side
-HMAC-SHA-256 integrity value. It binds the route/resource, incident or Device
-ID, normalized filters, sort, schema version, and last complete seek key. It
-contains no raw comments, OIDC claims, tokens, or authorization values. A bad
-encoding, version, or MAC returns `400 invalid-cursor`; a valid cursor used with
-different bound filters or sort returns `400 cursor-filter-mismatch`.
+HMAC-SHA-256 integrity value. Its authenticated protected payload includes the
+envelope version, the non-secret signing key ID (`kid`, the active ID at
+issuance), signed 64-bit Unix UTC-millisecond issuance timestamp
+`issuedAtMs`, route/resource, incident or Device ID where applicable,
+normalized filters, sort, schema version, and last complete seek key. `kid` is
+included in the MAC input; it is not trusted merely because it is present in the
+decoded envelope.
+The envelope contains no secret material, claims, tokens, comments, or
+authorization data, and neither a cursor nor a response exposes any of those
+values. A bad encoding, version, key ID, MAC, or expiry returns
+`400 invalid-cursor`; a valid cursor used with a different bound route,
+resource, filter, or sort returns `400 cursor-filter-mismatch`.
+
+#### 8.1 Cursor HMAC key-ring configuration, expiry, and rotation
+
+The cursor signer is server-side HMAC-SHA-256 and loads its complete key ring
+once at API startup. The only logical configuration names are
+`IncidentCursor:ActiveKeyId` and `IncidentCursor:KeyRing`; their environment
+variable forms are `IncidentCursor__ActiveKeyId` and
+`IncidentCursor__KeyRing`. `ActiveKeyId` is a stable, non-secret ASCII key ID
+matching exactly `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. It is case-sensitive.
+
+`KeyRing` is one nonempty, no-whitespace string of semicolon-separated entries
+in this exact form:
+
+```text
+<key-id>=<RFC4648-standard-base64-32-byte-key>[;<key-id>=<RFC4648-standard-base64-32-byte-key>...]
+```
+
+Each key ID occurs once and must satisfy the `ActiveKeyId` grammar. Each key
+value is exactly 44 RFC 4648 standard-Base64 ASCII characters, including its
+single trailing `=`, and must decode to exactly 32 cryptographically random
+bytes obtained from an external secret source. Base64url, omitted padding,
+whitespace, an invalid alphabet, a duplicate key ID, and any decoded length
+other than 32 are invalid configuration. The active ID must be valid and name
+one configured key. API startup fails closed for a missing, unknown, malformed,
+or invalid-length active key or key-ring entry. It never generates, persists,
+or falls back to a key, and startup diagnostics must not reveal key material.
+
+All replicas receive the same active and retained ring, but equal keys alone do
+not establish time consistency: replicas must use synchronized UTC clocks.
+Clock disagreement can cause fail-closed rejection. A cursor is signed only
+with the active key and is verified with the active key or any retained key.
+The signer and verifier use an injectable UTC clock for tests. The signed
+`issuedAtMs` is a signed 64-bit Unix UTC-millisecond value. On verification,
+let `nowMs` be that clock's current Unix UTC-millisecond value. If
+`nowMs < issuedAtMs`, the cursor is `400 invalid-cursor`. Compute
+`expiresAtMs = issuedAtMs + 86,400,000` with checked signed-64-bit arithmetic;
+an overflow is `400 invalid-cursor`. The cursor is expired, also as `400
+invalid-cursor`, exactly when `nowMs >= expiresAtMs`; there is no acceptance
+grace period. Expired, unknown-key, retired-key, invalid-version,
+invalid-encoding, and invalid-MAC cursors are indistinguishable `400
+invalid-cursor` responses. The implementation must not make different rejection
+details observable in its response, logs, or metrics.
+
+Rotation has two phases: first distribute the complete new ring (new and old
+keys) to every replica, then change `ActiveKeyId` on every replica only after
+that distribution is complete. Retire an old key only after the latest cursor
+that it could have signed has expired, plus a 10-minute operational margin.
+Removing it earlier is forbidden; after retirement, cursors naming it receive
+the same `400 invalid-cursor` result as every other invalid cursor.
+
+Development uses a developer-provided key ring outside the repository; no
+literal key or usable example value is committed. .NET user-secrets is not a
+supported path because `EePulse.Api` has no `UserSecretsId`. For direct local
+API startup, the developer sets both `IncidentCursor__ActiveKeyId` and
+`IncidentCursor__KeyRing` in the launching process environment before running
+the API; for example, the PowerShell setup is:
+
+```powershell
+$env:IncidentCursor__ActiveKeyId = '<developer-selected-key-id>'
+$env:IncidentCursor__KeyRing = '<developer-managed-key-ring>'
+dotnet run --project src/backend/EePulse.Api
+```
+
+The placeholders above are not usable values; the key ring must satisfy the
+grammar in this section. Missing or empty values fail closed at Compose
+interpolation or API startup, and the API never generates a substitute key.
+
+Commit 3C must add these exact mappings under `api.environment` in the committed
+`docker-compose.yml`:
+
+```yaml
+IncidentCursor__ActiveKeyId: ${IncidentCursor__ActiveKeyId:?IncidentCursor__ActiveKeyId must be set}
+IncidentCursor__KeyRing: ${IncidentCursor__KeyRing:?IncidentCursor__KeyRing must be set}
+```
+
+A developer may put the two values in an ignored local file such as
+`.env.cursor.local` and start Compose with
+`docker compose --env-file .env.cursor.local up`; current `.gitignore` ignores
+that file through its `*.local` rule. The same mappings also accept
+developer-provided process environment values. `--env-file` alone supplies
+Compose interpolation and does not inject variables into the API container; the
+two committed `api.environment` mappings are required. No key material is
+committed. This minimum local Compose wiring is Commit 3C scope. Production
+secret-manager delivery, production multi-replica rollout, and HA operations
+remain WP-10 responsibilities.
+
+Tests explicitly inject a test-only ring through DI; restart and multi-host tests
+share that fixture's identical ring, and production key material is never read
+or used by tests. Required acceptance coverage includes startup rejection for
+every invalid, missing, or empty active/ring case; active and retained-key
+verification; expiry immediately before and exactly at `expiresAtMs`; a
+future-issued cursor; checked-expiry overflow; restart; synchronized and
+disagreeing cross-replica clocks; two-phase rotation with the 10-minute
+retirement margin; and indistinguishable public invalid-cursor results for
+malformed, version, key, expiry, and MAC failures.
 
 The lifecycle cursor contains the complete last tuple
 `(occurredAt, sourceRank, eventId)`, so paging across the total union cannot
@@ -1916,15 +2042,22 @@ receipt replay/conflict/race coverage, and the exact two-flush/one-commit
 boundary. They also require the command-only `PrincipalIdentityResolver`
 boundary, v1 fingerprint vectors/version dispatch, and both determinate and
 indeterminate commit-outcome coverage. Read routes omit Idempotency-Key,
-`If-Match`, content type, body, DTO body, normalization, and principal-resolution
-stages when inapplicable; command routes omit `If-None-Match`; those omissions
-never reorder the remaining stages.
+content type, body, DTO body, normalization, and principal-resolution stages
+when inapplicable; command routes omit `If-None-Match`; those omissions never
+reorder the remaining stages. The three Commit 3C GET routes instead reject
+every supplied `If-Match` as `400 if-match-unsupported` after authorization and
+their query/route checks, before detail `If-None-Match` parsing and before
+database work. Required conditional-header precedence coverage combines a
+supplied `If-Match` with malformed or repeated `If-None-Match`: `If-Match`
+always wins on all three routes; with `If-Match` absent, list and Device history
+ignore `If-None-Match` without parsing, while detail alone parses it and returns
+`400 invalid-if-none-match` when malformed.
 
 | Frozen route | Authorization and ordered input coverage | Success, ETag, and representation coverage | Route-specific persistence, paging, and failure coverage |
 | --- | --- | --- | --- |
-| `GET /api/v1/incidents` | `incidents.read`: Viewer, Operator, Engineer, Administrator, Auditor; unauthenticated and forbidden-role cases; allowlisted filter/page/sort query validation first; no route value, conditional header, or body stage. | Canonical `CursorPage<IncidentResponse>` success; frozen filters and default order; no aggregate ETag. | Protected cursor integrity and filter/sort binding, page boundaries without gaps/duplicates, empty result semantics, sanitized dependency failure, both cancellation categories, correlation/log privacy, zero pre-database commands, mutation-free snapshots. |
-| `GET /api/v1/incidents/{id}` | All `incidents.read` roles plus unauthenticated/forbidden; reject any query, then canonical incident ID, then `If-None-Match`; no body stage. | Canonical `IncidentResponse` with strong quoted ETag and cache header; matching conditional request returns bodyless `304`; nonmatch returns canonical `200`. | Missing incident `404`, malformed conditional combinations, provider failure/cancellations/privacy, zero pre-database commands for earlier failures, and unchanged snapshots for `200`, `304`, and every failure. |
-| `GET /api/v1/devices/{id}/incidents` | All `incidents.read` roles plus unauthenticated/forbidden; allowlisted status/time/page/sort query first, then canonical Device ID; no conditional header or body stage. | Canonical cursor page in frozen incident order; no aggregate ETag. | Missing Device `404`; protected cursor route/Device/filter/sort binding and boundary traversal; sanitized failures, both cancellation categories, privacy, zero pre-database commands, and mutation-free snapshots. |
+| `GET /api/v1/incidents` | `incidents.read`: Viewer, Operator, Engineer, Administrator, Auditor; unauthenticated and forbidden-role cases; allowlisted filter/page/sort query validation first, then every supplied `If-Match` is `400 if-match-unsupported`; supplied `If-None-Match`, including malformed values, is ignored without parsing; no route value or body stage. | Canonical `CursorPage<IncidentResponse>` success; frozen filters and default order; no aggregate ETag and never `304`. | Exact `400 invalid-incident-query` for invalid/repeated/unknown/out-of-range/inconsistent query; protected cursor integrity, version/key/24-hour-expiry handling, route/filter/sort binding, and page boundaries without gaps/duplicates; empty result semantics, `503 incident-read-unavailable`, both cancellation categories, correlation/log privacy, zero pre-database commands, mutation-free snapshots. |
+| `GET /api/v1/incidents/{id}` | All `incidents.read` roles plus unauthenticated/forbidden; reject any query as `400 invalid-incident-query`, then canonical incident ID as `400 invalid-incident-id`, then every supplied `If-Match` as `400 if-match-unsupported`, then parse `If-None-Match`; no body stage. | Canonical `IncidentResponse` with strong quoted ETag and cache header; detail alone may return bodyless `304` for a matching `If-None-Match`; nonmatch returns canonical `200`. | Missing incident `404`; malformed `If-None-Match` is `400 invalid-if-none-match`; provider/read-model failure is `503 incident-read-unavailable`; caller cancellation remains cancellation/abort; zero pre-database commands for earlier failures, and unchanged snapshots for `200`, `304`, and every failure. |
+| `GET /api/v1/devices/{id}/incidents` | All `incidents.read` roles plus unauthenticated/forbidden; allowlisted status/time/page/sort query first, then canonical Device ID as `400 invalid-device-id`, then every supplied `If-Match` is `400 if-match-unsupported`; supplied `If-None-Match`, including malformed values, is ignored without parsing; no body stage. | Canonical cursor page in frozen incident order; no aggregate ETag and never `304`. | Exact `400 invalid-incident-query` for invalid/repeated/unknown/out-of-range/inconsistent query; missing Device `404`; protected cursor route/Device/filter/sort binding, integrity/version/key/24-hour-expiry handling, and boundary traversal; `503 incident-read-unavailable`, both cancellation categories, privacy, zero early database work, and mutation-free snapshots. |
 | `GET /api/v1/incidents/{id}/lifecycle-events` | All `incidents.read` roles plus unauthenticated/forbidden; allowlisted page/sort query first, then canonical incident ID; no conditional header or body stage. | Canonical `CursorPage<IncidentLifecycleResponse>` with exact discriminator/reason mapping and no aggregate ETag. | Missing incident `404`; engine rank `0` and public rank `1`, equal-timestamp cross-source ordering, complete protected `(occurredAt, sourceRank, eventId)` cursor identity, no gaps/duplicates, append-only rejection stability, sanitized failures/cancellations/privacy, zero early database work, unchanged snapshots. |
 | `GET /api/v1/incidents/{id}/comments` | All `incidents.read` roles plus unauthenticated/forbidden; allowlisted page/sort query first, then canonical incident ID; no conditional header or body stage. | Canonical `CursorPage<IncidentCommentResponse>`; every `AuthorId` required/non-null surrogate UUID; no aggregate ETag. | Missing incident `404`; protected incident/filter/sort and `(createdAt, commentId)` cursor binding, no gaps/duplicates, sanitized failures/cancellations/privacy, zero early database work, mutation-free snapshots. |
 | `POST /api/v1/incidents/{id}/acknowledge` | Operator and Administrator only plus unauthenticated/forbidden; after role authorization, invalid `PrincipalIdentityResolver` identity is `403 invalid-incident-actor-identity`, then forbidden query, route, missing/invalid Idempotency-Key `400 invalid-idempotency-key`, `If-Match`, content type, strict malformed-UTF8/surrogate JSON read `400 invalid-json`, raw `[Required]`/1–2,000 DTO validation, then trim/scalar validation in exact order. | Canonical `200 IncidentActionResponse` and resulting strong ETag; stale `412` precedes current-tag state `409`; success stores the exact acknowledgement action/reason and required actor/note. | Missing incident, v1 fingerprint vector/version replay, immutable-principal verification, same-key and forced-collision races, two EF flushes/one commit, append-only receipt/action rejection, strict JSON malformed/paired-supplementary/direct-UTF8-supplementary/U+FFFD coverage proving preserved text/fingerprint/response/replay with safe correlation/privacy/zero commands, provider failure/cancellations/privacy, determinate rollback, and indeterminate post-COMMIT retry/snapshot preservation. |
@@ -1981,6 +2114,8 @@ Future production paths:
 - `src/backend/EePulse.Api/EePulse.Api.csproj`
 - `src/backend/EePulse.Api/Properties/AssemblyInfo.cs` (new)
 - `src/backend/EePulse.Api/Program.cs`
+- `docker-compose.yml` (Commit 3C's two required `api.environment` cursor
+  mappings only; no secret material or production secret-delivery configuration)
 - `src/backend/EePulse.Api/Dashboard/IncidentEndpoints.cs` (new)
 - `src/backend/EePulse.Api/Dashboard/IncidentRuntimeService.cs` (new)
 - `src/backend/EePulse.Domain/Status/ProbeStatusProcessingModels.cs`
