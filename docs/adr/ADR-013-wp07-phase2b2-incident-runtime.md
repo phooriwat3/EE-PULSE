@@ -2136,6 +2136,32 @@ Future test paths:
 - `tests/EePulse.IntegrationTests/Wp07IncidentRuntimeApiTests.cs` (new)
 - `tests/EePulse.IntegrationTests/Wp07IncidentRuntimePersistenceTests.cs` (new)
 
+The following narrow Commit 3C test-host compatibility exception is also
+allowlisted solely for explicit test-only DI cursor-key-ring injection at
+existing API test-host construction points:
+
+- `tests/EePulse.IntegrationTests/IncidentCursorKeyRingTestHost.cs` (new)
+- `tests/EePulse.IntegrationTests/AgentApiTests.cs`
+- `tests/EePulse.IntegrationTests/DashboardSummaryApiTests.cs`
+- `tests/EePulse.IntegrationTests/DeviceStatusApiTests.cs`
+- `tests/EePulse.IntegrationTests/HealthEndpointTests.cs`
+- `tests/EePulse.IntegrationTests/InventoryApiTests.cs`
+- `tests/EePulse.IntegrationTests/PostgreSqlPersistenceTests.cs`
+- `tests/EePulse.IntegrationTests/ProbeResultIngestionApiTests.cs`
+- `tests/EePulse.IntegrationTests/TimezonePreferenceApiTests.cs`
+- `tests/EePulse.IntegrationTests/Wp05DeliveryEndToEndTests.cs`
+- `tests/EePulse.SecurityTests/SecretCanaryObservabilityTests.cs`
+
+`IncidentCursorKeyRingTestHost` is an IntegrationTests-only shared helper. It
+must accept a caller-supplied ring so restart and cross-host cursor cases can
+deliberately reuse the same ring. `SecretCanaryObservabilityTests` may use its
+own explicit test-only DI setup. These additions authorize no assertion,
+authorization, route, database-fixture, production-behavior, or WP-05 semantic
+change; `Wp07IncidentRuntimeApiTests.cs` authorization remains unchanged. They
+create no production or public testing seam and permit no ambient-environment
+fallback, production-configured hard-coded test key, committed key material, or
+bypass of fail-closed startup.
+
 No contract DTO, policy name, or generated artifact is to be changed merely to
 implement these routes. Any genuine wire-contract change requires a separate
 compatibility decision.
