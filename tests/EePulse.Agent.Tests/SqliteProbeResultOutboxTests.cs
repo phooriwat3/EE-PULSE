@@ -267,7 +267,7 @@ public sealed class SqliteProbeResultOutboxTests : IDisposable
             await outbox.EnqueueAsync(envelope, TestContext.Current.CancellationToken);
         }
 
-        await using (var connection = new SqliteConnection($"Data Source={path};Mode=ReadWrite"))
+        await using (var connection = CreateFixtureConnection(path))
         {
             await connection.OpenAsync(TestContext.Current.CancellationToken);
             await using var command = connection.CreateCommand();
@@ -286,7 +286,7 @@ public sealed class SqliteProbeResultOutboxTests : IDisposable
             await reopened.CleanupAcknowledgedAsync(
                 new DateTimeOffset(2026, 8, 20, 12, 0, 0, TimeSpan.Zero), 1, TestContext.Current.CancellationToken));
 
-        await using var verification = new SqliteConnection($"Data Source={path};Mode=ReadWrite");
+        await using var verification = CreateFixtureConnection(path);
         await verification.OpenAsync(TestContext.Current.CancellationToken);
         await using var verify = verification.CreateCommand();
         verify.CommandText = "SELECT result_schema_version, state FROM probe_result_outbox WHERE result_id = $resultId;";
@@ -398,6 +398,13 @@ public sealed class SqliteProbeResultOutboxTests : IDisposable
     }
 
     private string DatabasePath() => Path.Combine(directory, "outbox.db");
+
+    private static SqliteConnection CreateFixtureConnection(string path) => new(new SqliteConnectionStringBuilder
+    {
+        DataSource = path,
+        Mode = SqliteOpenMode.ReadWrite,
+        Pooling = false,
+    }.ToString());
 
     private static readonly IOutboxDiskCapacityProvider TestDiskCapacityProvider = new FixedDiskCapacityProvider(
         new(30L * 1024 * 1024 * 1024, 20L * 1024 * 1024 * 1024));

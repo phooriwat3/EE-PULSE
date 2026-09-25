@@ -366,13 +366,7 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
     {
         if (Volatile.Read(ref unavailable) is { } failure) throw failure;
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadWrite,
-            Cache = SqliteCacheMode.Shared,
-            DefaultTimeout = 5,
-        }.ToString());
+        var connection = new SqliteConnection(CreateConnectionString(SqliteOpenMode.ReadWrite));
         try
         {
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -515,13 +509,7 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
                     }
                 }
 
-                var connectionString = new SqliteConnectionStringBuilder
-                {
-                    DataSource = databasePath,
-                    Mode = existingDatabase ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadWriteCreate,
-                    Cache = SqliteCacheMode.Shared,
-                    DefaultTimeout = 5,
-                }.ToString();
+                var connectionString = CreateConnectionString(existingDatabase ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadWriteCreate);
                 await using (var connection = new SqliteConnection(connectionString))
                 {
                     await connection.OpenAsync(transitionCancellationToken).ConfigureAwait(false);
@@ -585,13 +573,7 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
 
     private async ValueTask ValidateExistingDatabaseAsync(CancellationToken cancellationToken)
     {
-        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadWrite,
-            Cache = SqliteCacheMode.Shared,
-            DefaultTimeout = 5,
-        }.ToString());
+        await using var connection = new SqliteConnection(CreateConnectionString(SqliteOpenMode.ReadWrite));
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var check = connection.CreateCommand();
         check.CommandText = "PRAGMA quick_check;";
@@ -711,13 +693,7 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
 
     private async ValueTask<int?> FindUnsupportedSchemaVersionAsync(CancellationToken cancellationToken)
     {
-        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadWrite,
-            Cache = SqliteCacheMode.Shared,
-            DefaultTimeout = 5,
-        }.ToString());
+        await using var connection = new SqliteConnection(CreateConnectionString(SqliteOpenMode.ReadWrite));
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT result_schema_version FROM probe_result_outbox WHERE result_schema_version <> $supported LIMIT 1;";
@@ -738,6 +714,15 @@ public sealed class SqliteProbeResultOutbox : IProbeResultOutbox
                 Convert.ToInt32(result, System.Globalization.CultureInfo.InvariantCulture)));
         }
     }
+
+    private string CreateConnectionString(SqliteOpenMode mode) => new SqliteConnectionStringBuilder
+    {
+        DataSource = databasePath,
+        Mode = mode,
+        Cache = SqliteCacheMode.Shared,
+        DefaultTimeout = 5,
+        Pooling = false,
+    }.ToString();
 
     private static async ValueTask ExecuteAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
     {
