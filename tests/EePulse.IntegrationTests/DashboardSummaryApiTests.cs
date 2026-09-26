@@ -267,7 +267,7 @@ public sealed class DashboardSummaryApiTests
         Assert.Equal(new string[] { Id(11_000).ToString("D", CultureInfo.InvariantCulture) }, summary.RootElement.GetProperty("openIncidents").EnumerateArray().Select(item => item.GetProperty("incidentId").GetString()).ToArray());
     }
 
-    private static WebApplicationFactory<Program> CreateFactory(string connectionString, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>()
+    private static WebApplicationFactory<Program> CreateFactory(string connectionString, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing())
         .WithWebHostBuilder(builder =>
         {
             builder.UseSetting("ConnectionStrings:Postgres", connectionString);
@@ -279,7 +279,7 @@ public sealed class DashboardSummaryApiTests
             });
         });
 
-    private static WebApplicationFactory<Program> CreateFailureFactory(string connectionString, DashboardLogCaptureSink sink, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>()
+    private static WebApplicationFactory<Program> CreateFailureFactory(string connectionString, DashboardLogCaptureSink sink, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing())
         .WithWebHostBuilder(builder =>
         {
             builder.UseSetting("ConnectionStrings:Postgres", connectionString);
@@ -301,7 +301,7 @@ public sealed class DashboardSummaryApiTests
             });
         });
 
-    private static WebApplicationFactory<Program> CreateOverlayFactory(string connectionString, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>()
+    private static WebApplicationFactory<Program> CreateOverlayFactory(string connectionString, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing())
         .WithWebHostBuilder(builder =>
         {
             builder.UseSetting("ConnectionStrings:Postgres", connectionString);

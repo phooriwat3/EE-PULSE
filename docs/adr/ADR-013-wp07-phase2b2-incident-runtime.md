@@ -1865,9 +1865,15 @@ UUID comparison is ordinal over canonical lowercase UUID-D text. The response ex
 `IncidentLifecycleResponse` shape, not `source_rank`.
 
 Incident lists use `openedAt DESC, incidentId DESC` by default; device incident
-history uses the same order. Comments use `createdAt DESC, commentId DESC`.
-Every alternate direction reverses the timestamp and retains the ID/source
-tie-breakers.
+history uses the same order. Comments accept exactly the case-sensitive sort
+tokens `CreatedAtDesc` and `CreatedAtAsc`: an omitted `sort` is
+`CreatedAtDesc`; `CreatedAtDesc` orders `created_at DESC, incident_comment_id
+DESC`; and `CreatedAtAsc` orders `created_at ASC, incident_comment_id DESC`.
+An empty, repeated, unknown, aliased, or case-modified comment sort is
+`400 invalid-incident-query`. The normalized token is part of the authenticated
+cursor/filter identity, so a comment cursor cannot be replayed across sort
+orders. Every alternate direction reverses the timestamp and retains the
+ID/source tie-breakers.
 
 Every cursor is a protected, versioned, base64url envelope with a server-side
 HMAC-SHA-256 integrity value. Its authenticated protected payload includes the

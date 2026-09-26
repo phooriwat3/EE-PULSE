@@ -29,6 +29,7 @@ try
 
     var applicationSerilogLogger = new LoggerConfiguration()
         .Enrich.FromLogContext()
+        .Filter.ByExcluding(IncidentEndpoints.IsUnsafeRequestLog)
         .WriteTo.Console(new CompactJsonFormatter())
         .CreateLogger();
     builder.Services.AddSingleton<Serilog.ILogger>(applicationSerilogLogger);
@@ -53,6 +54,12 @@ try
     builder.Services.AddScoped<TimezonePreferenceStore>();
     builder.Services.AddScoped<IIncidentCommandCoordinator, IncidentCommandCoordinator>();
     builder.Services.AddSingleton<IIncidentEtagProvider, IncidentEtagV1>();
+    builder.Services.AddSingleton<IIncidentCursorKeyRing>(services =>
+    {
+        var configuration = services.GetRequiredService<IConfiguration>();
+        return IncidentCursorKeyRing.Parse(configuration["IncidentCursor:ActiveKeyId"], configuration["IncidentCursor:KeyRing"]);
+    });
+    builder.Services.AddSingleton<IncidentCursorProtector>();
     builder.Services.AddSingleton<IIncidentRequestFingerprintProvider, IncidentRequestFingerprintV1Provider>();
     builder.Services.AddSingleton<IIncidentIdempotencyAdvisoryKeyProvider, IncidentIdempotencyAdvisoryKeyProvider>();
     builder.Services.AddSingleton<IIncidentCommitBoundary, IncidentCommitBoundary>();
@@ -94,6 +101,8 @@ try
     }
 
     var app = builder.Build();
+    // Resolve before migrations or request handling; invalid configuration prevents startup.
+    _ = app.Services.GetRequiredService<IIncidentCursorKeyRing>();
 
     if (app.Environment.IsDevelopment() && !string.IsNullOrWhiteSpace(postgresConnection))
     {
@@ -111,6 +120,7 @@ try
     app.UseTimezonePreferenceCorrelationId();
     app.UseDashboardSummaryCorrelationId();
     app.UseDeviceStatusCorrelationId();
+    app.UseIncidentCorrelationId();
     app.UseExceptionHandler();
     app.UseSerilogRequestLogging();
     app.UseMiddleware<AgentRequestSecurityMiddleware>();
@@ -122,7 +132,10 @@ try
     {
         app.Use(async (context, next) =>
         {
-            if (context.Request.Path.StartsWithSegments("/api"))
+            var metadata = context.GetEndpoint()?.Metadata;
+            if (context.Request.Path.StartsWithSegments("/api") &&
+                metadata?.GetMetadata<IncidentReadMetadata>() is null &&
+                metadata?.GetMetadata<IncidentCommandMetadata>() is null)
             {
                 await Results.Problem(
                     "PostgreSQL persistence is not configured.",
@@ -153,6 +166,7 @@ try
     app.MapTimezonePreferenceEndpoints();
     app.MapDashboardSummaryEndpoints();
     app.MapDeviceStatusEndpoints();
+    app.MapIncidentEndpoints();
 
     app.Run();
 }

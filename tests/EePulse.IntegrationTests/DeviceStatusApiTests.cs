@@ -959,7 +959,7 @@ public sealed class DeviceStatusApiTests
         yield return "not-a-device";
     }
 
-    private static WebApplicationFactory<Program> CreateFactory(string connectionString, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+    private static WebApplicationFactory<Program> CreateFactory(string connectionString, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
     {
         builder.UseSetting("ConnectionStrings:Postgres", connectionString);
         if (interceptors.Length == 0) return;
@@ -1178,7 +1178,7 @@ public sealed class DeviceStatusApiTests
         }
     }
 
-    private static WebApplicationFactory<Program> CreateFixedClockFactory(string connectionString, DateTimeOffset now, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+    private static WebApplicationFactory<Program> CreateFixedClockFactory(string connectionString, DateTimeOffset now, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
     {
         builder.UseSetting("ConnectionStrings:Postgres", connectionString);
         builder.ConfigureTestServices(services =>
@@ -1194,7 +1194,7 @@ public sealed class DeviceStatusApiTests
         CreateFailureFactory(connectionString, sink, null, interceptors);
 
     private static WebApplicationFactory<Program> CreateFailureFactory(string connectionString, DeviceStatusLogCaptureSink sink,
-        Action<IServiceCollection>? configureServices, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>()
+        Action<IServiceCollection>? configureServices, params IInterceptor[] interceptors) => new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing())
         .WithWebHostBuilder(builder =>
         {
             builder.UseSetting("ConnectionStrings:Postgres", connectionString);

@@ -1,9 +1,12 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using EePulse.Api.Authorization;
 using EePulse.Api.Dashboard;
+using EePulse.Application.Time;
+using EePulse.Contracts.Dashboard;
 using EePulse.Domain.Status;
 using EePulse.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -132,6 +135,33 @@ public sealed class Wp07IncidentRuntimeTests
     }
 
     [Fact]
+    public void CanonicalCommandBodyUsesAdr013ShortestUtf8JEncoding()
+    {
+        var text = "ASCII-\u00e9-\U0001F600-\uFFFD-<\"\\";
+        var comment = IncidentEndpoints.CanonicalCommandBody(IncidentCommandRoute.AddComment, text);
+        var acknowledgement = IncidentEndpoints.CanonicalCommandBody(IncidentCommandRoute.Acknowledge, text);
+        var resolution = IncidentEndpoints.CanonicalCommandBody(IncidentCommandRoute.Resolve, text);
+
+        Assert.Equal("{\"Comment\":\"ASCII-\u00e9-\U0001F600-\uFFFD-<\\\"\\\\\"}", Encoding.UTF8.GetString(comment));
+        Assert.Equal(comment, acknowledgement);
+        Assert.Equal("{\"Note\":\"ASCII-\u00e9-\U0001F600-\uFFFD-<\\\"\\\\\"}", Encoding.UTF8.GetString(resolution));
+        Assert.Contains((byte)0xc3, comment);
+        Assert.Contains((byte)0xa9, comment);
+        Assert.Contains((byte)0xf0, comment);
+        Assert.Contains((byte)0x9f, comment);
+        Assert.Contains((byte)0x98, comment);
+        Assert.Contains((byte)0x80, comment);
+        Assert.Contains((byte)0xef, comment);
+        Assert.Contains((byte)0xbf, comment);
+        Assert.Contains((byte)0xbd, comment);
+        Assert.Contains((byte)'<', comment);
+        Assert.DoesNotContain("\\u00E9"u8.ToArray(), comment);
+        Assert.DoesNotContain("\\u003C"u8.ToArray(), comment);
+        Assert.Throws<ArgumentException>(() => IncidentEndpoints.CanonicalCommandBody(IncidentCommandRoute.AddComment,
+            new string((char)0xd800, 1)));
+    }
+
+    [Fact]
     public void RequestFingerprintV1ExcludesIdempotencyKey()
     {
         var body = "{\"Comment\":\"x\"}"u8.ToArray();
@@ -211,6 +241,177 @@ public sealed class Wp07IncidentRuntimeTests
         Assert.Throws<ArgumentOutOfRangeException>(() => provider.Create(IncidentId, 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => provider.Create(IncidentId, -1));
         Assert.StartsWith("\"wp07-2b1-sha256-", provider.Create(IncidentId, long.MaxValue), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CursorKeyRingParsesOnlyTheFrozenActiveAndRetainedKeyGrammar()
+    {
+        var active = RandomNumberGenerator.GetBytes(32);
+        var retained = RandomNumberGenerator.GetBytes(32);
+        var ring = IncidentCursorKeyRing.Parse("active-1", $"active-1={Convert.ToBase64String(active)};retained.2={Convert.ToBase64String(retained)}");
+
+        Assert.Equal("active-1", ring.ActiveKeyId);
+        Assert.Equal(active, ring.ActiveKey.ToArray());
+        Assert.True(ring.TryGetKey("retained.2", out var retainedKey));
+        Assert.Equal(retained, retainedKey.ToArray());
+        Assert.False(ring.TryGetKey("missing", out _));
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidCursorKeyRings))]
+    public void CursorKeyRingRejectsMissingMalformedAndFallbackConfiguration(string? activeKeyId, string? keyRing)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => IncidentCursorKeyRing.Parse(activeKeyId, keyRing));
+        Assert.Equal(IncidentCursorKeyRing.InvalidConfigurationMessage, exception.Message);
+    }
+
+    public static IEnumerable<object?[]> InvalidCursorKeyRings()
+    {
+        var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        yield return [null, $"active={key}"];
+        yield return ["", $"active={key}"];
+        yield return ["active", null];
+        yield return ["active", ""];
+        foreach (var entry in new[]
+        {
+            $"active={key} ", $"active={key};active={key}", $"active={key[..^1]}",
+            $"active={key[..^2]}-=", $"other={key}", $"active=={key}", $"={key}",
+            $"active{key}", $"active={key};", $";active={key}", $"active={key};;other={key}",
+            $"active={Convert.ToBase64String(RandomNumberGenerator.GetBytes(31))}",
+            $"active={Convert.ToBase64String(RandomNumberGenerator.GetBytes(33))}"
+        }) yield return ["active", entry];
+        yield return ["-active", $"-active={key}"];
+        yield return ["Active", $"active={key}"];
+        // RFC 4648 requires unused padding bits to be zero.
+        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        var noncanonical = key[..^2] + alphabet[alphabet.IndexOf(key[^2], StringComparison.Ordinal) | 1] + "=";
+        yield return ["active", $"active={noncanonical}"];
+    }
+
+    [Fact]
+    public void CursorProtectionBindsFiltersAndSurvivesRestartAndTwoPhaseRotation()
+    {
+        var oldKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        var newKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        var oldRing = IncidentCursorKeyRing.Parse("old", $"old={oldKey}");
+        var distributed = IncidentCursorKeyRing.Parse("old", $"old={oldKey};new={newKey}");
+        var rotated = IncidentCursorKeyRing.Parse("new", $"old={oldKey};new={newKey}");
+        var retired = IncidentCursorKeyRing.Parse("new", $"new={newKey}");
+        var clock = new CursorClock(new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.Zero));
+        var binding = new IncidentCursorBinding("incidents", null,
+            new IncidentListFilter(null, null, null, null, null, null, IncidentSort.OpenedAtDesc), 1);
+        var seek = new IncidentSeek(clock.UtcNow, IncidentId);
+        var token = new IncidentCursorProtector(oldRing, clock).Issue(binding, seek);
+        foreach (var ring in new[] { oldRing, distributed, rotated })
+        {
+            Assert.Equal(IncidentCursorValidation.Valid, new IncidentCursorProtector(ring, clock).Validate(token, binding, out var actual));
+            Assert.Equal(seek, actual);
+        }
+        var verifier = new IncidentCursorProtector(rotated, clock);
+        Assert.Equal(IncidentCursorValidation.FilterMismatch, verifier.Validate(token, binding with { Route = "device-incidents" }, out _));
+        Assert.Equal(IncidentCursorValidation.FilterMismatch, verifier.Validate(token,
+            binding with { Filter = binding.Filter! with { Status = IncidentStatus.Open } }, out _));
+        Assert.Equal(IncidentCursorValidation.Invalid, verifier.Validate("!" + token, binding, out _));
+        var tampered = (token[0] == 'A' ? "B" : "A") + token[1..];
+        Assert.Equal(IncidentCursorValidation.Invalid, verifier.Validate(tampered, binding, out _));
+        var newer = new IncidentCursorProtector(rotated, clock).Issue(binding, seek);
+        Assert.Equal(IncidentCursorValidation.Valid, new IncidentCursorProtector(distributed, clock).Validate(newer, binding, out _));
+        clock.UtcNow = clock.UtcNow.AddMilliseconds(-1);
+        Assert.Equal(IncidentCursorValidation.Invalid, verifier.Validate(token, binding, out _));
+        clock.UtcNow = clock.UtcNow.AddMilliseconds(IncidentCursorProtector.LifetimeMilliseconds);
+        Assert.Equal(IncidentCursorValidation.Valid, verifier.Validate(token, binding, out _));
+        clock.UtcNow = clock.UtcNow.AddMilliseconds(1);
+        Assert.Equal(IncidentCursorValidation.Invalid, verifier.Validate(token, binding, out _));
+        clock.UtcNow = clock.UtcNow.AddMinutes(10);
+        Assert.Equal(IncidentCursorValidation.Invalid, new IncidentCursorProtector(retired, clock).Validate(token, binding, out _));
+        Assert.False(IncidentCursorProtector.IsCurrent(long.MaxValue, long.MaxValue));
+    }
+
+    [Fact]
+    public void CursorProtectionBindsTheExactCommentSortToken()
+    {
+        var ring = IncidentCursorKeyRing.Parse("test", "test=" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+        var clock = new CursorClock(new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.Zero));
+        var descending = new IncidentCursorBinding("incident-comments", IncidentId.ToString("D"), null,
+            Wp07DashboardContract.SchemaVersion, "CreatedAtDesc");
+        var token = new IncidentCursorProtector(ring, clock).Issue(descending, new IncidentSeek(clock.UtcNow, IncidentId));
+
+        var protector = new IncidentCursorProtector(ring, clock);
+        Assert.Equal(IncidentCursorValidation.Valid, protector.Validate(token, descending, out var seek));
+        Assert.Equal(new IncidentSeek(clock.UtcNow, IncidentId), seek);
+        Assert.Equal(IncidentCursorValidation.FilterMismatch,
+            protector.Validate(token, descending with { Sort = "CreatedAtAsc" }, out _));
+    }
+
+    private sealed class CursorClock(DateTimeOffset now) : IUtcClock
+    {
+        public DateTimeOffset UtcNow { get; set; } = now;
+    }
+
+    [Fact]
+    public void CursorRejectsAuthenticatedInvalidVersionKeyExpiryAndOverflowUniformly()
+    {
+        var ring = IncidentCursorKeyRing.Parse("test", "test=" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+        var clock = new CursorClock(new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.Zero));
+        var binding = new IncidentCursorBinding("incidents", null,
+            new IncidentListFilter(null, null, null, null, null, null, IncidentSort.OpenedAtDesc), 1);
+        var protector = new IncidentCursorProtector(ring, clock);
+        var token = protector.Issue(binding, new IncidentSeek(clock.UtcNow, IncidentId));
+        var decoded = Convert.FromBase64String(token.Replace('-', '+').Replace('_', '/') + new string('=', (4 - token.Length % 4) % 4));
+        foreach (var change in new Action<System.Text.Json.Nodes.JsonNode>[]
+        {
+            node => node["Version"] = 2,
+            node => node["Kid"] = "unknown",
+            node => node["IssuedAtMs"] = clock.UtcNow.ToUnixTimeMilliseconds() - IncidentCursorProtector.LifetimeMilliseconds,
+            node => node["IssuedAtMs"] = clock.UtcNow.ToUnixTimeMilliseconds() + 1,
+            node => node["IssuedAtMs"] = long.MaxValue,
+            node => node["Seek"] = null
+        })
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(decoded.AsSpan(0, decoded.Length - 32))!;
+            change(node);
+            var payload = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(node);
+            var signed = payload.Concat(HMACSHA256.HashData(ring.ActiveKey.AsSpan(), payload)).ToArray();
+            var invalid = Convert.ToBase64String(signed).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            Assert.Equal(IncidentCursorValidation.Invalid, protector.Validate(invalid, binding, out var seek));
+            Assert.Null(seek);
+        }
+    }
+
+    [Theory]
+    [InlineData("?unknown=1")]
+    [InlineData("?pageSize=0")]
+    [InlineData("?pageSize=201")]
+    [InlineData("?pageSize=-1")]
+    [InlineData("?pageSize=1&pageSize=2")]
+    [InlineData("?cursor=a&cursor=b")]
+    [InlineData("?cursor=")]
+    [InlineData("?status=open")]
+    [InlineData("?status=0")]
+    [InlineData("?sort=0")]
+    [InlineData("?openedFrom=2026-09-23")]
+    [InlineData("?openedFrom=2026-09-23T00:00:00.Z")]
+    [InlineData("?openedFrom=2026-09-23T00:00:00Z&openedTo=2026-09-22T00:00:00Z")]
+    [InlineData("?siteId=bad")]
+    [InlineData("?Status=Open")]
+    public void IncidentQueryRejectsInvalidAndRepeatedValues(string query)
+    {
+        var values = new Microsoft.AspNetCore.Http.QueryCollection(Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(query));
+        Assert.False(IncidentEndpoints.TryQuery(values, false, out _, out _, out _));
+    }
+
+    [Fact]
+    public void DeviceIncidentQueryRejectsListOnlyFiltersAndAcceptsInclusiveUtcBounds()
+    {
+        var values = new Microsoft.AspNetCore.Http.QueryCollection(Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery("?siteId=" + IncidentId.ToString("D")));
+        Assert.False(IncidentEndpoints.TryQuery(values, true, out _, out _, out _));
+        values = new Microsoft.AspNetCore.Http.QueryCollection(Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(
+            "?openedFrom=2026-09-22T00:00:00Z&openedTo=2026-09-22T00:00:00.0000000Z&sort=OpenedAtAsc&pageSize=200"));
+        Assert.True(IncidentEndpoints.TryQuery(values, true, out var filter, out var cursor, out var size));
+        Assert.Equal(filter!.OpenedFrom, filter.OpenedTo);
+        Assert.Equal(IncidentSort.OpenedAtAsc, filter.Sort);
+        Assert.Null(cursor);
+        Assert.Equal(200, size);
     }
 
     [Fact]
@@ -415,7 +616,7 @@ public sealed class Wp07IncidentRuntimeTests
     }
 
     [Fact]
-    public void CommandResultsAreStructurallyDistinctAndCoordinatorRemainsInternalWithoutRoutes()
+    public void CommandResultsAreStructurallyDistinctAndRuntimeBoundariesRemainInternal()
     {
         var resultType = typeof(IncidentCommandResult<string>);
         var resultCases = resultType.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic);
@@ -425,7 +626,7 @@ public sealed class Wp07IncidentRuntimeTests
         Assert.All(resultCases, type => Assert.True(type.IsSealed));
         Assert.Contains(resultCases, type => type.Name == nameof(IncidentCommandResult<string>.DependencyFailure));
         Assert.Contains(typeof(IIncidentCommandCoordinator).Assembly.GetTypes(), type => type.Name == "IncidentCommandCoordinator");
-        Assert.DoesNotContain(typeof(IIncidentCommandCoordinator).Assembly.GetTypes(), type => type.Name == "IncidentEndpoints");
+        Assert.True(typeof(IncidentEndpoints).IsNotPublic);
         Assert.DoesNotContain(typeof(IncidentCommandResult<string>.Replay).GetConstructors(), constructor =>
             constructor.GetParameters().Any(parameter => parameter.ParameterType.Name.Contains("Handler", StringComparison.Ordinal) ||
                 parameter.ParameterType.Name.Contains("Locked", StringComparison.Ordinal)));

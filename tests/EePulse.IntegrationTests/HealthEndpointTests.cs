@@ -13,7 +13,7 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
 
     public HealthEndpointTests(WebApplicationFactory<Program> factory)
     {
-        _client = factory.CreateClient();
+        _client = factory.WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).CreateClient();
     }
 
     [Fact]

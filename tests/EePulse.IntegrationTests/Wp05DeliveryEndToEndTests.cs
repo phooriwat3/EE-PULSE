@@ -35,7 +35,7 @@ public sealed class Wp05DeliveryEndToEndTests
         try
         {
             await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
                 builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
             using var backendClient = factory.CreateClient();
             var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
@@ -94,7 +94,7 @@ public sealed class Wp05DeliveryEndToEndTests
         try
         {
             await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
                 builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
             using var backendClient = factory.CreateClient();
             var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
@@ -187,7 +187,7 @@ public sealed class Wp05DeliveryEndToEndTests
         try
         {
             await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
                 builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
             using var backendClient = factory.CreateClient();
             var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
@@ -291,7 +291,7 @@ public sealed class Wp05DeliveryEndToEndTests
         try
         {
             await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
                 builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
             using var backendClient = factory.CreateClient();
             var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
@@ -413,7 +413,7 @@ public sealed class Wp05DeliveryEndToEndTests
         try
         {
             await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
                 builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
             using var backendClient = factory.CreateClient();
             var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);
@@ -495,7 +495,7 @@ public sealed class Wp05DeliveryEndToEndTests
         try
         {
             await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-            await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
                 builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
             using var backendClient = factory.CreateClient();
             var enrolled = await EnrollConfiguredAgentAsync(backendClient, ct);

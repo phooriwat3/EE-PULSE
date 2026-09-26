@@ -37,7 +37,7 @@ public sealed class PostgreSqlPersistenceTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var postgres = await PostgresTestDatabase.StartAsync(cancellationToken);
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder
+        await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder => builder
             .UseEnvironment("Production")
             .UseSetting("AgentIdentity:Enabled", "true")
             .UseSetting("AgentIdentity:TrustedHttpsProxy", "true")

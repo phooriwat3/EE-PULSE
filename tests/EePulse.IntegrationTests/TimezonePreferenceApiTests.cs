@@ -39,7 +39,7 @@ public sealed class TimezonePreferenceApiTests
     public async Task OpenApiUsesAgentCredentialForEveryAgentCredentialOperation()
     {
         const string resultBatchPath = "/api/v1/agents/{agentId}/result-batches";
-        await using var factory = new WebApplicationFactory<Program>();
+        await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing());
         using var client = factory.CreateClient();
         using var response = await client.GetAsync("/openapi/v1.json", TestContext.Current.CancellationToken);
         response.EnsureSuccessStatusCode();
@@ -826,7 +826,7 @@ public sealed class TimezonePreferenceApiTests
     }
 
     private static WebApplicationFactory<Program> CreateFactory(string connectionString, params IInterceptor[] interceptors) =>
-        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
         {
             builder.UseSetting("ConnectionStrings:Postgres", connectionString);
             if (interceptors.Length == 0) return;
@@ -840,7 +840,7 @@ public sealed class TimezonePreferenceApiTests
         });
 
     private static WebApplicationFactory<Program> CreateDuplicatePrincipalFactory(string connectionString) =>
-        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
         {
             builder.UseSetting("ConnectionStrings:Postgres", connectionString);
             builder.ConfigureTestServices(services => services

@@ -20,7 +20,7 @@ public sealed class InventoryApiTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var postgres = await PostgresTestDatabase.StartAsync(cancellationToken);
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
             builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
         using var client = factory.CreateClient();
 

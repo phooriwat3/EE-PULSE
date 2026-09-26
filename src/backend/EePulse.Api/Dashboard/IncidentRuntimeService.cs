@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using EePulse.Api.Authorization;
 using EePulse.Application.Time;
 using EePulse.Contracts.Dashboard;
@@ -327,6 +328,10 @@ internal sealed class IncidentCommandCoordinator(
                 transaction = await transactionBoundary.BeginAsync(db, cancellationToken);
                 rollbackRequired = true;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch
             {
                 return new IncidentCommandResult<TConflict>.DependencyFailure();
@@ -348,7 +353,11 @@ internal sealed class IncidentCommandCoordinator(
                 return Replay<TCommand, TConflict>(input, replayRecord);
             }
 
-            var actorId = await GetOrCreatePrincipalAsync(input.Identity, cancellationToken);
+            // PostgreSQL stores timestamptz at microsecond resolution.  One normalized
+            // command instant is shared by every fresh persisted row and the response,
+            // so a replay and a later read cannot expose a different timestamp.
+            var commandAt = NormalizeCommandTimestamp(clock.UtcNow);
+            var actorId = await GetOrCreatePrincipalAsync(input.Identity, commandAt, cancellationToken);
 
             // This read only supplies the key for the shared WP-06 lock.  It is deliberately
             // repeated under locks below and is never used as mutation authority.
@@ -388,7 +397,7 @@ internal sealed class IncidentCommandCoordinator(
                 return new IncidentCommandResult<TConflict>.FreshPreconditionFailed(currentEtag);
             }
 
-            var occurredAt = clock.UtcNow;
+            var occurredAt = commandAt;
             var execution = new LockedIncidentExecutionContext<TCommand>(
                 input.Command, incident, projection, actorId, input.IdempotencyKey, input.TrustedCorrelationId, occurredAt);
             var decision = await handler.ApplyAfterCurrentEtagAcceptedAsync(execution, cancellationToken);
@@ -399,10 +408,14 @@ internal sealed class IncidentCommandCoordinator(
 
             var apply = (LockedCommandDecision<TConflict>.Apply)decision;
             execution.StageInto(db, apply.Outcome);
+            // A general comment changes the incident's public concurrency state just as
+            // the lifecycle commands do.  Mark the locked aggregate dirty and let the
+            // established DbContext concurrency-token incrementer advance RowVersion.
+            if (apply.Outcome.OutcomeKind == "general_comment") db.Entry(incident).State = EntityState.Modified;
             await db.SaveChangesAsync(cancellationToken);
 
             var resultingEtag = etags.Create(incident.Id, incident.RowVersion);
-            var completedAt = clock.UtcNow;
+            var completedAt = commandAt;
             var response = await handler.CreateSuccessResponseAfterFirstFlushAsync(
                 new IncidentCommandResponseContext(incident.Id, resultingEtag, input.TrustedCorrelationId, completedAt),
                 apply.Outcome, cancellationToken);
@@ -426,8 +439,16 @@ internal sealed class IncidentCommandCoordinator(
                 // A non-server acknowledgement failure after COMMIT has been issued is not proof
                 // of rollback.  Disposal releases the connection; a same-key retry resolves it.
                 rollbackRequired = false;
+                if (cancellationToken.IsCancellationRequested)
+                    throw;
                 return new IncidentCommandResult<TConflict>.IndeterminateCommit();
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Only the caller's token is cancellation.  A provider-originated
+            // OperationCanceledException is handled by the dependency boundary below.
+            throw;
         }
         catch
         {
@@ -480,10 +501,16 @@ internal sealed class IncidentCommandCoordinator(
             receipt.ResponseStatus, receipt.ResponseBody, receipt.ResponseContentType, receipt.ResponseEtag));
     }
 
-    private async Task<Guid> GetOrCreatePrincipalAsync(PrincipalIdentity identity, CancellationToken cancellationToken)
+    private static DateTimeOffset NormalizeCommandTimestamp(DateTimeOffset value)
+    {
+        if (value.Offset != TimeSpan.Zero)
+            throw new ArgumentException("The command clock must return a UTC instant.", nameof(value));
+        return Wp07DashboardCanonicalizer.NormalizePostgresTimestamp(value);
+    }
+
+    private async Task<Guid> GetOrCreatePrincipalAsync(PrincipalIdentity identity, DateTimeOffset createdAt, CancellationToken cancellationToken)
     {
         var candidateId = Guid.NewGuid();
-        var createdAt = clock.UtcNow;
         var connection = db.Database.GetDbConnection();
         await using var command = connection.CreateCommand();
         command.Transaction = db.Database.CurrentTransaction!.GetDbTransaction();
@@ -783,6 +810,145 @@ internal static class IncidentIdempotencyAdvisoryKeyDeriver
                    digest[3];
         return (NamespaceKey, unchecked((int)bits));
     }
+}
+
+/// <summary>
+/// Immutable, startup-owned cursor signing keys. Configuration is deliberately parsed once
+/// and rejected as a whole: cursors never have an ambient or generated fallback key.
+/// </summary>
+internal interface IIncidentCursorKeyRing
+{
+    string ActiveKeyId { get; }
+    ImmutableArray<byte> ActiveKey { get; }
+    bool TryGetKey(string keyId, out ImmutableArray<byte> key);
+}
+
+internal sealed record IncidentCursorBinding(string Route, string? DeviceId, IncidentListFilter? Filter, int SchemaVersion, string? Sort = null);
+internal sealed record IncidentSeek(DateTimeOffset OpenedAt, Guid IncidentId, int? SourceRank = null);
+internal enum IncidentCursorValidation { Valid, Invalid, FilterMismatch }
+
+internal sealed class IncidentCursorProtector(IIncidentCursorKeyRing ring, IUtcClock clock)
+{
+    private sealed record Envelope(int Version, string Kid, long IssuedAtMs, IncidentCursorBinding Binding, IncidentSeek Seek);
+    internal const long LifetimeMilliseconds = 86_400_000;
+
+    internal string Issue(IncidentCursorBinding binding, IncidentSeek seek)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new Envelope(1, ring.ActiveKeyId,
+            clock.UtcNow.ToUnixTimeMilliseconds(), binding, seek));
+        var mac = HMACSHA256.HashData(ring.ActiveKey.AsSpan(), payload);
+        return Encode(payload.Concat(mac).ToArray());
+    }
+
+    internal IncidentCursorValidation Validate(string cursor, IncidentCursorBinding binding, out IncidentSeek? seek)
+    {
+        seek = null;
+        try
+        {
+            if (cursor.Length is 0 or > Wp07DashboardContract.MaximumCursorLength ||
+                cursor.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
+                return IncidentCursorValidation.Invalid;
+            var bytes = Convert.FromBase64String(cursor.Replace('-', '+').Replace('_', '/') + new string('=', (4 - cursor.Length % 4) % 4));
+            if (bytes.Length <= 32 || !string.Equals(Encode(bytes), cursor, StringComparison.Ordinal)) return IncidentCursorValidation.Invalid;
+            var payload = bytes.AsSpan(0, bytes.Length - 32);
+            var envelope = JsonSerializer.Deserialize<Envelope>(payload);
+            if (envelope is null || envelope.Version != 1 || envelope.Kid is null ||
+                !ring.TryGetKey(envelope.Kid, out var key) ||
+                !CryptographicOperations.FixedTimeEquals(HMACSHA256.HashData(key.AsSpan(), payload), bytes.AsSpan(bytes.Length - 32)) ||
+                !IsCurrent(envelope.IssuedAtMs, clock.UtcNow.ToUnixTimeMilliseconds()) ||
+                envelope.Binding is null || envelope.Seek is null || envelope.Seek.IncidentId == Guid.Empty ||
+                envelope.Seek.OpenedAt.Offset != TimeSpan.Zero || envelope.Seek.SourceRank is not null and not (0 or 1))
+                return IncidentCursorValidation.Invalid;
+            if (envelope.Binding != binding) return IncidentCursorValidation.FilterMismatch;
+            seek = envelope.Seek;
+            return IncidentCursorValidation.Valid;
+        }
+        catch (Exception exception) when (exception is FormatException or JsonException or OverflowException)
+        {
+            return IncidentCursorValidation.Invalid;
+        }
+    }
+
+    internal static bool IsCurrent(long issuedAtMs, long nowMs)
+    {
+        try { return nowMs >= issuedAtMs && nowMs < checked(issuedAtMs + LifetimeMilliseconds); }
+        catch (OverflowException) { return false; }
+    }
+
+    private static string Encode(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+}
+
+internal sealed class IncidentCursorKeyRing : IIncidentCursorKeyRing
+{
+    internal const string InvalidConfigurationMessage = "Incident cursor key ring configuration is invalid.";
+    private readonly ImmutableDictionary<string, ImmutableArray<byte>> keys;
+
+    private IncidentCursorKeyRing(string activeKeyId, ImmutableDictionary<string, ImmutableArray<byte>> keys)
+    {
+        ActiveKeyId = activeKeyId;
+        this.keys = keys;
+        ActiveKey = keys[activeKeyId];
+    }
+
+    public string ActiveKeyId { get; }
+    public ImmutableArray<byte> ActiveKey { get; }
+
+    public bool TryGetKey(string keyId, out ImmutableArray<byte> key)
+    {
+        key = default;
+        return keyId is not null && keys.TryGetValue(keyId, out key);
+    }
+
+    internal static IncidentCursorKeyRing Parse(string? activeKeyId, string? keyRing)
+    {
+        if (!IsValidKeyId(activeKeyId) || string.IsNullOrEmpty(keyRing) || keyRing.Any(char.IsWhiteSpace))
+            throw InvalidConfiguration();
+
+        var builder = ImmutableDictionary.CreateBuilder<string, ImmutableArray<byte>>(StringComparer.Ordinal);
+        foreach (var entry in keyRing.Split(';', StringSplitOptions.None))
+        {
+            var separator = entry.IndexOf('=');
+            if (separator <= 0)
+                throw InvalidConfiguration();
+
+            var keyId = entry[..separator];
+            var encodedKey = entry[(separator + 1)..];
+            if (!IsValidKeyId(keyId) || !TryDecodeKey(encodedKey, out var key) || !builder.TryAdd(keyId, ImmutableArray.CreateRange(key)))
+                throw InvalidConfiguration();
+        }
+
+        if (activeKeyId is null || !builder.ContainsKey(activeKeyId)) throw InvalidConfiguration();
+        return new IncidentCursorKeyRing(activeKeyId, builder.ToImmutable());
+    }
+
+    private static bool IsValidKeyId(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length > 64 || !IsAsciiAlphaNumeric(value[0])) return false;
+        return value.All(character => IsAsciiAlphaNumeric(character) || character is '.' or '_' or '-');
+    }
+
+    private static bool IsAsciiAlphaNumeric(char value) =>
+        value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9';
+
+    private static bool TryDecodeKey(string value, out byte[] key)
+    {
+        key = [];
+        if (value.Length != 44 || value[^1] != '=' || value[..^1].Any(character =>
+                !IsAsciiAlphaNumeric(character) && character is not '+' and not '/'))
+            return false;
+
+        try
+        {
+            key = Convert.FromBase64String(value);
+            return key.Length == 32 && string.Equals(Convert.ToBase64String(key), value, StringComparison.Ordinal);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static InvalidOperationException InvalidConfiguration() => new(InvalidConfigurationMessage);
 }
 
 internal static class IncidentRuntimeBoundaryValidation

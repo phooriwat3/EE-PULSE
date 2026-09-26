@@ -32,7 +32,7 @@ public sealed class ProbeResultIngestionApiTests
         var ct = TestContext.Current.CancellationToken;
         var applicationNow = new DateTimeOffset(2001, 2, 3, 4, 5, 6, TimeSpan.Zero);
         await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder =>
         {
             builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString);
             builder.ConfigureTestServices(services =>
@@ -67,7 +67,7 @@ public sealed class ProbeResultIngestionApiTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+        await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
         using var client = factory.CreateClient();
         var enrolled = await EnrollConfiguredAgent(client, ct);
         var result = Result(enrolled.AgentId, enrolled.ProbeId, enrolled.ConfigurationVersion);
@@ -187,7 +187,7 @@ public sealed class ProbeResultIngestionApiTests
         await using var postgres = await PostgresTestDatabase.StartAsync(ct);
         var applicationName = "t4a3-ingestion-" + Guid.NewGuid().ToString("N");
         var requestConnectionString = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { ApplicationName = applicationName }.ConnectionString;
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", requestConnectionString));
+        await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", requestConnectionString));
         using var client = factory.CreateClient();
         var enrolled = await EnrollConfiguredAgent(client, ct);
         var result = Result(enrolled.AgentId, enrolled.ProbeId, enrolled.ConfigurationVersion);
@@ -293,12 +293,11 @@ public sealed class ProbeResultIngestionApiTests
     [Fact]
     public async Task ReversedOverlappingProbeBatchesCompleteAndPersistEachIdentityOnce()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var ct = timeout.Token;
-        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+        var setupCancellationToken = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(setupCancellationToken);
+        await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
         using var client = factory.CreateClient();
-        var enrolled = await EnrollConfiguredAgentWithProbes(client, 2, ct);
+        var enrolled = await EnrollConfiguredAgentWithProbes(client, 2, setupCancellationToken);
         var orderedProbeIds = enrolled.ProbeIds.OrderBy(probeId => probeId.ToString("D"), StringComparer.Ordinal).ToArray();
         var lowProbeId = orderedProbeIds[0];
         var highProbeId = orderedProbeIds[1];
@@ -308,47 +307,72 @@ public sealed class ProbeResultIngestionApiTests
         var fourth = Result(enrolled.AgentId, highProbeId, enrolled.ConfigurationVersion);
 
         await using var held = new EePulseDbContext(CreateOptions(postgres.ConnectionString));
-        await using var heldTransaction = await held.Database.BeginTransactionAsync(ct);
-        await ProbeTransactionLock.AcquireAsync(held, highProbeId, ct);
+        await using var heldTransaction = await held.Database.BeginTransactionAsync(setupCancellationToken);
+        await ProbeTransactionLock.AcquireAsync(held, highProbeId, setupCancellationToken);
 
+        using var contentionTimeout = CancellationTokenSource.CreateLinkedTokenSource(setupCancellationToken);
+        contentionTimeout.CancelAfter(TimeSpan.FromSeconds(15));
+        var contentionCancellationToken = contentionTimeout.Token;
         using var firstRequest = Request($"/api/v1/agents/{enrolled.AgentId}/result-batches", enrolled.Credential, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [first, second]));
-        var firstResponse = client.SendAsync(firstRequest, ct);
+        Task<HttpResponseMessage>? firstResponse = null;
         Task<HttpResponseMessage>? secondResponse = null;
         var heldReleased = false;
+        Exception? primary = null;
+        ExceptionDispatchInfo? primaryDispatch = null;
+        Exception? cleanupToThrow = null;
         try
         {
+            firstResponse = client.SendAsync(firstRequest, contentionCancellationToken);
             await using var observer = new NpgsqlConnection(postgres.ConnectionString);
-            await observer.OpenAsync(ct);
-            await WaitForProbeLockAsync(observer, lowProbeId, granted: true, [firstResponse], ct);
-            await WaitForProbeLockAsync(observer, highProbeId, granted: false, [firstResponse], ct);
+            await observer.OpenAsync(contentionCancellationToken);
+            await WaitForProbeLockAsync(observer, lowProbeId, granted: true, [firstResponse], contentionCancellationToken);
+            await WaitForProbeLockAsync(observer, highProbeId, granted: false, [firstResponse], contentionCancellationToken);
 
             using var secondRequest = Request($"/api/v1/agents/{enrolled.AgentId}/result-batches", enrolled.Credential, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [fourth, third]));
-            secondResponse = client.SendAsync(secondRequest, ct);
-            await WaitForProbeLockAsync(observer, lowProbeId, granted: false, [firstResponse, secondResponse], ct);
+            secondResponse = client.SendAsync(secondRequest, contentionCancellationToken);
+            await WaitForProbeLockAsync(observer, lowProbeId, granted: false, [firstResponse, secondResponse], contentionCancellationToken);
 
-            await heldTransaction.RollbackAsync(ct);
+            await heldTransaction.RollbackAsync(contentionCancellationToken);
             heldReleased = true;
 
-            using var firstCompletedResponse = await firstResponse.WaitAsync(ct);
-            using var secondCompletedResponse = await secondResponse.WaitAsync(ct);
+            using var firstCompletedResponse = await firstResponse.WaitAsync(contentionCancellationToken);
+            using var secondCompletedResponse = await secondResponse.WaitAsync(contentionCancellationToken);
             Assert.Equal(HttpStatusCode.OK, firstCompletedResponse.StatusCode);
             Assert.Equal(HttpStatusCode.OK, secondCompletedResponse.StatusCode);
-            var firstBody = (await firstCompletedResponse.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, ct))!;
-            var secondBody = (await secondCompletedResponse.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, ct))!;
+            var firstBody = (await firstCompletedResponse.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, contentionCancellationToken))!;
+            var secondBody = (await secondCompletedResponse.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, contentionCancellationToken))!;
             Assert.Equal(new[] { first.ResultId, second.ResultId }.OrderBy(x => x), firstBody.AcceptedResultIds);
             Assert.Equal(new[] { third.ResultId, fourth.ResultId }.OrderBy(x => x), secondBody.AcceptedResultIds);
-            await AssertLedgerCount(factory, 4, ct);
+            await AssertLedgerCount(factory, 4, contentionCancellationToken);
+        }
+        catch (Exception exception)
+        {
+            primary = exception;
+            primaryDispatch = ExceptionDispatchInfo.Capture(exception);
         }
         finally
         {
+            var cleanupFailures = new List<Exception>();
             if (!heldReleased && held.Database.CurrentTransaction is not null && held.Database.GetDbConnection().State == System.Data.ConnectionState.Open)
             {
-                await heldTransaction.RollbackAsync(CancellationToken.None);
+                await TryRollbackAsync(heldTransaction, cleanupFailures);
             }
 
-            await firstResponse;
-            if (secondResponse is not null) await secondResponse;
+            if (firstResponse is not null) await TryAwaitRequestAsync(firstResponse, cleanupFailures);
+            if (secondResponse is not null) await TryAwaitRequestAsync(secondResponse, cleanupFailures);
+            if (cleanupFailures.Count != 0)
+            {
+                if (primary is not null)
+                {
+                    foreach (var failure in cleanupFailures) primary.Data["ReversedOverlappingProbeBatchesCleanupFailure" + primary.Data.Count] = failure;
+                }
+                else cleanupToThrow = cleanupFailures.Count == 1
+                    ? cleanupFailures[0]
+                    : new AggregateException("Reversed overlapping Probe batches cleanup failed.", cleanupFailures);
+            }
         }
+        primaryDispatch?.Throw();
+        if (cleanupToThrow is not null) ExceptionDispatchInfo.Capture(cleanupToThrow).Throw();
     }
 
     [Fact]
@@ -356,7 +380,7 @@ public sealed class ProbeResultIngestionApiTests
     {
         var setupCancellationToken = TestContext.Current.CancellationToken;
         await using var postgres = await PostgresTestDatabase.StartAsync(setupCancellationToken);
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+        await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
         using var client = factory.CreateClient();
         var enrolled = await EnrollConfiguredAgentWithProbes(client, 2, setupCancellationToken);
 
@@ -417,45 +441,70 @@ public sealed class ProbeResultIngestionApiTests
     private static async Task AssertResultIngestionWaitsForHeldProbeLockAsync(
         Func<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction, CancellationToken, Task> releaseHeldTransaction)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var ct = timeout.Token;
-        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
+        var setupCancellationToken = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(setupCancellationToken);
+        await using var factory = new WebApplicationFactory<Program>().WithIncidentCursorKeyRing(IncidentCursorKeyRingTestHost.CreateRing()).WithWebHostBuilder(builder => builder.UseSetting("ConnectionStrings:Postgres", postgres.ConnectionString));
         using var client = factory.CreateClient();
-        var enrolled = await EnrollConfiguredAgent(client, ct);
+        var enrolled = await EnrollConfiguredAgent(client, setupCancellationToken);
         var result = Result(enrolled.AgentId, enrolled.ProbeId, enrolled.ConfigurationVersion);
 
         await using var held = new EePulseDbContext(CreateOptions(postgres.ConnectionString));
-        await using var heldTransaction = await held.Database.BeginTransactionAsync(ct);
-        await ProbeTransactionLock.AcquireAsync(held, enrolled.ProbeId, ct);
+        await using var heldTransaction = await held.Database.BeginTransactionAsync(setupCancellationToken);
+        await ProbeTransactionLock.AcquireAsync(held, enrolled.ProbeId, setupCancellationToken);
 
+        using var contentionTimeout = CancellationTokenSource.CreateLinkedTokenSource(setupCancellationToken);
+        contentionTimeout.CancelAfter(TimeSpan.FromSeconds(15));
+        var contentionCancellationToken = contentionTimeout.Token;
         using var request = Request($"/api/v1/agents/{enrolled.AgentId}/result-batches", enrolled.Credential, new ProbeResultIngestionBatchRequest(Guid.NewGuid(), [result]));
-        var pendingResponse = client.SendAsync(request, ct);
+        Task<HttpResponseMessage>? pendingResponse = null;
         var released = false;
+        Exception? primary = null;
+        ExceptionDispatchInfo? primaryDispatch = null;
+        Exception? cleanupToThrow = null;
         try
         {
+            pendingResponse = client.SendAsync(request, contentionCancellationToken);
             await using var observer = new NpgsqlConnection(postgres.ConnectionString);
-            await observer.OpenAsync(ct);
-            await WaitForUngrantedProbeLockAsync(observer, enrolled.ProbeId, pendingResponse, ct);
-            await AssertLedgerCount(factory, 0, ct);
+            await observer.OpenAsync(contentionCancellationToken);
+            await WaitForUngrantedProbeLockAsync(observer, enrolled.ProbeId, pendingResponse, contentionCancellationToken);
+            await AssertLedgerCount(factory, 0, contentionCancellationToken);
 
-            await releaseHeldTransaction(heldTransaction, ct);
+            await releaseHeldTransaction(heldTransaction, contentionCancellationToken);
             released = true;
 
-            using var response = await pendingResponse;
+            using var response = await pendingResponse.WaitAsync(contentionCancellationToken);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            var body = (await response.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, ct))!;
+            var body = (await response.Content.ReadFromJsonAsync<ProbeResultIngestionBatchResponse>(AgentJson, contentionCancellationToken))!;
             Assert.Equal([result.ResultId], body.AcceptedResultIds);
-            await AssertLedgerCount(factory, 1, ct);
+            await AssertLedgerCount(factory, 1, contentionCancellationToken);
+        }
+        catch (Exception exception)
+        {
+            primary = exception;
+            primaryDispatch = ExceptionDispatchInfo.Capture(exception);
         }
         finally
         {
-            if (!released)
+            var cleanupFailures = new List<Exception>();
+            if (!released && held.Database.CurrentTransaction is not null && held.Database.GetDbConnection().State == System.Data.ConnectionState.Open)
             {
-                await heldTransaction.RollbackAsync(CancellationToken.None);
-                await pendingResponse;
+                await TryRollbackAsync(heldTransaction, cleanupFailures);
+            }
+
+            if (pendingResponse is not null) await TryAwaitRequestAsync(pendingResponse, cleanupFailures);
+            if (cleanupFailures.Count != 0)
+            {
+                if (primary is not null)
+                {
+                    foreach (var failure in cleanupFailures) primary.Data["ResultIngestionWaitsForHeldProbeLockCleanupFailure" + primary.Data.Count] = failure;
+                }
+                else cleanupToThrow = cleanupFailures.Count == 1
+                    ? cleanupFailures[0]
+                    : new AggregateException("Result ingestion held Probe lock cleanup failed.", cleanupFailures);
             }
         }
+        primaryDispatch?.Throw();
+        if (cleanupToThrow is not null) ExceptionDispatchInfo.Capture(cleanupToThrow).Throw();
     }
 
     private static async Task WaitForUngrantedProbeLockAsync(
@@ -571,6 +620,16 @@ public sealed class ProbeResultIngestionApiTests
     }
 
     private static async Task TryRollbackAsync(NpgsqlTransaction transaction, List<Exception> failures)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await transaction.RollbackAsync(timeout.Token);
+        }
+        catch (Exception exception) { failures.Add(exception); }
+    }
+
+    private static async Task TryRollbackAsync(Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction, List<Exception> failures)
     {
         try
         {

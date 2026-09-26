@@ -114,6 +114,14 @@ public sealed class ProbeStatusProjection
 
     public void ExpireResultFreshness() => VisibleStatus = ProbeStatus.Unknown;
 
+    /// <summary>Clears the active incident only for the already locked manual-resolution command.</summary>
+    public void ClearOpenIncidentForManualResolution(Guid incidentId)
+    {
+        if (incidentId == Guid.Empty || OpenIncidentId != incidentId)
+            throw new DomainValidationException(nameof(incidentId), "The projection does not reference this open incident.");
+        OpenIncidentId = null;
+    }
+
     private void ValidateStructure()
     {
         if (!Enum.IsDefined(UnderlyingStatus)) throw new DomainValidationException(nameof(UnderlyingStatus), "Probe status is invalid.");
@@ -187,6 +195,28 @@ public sealed class AvailabilityIncident
         Status = AvailabilityIncidentStatus.Resolved;
         ResolvedBy = null;
         ResolutionNote = ConfirmedRecoveryReason;
+    }
+
+    public void Acknowledge(Guid actorId, string comment, DateTimeOffset acknowledgedAt)
+    {
+        if (Status != AvailabilityIncidentStatus.Open)
+            throw new DomainValidationException(nameof(Status), "Only an open availability incident can be acknowledged.");
+        AcknowledgedBy = Required(actorId, nameof(actorId));
+        AcknowledgementComment = Guard.Required(comment, nameof(comment), 2000);
+        AcknowledgedAt = Guard.Utc(acknowledgedAt, nameof(acknowledgedAt));
+        Status = AvailabilityIncidentStatus.Acknowledged;
+    }
+
+    public void ResolveManually(Guid actorId, string note, DateTimeOffset resolvedAt)
+    {
+        if (Status is not (AvailabilityIncidentStatus.Open or AvailabilityIncidentStatus.Acknowledged))
+            throw new DomainValidationException(nameof(Status), "Only an active availability incident can be manually resolved.");
+        var validatedResolvedAt = Guard.Utc(resolvedAt, nameof(resolvedAt));
+        if (validatedResolvedAt < OpenedAt) throw new DomainValidationException(nameof(resolvedAt), "Resolution cannot precede opening.");
+        ResolvedBy = Required(actorId, nameof(actorId));
+        ResolutionNote = Guard.Required(note, nameof(note), 2000);
+        ResolvedAt = validatedResolvedAt;
+        Status = AvailabilityIncidentStatus.Resolved;
     }
 
     private static Guid Required(Guid value, string name) => value == Guid.Empty ? throw new DomainValidationException(name, $"{name} is required.") : value;

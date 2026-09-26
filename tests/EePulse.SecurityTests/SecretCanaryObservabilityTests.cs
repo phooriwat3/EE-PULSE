@@ -3,6 +3,10 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Security.Cryptography;
+using EePulse.Api.Dashboard;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,7 +26,12 @@ public sealed class SecretCanaryObservabilityTests
         using var telemetry = new ActivityCapture();
         using var logs = new LogCaptureProvider();
         await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(
-            builder => builder.UseEnvironment("Development"));
+            builder => builder.UseEnvironment("Development").ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IIncidentCursorKeyRing>();
+                services.AddSingleton<IIncidentCursorKeyRing>(IncidentCursorKeyRing.Parse("test",
+                    "test=" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))));
+            }));
         factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logs);
         using var client = factory.CreateClient();
 
