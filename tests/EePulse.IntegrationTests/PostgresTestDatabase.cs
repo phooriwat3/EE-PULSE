@@ -1,4 +1,5 @@
 using EePulse.Infrastructure.Persistence;
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Testcontainers.PostgreSql;
@@ -17,7 +18,24 @@ internal sealed class PostgresTestDatabase : IAsyncDisposable
         _ownsDatabase = ownsDatabase;
     }
 
-    public string ConnectionString { get; }
+    public string ConnectionString { get; private set; }
+
+    // Browser acceptance must never reuse external/shared databases or fixed credentials.
+    public static async Task<PostgresTestDatabase> StartIsolatedAsync(Action<PostgresTestDatabase> registerOwnership,
+        CancellationToken cancellationToken)
+    {
+        var container = new PostgreSqlBuilder("postgres:18.4-alpine")
+            .WithUsername("ui_acceptance")
+            .WithPassword(Convert.ToHexString(RandomNumberGenerator.GetBytes(32)))
+            .Build();
+        // Transfer ownership before startup: the caller's failure-preserving cleanup
+        // also owns a partially started container. Never dispose it a second time here.
+        var database = new PostgresTestDatabase(string.Empty, container, false);
+        registerOwnership(database);
+        await container.StartAsync(cancellationToken);
+        database.ConnectionString = container.GetConnectionString();
+        return database;
+    }
 
     public static async Task<PostgresTestDatabase> StartAsync(CancellationToken cancellationToken)
     {

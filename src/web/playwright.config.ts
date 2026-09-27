@@ -21,7 +21,7 @@ export default defineConfig({
     timeout: 120_000,
   }],
   projects: [
-    { name: 'chromium', testIgnore: '**/production-auth.spec.ts', use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', testIgnore: ['**/production-auth.spec.ts', '**/real-backend/**'], use: { ...devices['Desktop Chrome'] } },
     { name: 'production-auth', testMatch: '**/production-auth.spec.ts', use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:4175' } },
   ],
 });
