@@ -16,6 +16,8 @@ import {
 import type { DevelopmentRole, DevelopmentSession } from './api/client';
 import { setApiSession } from './api/client';
 import { InventoryWorkspace } from './inventory/InventoryWorkspace';
+import { OperationsDashboard } from './dashboard/OperationsDashboard';
+import { useQueryClient } from '@tanstack/react-query';
 
 const roles: DevelopmentRole[] = ['Viewer', 'Operator', 'Engineer', 'Administrator', 'Auditor'];
 const syntheticActorId = '00000000-0000-4000-8000-000000000002';
@@ -47,6 +49,8 @@ export function ProductionAuthenticationRequired() {
 }
 
 function DevelopmentApp() {
+  const queryClient = useQueryClient();
+  const [workspace, setWorkspace] = useState<'inventory' | 'operations'>('inventory');
   const [session, setSession] = useState<DevelopmentSession | null>(null);
   const [selectedRole, setSelectedRole] = useState<DevelopmentRole>('Viewer');
   useEffect(() => {
@@ -70,6 +74,7 @@ function DevelopmentApp() {
   };
 
   const signOut = () => {
+    queryClient.clear();
     setApiSession(null);
     setSession(null);
   };
@@ -78,10 +83,10 @@ function DevelopmentApp() {
     <>
       <CssBaseline />
       <AppBar position="static">
-        <Toolbar sx={{ gap: 2 }}>
+        <Toolbar sx={{ gap: 2, flexWrap: 'wrap', py: 1 }}>
           <Box sx={{ flexGrow: 1 }}>
             <Typography component="h1" variant="h6">EE Pulse</Typography>
-            <Typography variant="caption" sx={{ opacity: 0.85 }}>Inventory console</Typography>
+            <Typography variant="caption" sx={{ opacity: 0.85 }}>Equipment operations</Typography>
           </Box>
           {session && (
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
@@ -118,7 +123,13 @@ function DevelopmentApp() {
           </Stack>
         </Container>
       ) : (
-        <InventoryWorkspace session={session} {...capabilities} />
+        <>
+          <Box component="nav" aria-label="Workspace" sx={{ px: { xs: 2, sm: 3 }, py: 1, display: 'flex', flexWrap: 'wrap', gap: 1, borderBottom: '1px solid #e2e5e9', background: 'white' }}>
+            <Button aria-current={workspace === 'operations' ? 'page' : undefined} onClick={() => setWorkspace('operations')}>Operations overview</Button>
+            <Button aria-current={workspace === 'inventory' ? 'page' : undefined} onClick={() => setWorkspace('inventory')}>Equipment inventory</Button>
+          </Box>
+          {workspace === 'operations' ? <OperationsDashboard sessionKey={`${session.role}:${session.actorId ?? ''}`} /> : <InventoryWorkspace session={session} {...capabilities} />}
+        </>
       )}
     </>
   );

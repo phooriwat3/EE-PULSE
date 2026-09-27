@@ -28,7 +28,7 @@ export function setApiSession(value: DevelopmentSession | null) {
   session = import.meta.env.DEV ? value : null;
 }
 
-function headers(init?: HeadersInit) {
+export function apiHeaders(init?: HeadersInit) {
   const result = new Headers(init);
   result.set('Accept', 'application/json');
   if (import.meta.env.DEV && session) {
@@ -39,11 +39,13 @@ function headers(init?: HeadersInit) {
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, { ...init, headers: headers(init.headers) });
+  const response = await fetch(path, { ...init, headers: apiHeaders(init.headers) });
   if (!response.ok) {
     let problem: ProblemDetails | undefined;
     if (response.headers.get('content-type')?.includes('json')) {
-      problem = (await response.json()) as ProblemDetails;
+      // Preserve the HTTP classification even if a proxy returns invalid JSON.
+      try { problem = (await response.json()) as ProblemDetails; }
+      catch (error) { if (init.signal?.aborted) throw error; }
     }
     throw new ApiError(response.status, problem);
   }

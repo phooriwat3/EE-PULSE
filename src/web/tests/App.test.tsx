@@ -50,6 +50,17 @@ afterEach(() => {
 });
 
 describe('WP-02 inventory App', () => {
+  it('clears private cached snapshots and pending work when signing out', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json(paged([])))));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><App /></QueryClientProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Use synthetic role' }));
+    await screen.findByText('No Devices match these filters');
+    queryClient.setQueryData(['operations-summary', 'Viewer:'], { privateSnapshot: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
+    expect(screen.getByRole('heading', { name: 'Development access' })).toBeInTheDocument();
+  });
   it('renders a fail-closed production authentication state without a role chooser', () => {
     const queryClient = new QueryClient();
     render(

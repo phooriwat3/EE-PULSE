@@ -15,9 +15,13 @@ const queryClient = new QueryClient({
 
 const theme = createTheme({
   palette: {
-    primary: { main: '#0a3d62' },
-    secondary: { main: '#f39c12' },
+    primary: { main: '#a84b1c', contrastText: '#ffffff' },
+    secondary: { main: '#303843' },
+    background: { default: '#f5f6f8' },
   },
+  typography: { fontFamily: '"Segoe UI", Arial, sans-serif', button: { textTransform: 'none', fontWeight: 600 } },
+  shape: { borderRadius: 5 },
+  components: { MuiAppBar: { styleOverrides: { root: { backgroundColor: '#252b33', boxShadow: 'none', borderBottom: '3px solid #e86624' } } } },
 });
 
 const rootElement = document.getElementById('root');

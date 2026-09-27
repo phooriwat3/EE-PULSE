@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "generate:contracts": "node scripts/generate-contracts.mjs",
+    "check:contracts": "node scripts/generate-contracts.mjs --check",
+    "test:contracts": "node --test scripts/generate-contracts.test.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint . --max-warnings 0",

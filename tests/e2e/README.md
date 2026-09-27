@@ -1,3 +1,5 @@
 # End-to-end tests
 
-Playwright critical-path tests are introduced with the stable WP-07 UI/API surface. They will cover inventory-to-dashboard, incident lifecycle, Agent queue recovery, maintenance suppression, and authorization guardrails without using public network targets or real notification channels.
+Run `npm run build`, then `npm run test:e2e -- --workers=1` from `src/web`. The current six Playwright cases cover existing inventory flows, the read-only operations dashboard, site filtering, incident detail, keyboard focus, mobile containment, loading/empty/error/stale-refresh states, logout, and the fail-closed production bundle. Development requests are intercepted with test-only fixtures; these results do not establish real backend end-to-end behavior. No fixture is imported by application source.
+
+Set `UI_EVIDENCE` to a writable evidence directory to persist desktop/mobile screenshots. The suite owns two separate servers: Development on port 4174 and built-production preview on port 4175. It does not reuse an already running server. OIDC, command forms, Agent queue recovery, maintenance scenarios, SignalR, audit, broader timeline/metrics, and plant mapping are outside this frontend checkpoint.
