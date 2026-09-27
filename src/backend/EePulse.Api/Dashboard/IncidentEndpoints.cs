@@ -46,24 +46,64 @@ internal static class IncidentEndpoints
     internal static void MapIncidentEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet(Wp07DashboardContract.IncidentsPath, (Delegate)((HttpContext context) => Get(context, null, false)))
-            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata()).ExcludeFromDescription();
+            .WithName("ListIncidents").WithTags("Incidents")
+            .WithSummary("List incidents")
+            .WithDescription("Returns a protected cursor page of incidents. Collection responses have no aggregate ETag and never return 304.")
+            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata())
+            .Produces<CursorPage<IncidentResponse>>(StatusCodes.Status200OK, "application/json")
+            .ProducesProblem(400).ProducesProblem(401).ProducesProblem(403).ProducesProblem(503);
         app.MapGet(Wp07DashboardContract.IncidentDetailPathTemplate, (string id, HttpContext context) => Get(context, id, true))
-            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata()).ExcludeFromDescription();
+            .WithName("GetIncident").WithTags("Incidents")
+            .WithSummary("Get an incident")
+            .WithDescription("Returns one incident with a strong opaque ETag. This is the only incident read that supports If-None-Match and may return 304.")
+            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata())
+            .Produces<IncidentResponse>(StatusCodes.Status200OK, "application/json").Produces(304)
+            .ProducesProblem(400).ProducesProblem(401).ProducesProblem(403).ProducesProblem(404).ProducesProblem(503);
         app.MapGet(Wp07DashboardContract.DeviceIncidentHistoryPathTemplate, (string id, HttpContext context) => Get(context, id, false))
-            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata()).ExcludeFromDescription();
+            .WithName("ListDeviceIncidents").WithTags("Incidents")
+            .WithSummary("List a Device's incident history")
+            .WithDescription("Returns a protected cursor page of incidents for one Device. Collection responses have no aggregate ETag and never return 304.")
+            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata())
+            .Produces<CursorPage<IncidentResponse>>(StatusCodes.Status200OK, "application/json")
+            .ProducesProblem(400).ProducesProblem(401).ProducesProblem(403).ProducesProblem(404).ProducesProblem(503);
         app.MapGet(Wp07DashboardContract.IncidentLifecycleEventsPathTemplate, (string id, HttpContext context) => GetLifecycle(context, id))
-            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata()).ExcludeFromDescription();
+            .WithName("ListIncidentLifecycleEvents").WithTags("Incidents")
+            .WithSummary("List immutable incident lifecycle events")
+            .WithDescription("Returns the protected, cursor-paged lifecycle union. It has no aggregate ETag and never returns 304.")
+            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata())
+            .Produces<CursorPage<IncidentLifecycleResponse>>(StatusCodes.Status200OK, "application/json")
+            .ProducesProblem(400).ProducesProblem(401).ProducesProblem(403).ProducesProblem(404).ProducesProblem(503);
         app.MapGet(Wp07DashboardContract.IncidentCommentsPathTemplate, (string id, HttpContext context) => GetComments(context, id))
-            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata()).ExcludeFromDescription();
+            .WithName("ListIncidentComments").WithTags("Incidents")
+            .WithSummary("List immutable incident comments")
+            .WithDescription("Returns protected, cursor-paged incident comments. It has no aggregate ETag and never returns 304.")
+            .RequireAuthorization("incidents.read").WithMetadata(new IncidentReadMetadata())
+            .Produces<CursorPage<IncidentCommentResponse>>(StatusCodes.Status200OK, "application/json")
+            .ProducesProblem(400).ProducesProblem(401).ProducesProblem(403).ProducesProblem(404).ProducesProblem(503);
         app.MapPost(Wp07DashboardContract.IncidentAcknowledgePathTemplate, (string id, HttpContext context) =>
                 Command(context, id, IncidentCommandRoute.Acknowledge))
-            .RequireAuthorization("incidents.operate").WithMetadata(new IncidentCommandMetadata()).ExcludeFromDescription();
+            .WithName("AcknowledgeIncident").WithTags("Incidents")
+            .WithSummary("Acknowledge an open incident")
+            .WithDescription("Acknowledges an Open incident. Idempotency-Key and a current strong If-Match ETag are required.")
+            .RequireAuthorization("incidents.operate").WithMetadata(new IncidentCommandMetadata())
+            .Produces<IncidentActionResponse>(StatusCodes.Status200OK, "application/json")
+            .ProducesProblem(400).ProducesProblem(401).ProducesProblem(403).ProducesProblem(404).ProducesProblem(409).ProducesProblem(412).ProducesProblem(428).ProducesProblem(503);
         app.MapPost(Wp07DashboardContract.IncidentCommentsPathTemplate, (string id, HttpContext context) =>
                 Command(context, id, IncidentCommandRoute.AddComment))
-            .RequireAuthorization("incidents.operate").WithMetadata(new IncidentCommandMetadata()).ExcludeFromDescription();
+            .WithName("AddIncidentComment").WithTags("Incidents")
+            .WithSummary("Add an immutable incident comment")
+            .WithDescription("Adds an immutable comment. Idempotency-Key and a current strong If-Match ETag are required.")
+            .RequireAuthorization("incidents.operate").WithMetadata(new IncidentCommandMetadata())
+            .Produces<IncidentCommentResponse>(StatusCodes.Status201Created, "application/json")
+            .ProducesProblem(400).ProducesProblem(401).ProducesProblem(403).ProducesProblem(404).ProducesProblem(409).ProducesProblem(412).ProducesProblem(428).ProducesProblem(503);
         app.MapPost(Wp07DashboardContract.IncidentResolvePathTemplate, (string id, HttpContext context) =>
                 Command(context, id, IncidentCommandRoute.Resolve))
-            .RequireAuthorization("incidents.operate").WithMetadata(new IncidentCommandMetadata()).ExcludeFromDescription();
+            .WithName("ResolveIncident").WithTags("Incidents")
+            .WithSummary("Manually resolve an active incident")
+            .WithDescription("Manually resolves an active incident only when its underlying Probe status is neither Down nor Recovering. Idempotency-Key and a current strong If-Match ETag are required.")
+            .RequireAuthorization("incidents.operate").WithMetadata(new IncidentCommandMetadata())
+            .Produces<IncidentActionResponse>(StatusCodes.Status200OK, "application/json")
+            .ProducesProblem(400).ProducesProblem(401).ProducesProblem(403).ProducesProblem(404).ProducesProblem(409).ProducesProblem(412).ProducesProblem(428).ProducesProblem(503);
     }
 
     internal static IApplicationBuilder UseIncidentCorrelationId(this IApplicationBuilder app) => app.Use(async (context, next) =>

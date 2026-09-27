@@ -103,7 +103,44 @@ public sealed class DashboardSummaryApiTests
     }
 
     [Fact]
-    public async Task ReadFailureIsSanitizedAndRouteIsExcludedFromOpenApi()
+    public async Task SummaryTextFiltersNormalizeBeforeTheUtf16LengthBoundary()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        await using var factory = CreateFactory(postgres.ConnectionString);
+        using var client = factory.CreateClient();
+
+        async Task<string> Accepted(string value)
+        {
+            using var response = await client.SendAsync(Request(Path + "?area=" + Uri.EscapeDataString(value), "Viewer"), ct);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            return document.RootElement.GetProperty("appliedFilter").GetProperty("area").GetString()!;
+        }
+
+        Assert.Equal("café", await Accepted("  cafe\u0301  "));
+        using (var omitted = await client.SendAsync(Request(Path, "Viewer"), ct))
+        {
+            Assert.Equal(HttpStatusCode.OK, omitted.StatusCode);
+            using var document = JsonDocument.Parse(await omitted.Content.ReadAsStringAsync(ct));
+            foreach (var name in new[] { "area", "deviceType", "criticality", "tag" })
+                Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("appliedFilter").GetProperty(name).ValueKind);
+        }
+        foreach (var name in new[] { "area", "deviceType", "criticality", "tag" })
+        {
+            using var empty = await client.SendAsync(Request(Path + "?" + name + "=", "Viewer"), ct);
+            Assert.Equal(HttpStatusCode.BadRequest, empty.StatusCode);
+            using var problem = JsonDocument.Parse(await empty.Content.ReadAsStringAsync(ct));
+            Assert.Equal("invalid-dashboard-filter", problem.RootElement.GetProperty("code").GetString());
+        }
+        Assert.Equal(new string('a', 128), await Accepted("  " + new string('a', 128) + "  "));
+        Assert.Equal(string.Concat(Enumerable.Repeat("\U0001F600", 64)), await Accepted(string.Concat(Enumerable.Repeat("\U0001F600", 64))));
+        using var rejected = await client.SendAsync(Request(Path + "?area=" + Uri.EscapeDataString(string.Concat(Enumerable.Repeat("\U0001F600", 65))), "Viewer"), ct);
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+    }
+
+    [Fact]
+    public async Task ReadFailureIsSanitizedAndRouteIsIncludedInOpenApi()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var postgres = await PostgresTestDatabase.StartAsync(ct);
@@ -136,7 +173,11 @@ public sealed class DashboardSummaryApiTests
         using var openApi = await client.GetAsync("/openapi/v1.json", ct);
         openApi.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await openApi.Content.ReadAsStringAsync(ct));
-        Assert.False(document.RootElement.GetProperty("paths").TryGetProperty(Path, out _));
+        var operation = document.RootElement.GetProperty("paths").GetProperty(Path).GetProperty("get");
+        Assert.Equal("GetDashboardSummary", operation.GetProperty("operationId").GetString());
+        Assert.True(operation.GetProperty("responses").TryGetProperty("304", out _));
+        Assert.Contains(operation.GetProperty("parameters").EnumerateArray(), parameter =>
+            parameter.GetProperty("in").GetString() == "header" && parameter.GetProperty("name").GetString() == "If-None-Match");
     }
 
     [Fact]
@@ -165,6 +206,12 @@ public sealed class DashboardSummaryApiTests
             Assert.Equal(1, counts["Maintenance"]);
             Assert.Equal(2, counts["Disabled"]);
             Assert.Single(document.RootElement.GetProperty("recentlyDown").EnumerateArray());
+            var recentDown = document.RootElement.GetProperty("recentlyDown")[0];
+            var incidentId = recentDown.GetProperty("openIncidentId").GetString();
+            Assert.NotNull(incidentId);
+            Assert.True(Guid.TryParseExact(incidentId, "D", out var parsedIncidentId));
+            Assert.Equal(parsedIncidentId.ToString("D", CultureInfo.InvariantCulture), incidentId);
+            Assert.Equal(document.RootElement.GetProperty("openIncidents")[0].GetProperty("incidentId").GetString(), incidentId);
             Assert.Single(document.RootElement.GetProperty("openIncidents").EnumerateArray());
         }
 

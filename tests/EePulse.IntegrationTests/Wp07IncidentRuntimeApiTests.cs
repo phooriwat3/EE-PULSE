@@ -112,20 +112,47 @@ public sealed class Wp07IncidentRuntimeApiTests
         Assert.Equal(commentEtag, replay.Headers.ETag!.Tag);
         Assert.Equal(commentBytes, await replay.Content.ReadAsByteArrayAsync(ct));
 
+        using (var reuseConflict = await PostAsync("comments", Key(901), etag, "{\"comment\":\"different body\"}"))
+        {
+            await AssertCommandProblemAsync(reuseConflict, HttpStatusCode.Conflict, "idempotency-key-reuse-conflict", ct);
+            Assert.Null(reuseConflict.Headers.ETag);
+        }
+
         etag = await CurrentEtagAsync();
         using var acknowledgement = await PostAsync("acknowledge", Key(902), etag, "{\"comment\":\"acknowledged\"}");
         Assert.Equal(HttpStatusCode.OK, acknowledgement.StatusCode);
-        Assert.Equal("Acknowledged", JsonDocument.Parse(await acknowledgement.Content.ReadAsStreamAsync(ct)).RootElement.GetProperty("status").GetString());
+        var acknowledgementWire = JsonDocument.Parse(await acknowledgement.Content.ReadAsStreamAsync(ct));
+        Assert.Equal("Acknowledged", acknowledgementWire.RootElement.GetProperty("status").GetString());
+        AssertWireUtcTimestamp(acknowledgementWire.RootElement.GetProperty("completedAt").GetString()!);
+        etag = acknowledgement.Headers.ETag!.Tag!;
+        using (var stateConflict = await PostAsync("acknowledge", Key(904), etag, "{\"comment\":\"again\"}"))
+        {
+            await AssertCommandProblemAsync(stateConflict, HttpStatusCode.Conflict, "incident-action-state-conflict", ct);
+            Assert.Equal(etag, stateConflict.Headers.ETag!.Tag);
+        }
 
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<EePulseDbContext>();
-            await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_projections SET open_incident_id = {seed.IncidentId} WHERE probe_id = {seed.ProbeId}", ct);
+            await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_projections SET open_incident_id = {seed.IncidentId}, underlying_status = 'Down', visible_status = 'Down', consecutive_failure_count = 1, consecutive_success_count = 0 WHERE probe_id = {seed.ProbeId}", ct);
+        }
+        etag = await CurrentEtagAsync();
+        using (var resolveConflict = await PostAsync("resolve", Key(908), etag, "{\"note\":\"blocked while down\"}"))
+        {
+            await AssertCommandProblemAsync(resolveConflict, HttpStatusCode.Conflict, "incident-manual-resolution-state-conflict", ct);
+            Assert.Equal(etag, resolveConflict.Headers.ETag!.Tag);
+        }
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<EePulseDbContext>();
+            await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE probe_status_projections SET underlying_status = 'Up', visible_status = 'Up', consecutive_failure_count = 0, consecutive_success_count = 0 WHERE probe_id = {seed.ProbeId}", ct);
         }
         etag = await CurrentEtagAsync();
         using var resolution = await PostAsync("resolve", Key(903), etag, "{\"note\":\"resolved manually\"}");
         Assert.Equal(HttpStatusCode.OK, resolution.StatusCode);
-        Assert.Equal("Resolved", JsonDocument.Parse(await resolution.Content.ReadAsStreamAsync(ct)).RootElement.GetProperty("status").GetString());
+        var resolutionWire = JsonDocument.Parse(await resolution.Content.ReadAsStreamAsync(ct));
+        Assert.Equal("Resolved", resolutionWire.RootElement.GetProperty("status").GetString());
+        AssertWireUtcTimestamp(resolutionWire.RootElement.GetProperty("completedAt").GetString()!);
 
         await using var verification = factory.Services.CreateAsyncScope();
         var verificationDb = verification.ServiceProvider.GetRequiredService<EePulseDbContext>();
@@ -134,6 +161,13 @@ public sealed class Wp07IncidentRuntimeApiTests
         Assert.Equal(2, await verificationDb.IncidentLifecycleActions.CountAsync(ct));
         Assert.Null(await verificationDb.ProbeStatusProjections.Where(value => value.ProbeId == seed.ProbeId)
             .Select(value => value.OpenIncidentId).SingleAsync(ct));
+    }
+
+    private static void AssertWireUtcTimestamp(string value)
+    {
+        Assert.Matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$", value);
+        Assert.True(DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed));
+        Assert.Equal(TimeSpan.Zero, parsed.Offset);
     }
 
     [Fact]
@@ -310,6 +344,52 @@ public sealed class Wp07IncidentRuntimeApiTests
             else
                 Assert.Equal(scalar, await db.IncidentLifecycleActions.Where(row => row.IdempotencyKey == key).Select(row => row.ActionNote).SingleAsync(ct));
         }
+    }
+
+    [Fact]
+    public async Task CommandTextUsesRawUtf16UnitsBeforeTrimmingAndPreservesDecomposedText()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var postgres = await PostgresTestDatabase.StartAsync(ct);
+        await using var factory = CreateFactory(postgres.ConnectionString);
+        using var client = factory.CreateClient();
+        var actor = Guid.NewGuid().ToString("D");
+
+        async Task<(HttpStatusCode Status, string? Persisted)> Send(string text, int keyNumber)
+        {
+            var seed = await SeedAsync(factory, ct);
+            var request = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/incidents/{seed.IncidentId:D}/comments")
+            {
+                Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(new { comment = text }))
+            };
+            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            request.Headers.Add("X-EE-Pulse-Role", "Administrator");
+            request.Headers.Add("X-EE-Pulse-Actor", actor);
+            request.Headers.Add("Idempotency-Key", Key(keyNumber));
+            request.Headers.TryAddWithoutValidation("If-Match", new IncidentEtagV1().Create(seed.IncidentId, 1));
+            using var response = await client.SendAsync(request, ct);
+            if (response.StatusCode != HttpStatusCode.Created)
+            {
+                await AssertCommandProblemAsync(response, HttpStatusCode.BadRequest, "invalid-incident-text", ct);
+                return (response.StatusCode, null);
+            }
+            await using var scope = factory.Services.CreateAsyncScope();
+            var persisted = await scope.ServiceProvider.GetRequiredService<EePulseDbContext>().IncidentComments.AsNoTracking()
+                .Where(row => row.IncidentId == seed.IncidentId).Select(row => row.Comment).SingleAsync(ct);
+            return (response.StatusCode, persisted);
+        }
+
+        var decomposed = await Send("cafe\u0301", 970);
+        Assert.Equal(HttpStatusCode.Created, decomposed.Status);
+        Assert.Equal("cafe\u0301", decomposed.Persisted);
+        var padded = await Send("  padded text  ", 971);
+        Assert.Equal("padded text", padded.Persisted);
+        var exactUtf16Boundary = string.Concat(Enumerable.Repeat("\U0001F600", 999));
+        var paddedBoundary = await Send(" " + exactUtf16Boundary + " ", 972);
+        Assert.Equal(HttpStatusCode.Created, paddedBoundary.Status);
+        Assert.Equal(exactUtf16Boundary, paddedBoundary.Persisted);
+        var supplementaryOverBoundary = await Send(string.Concat(Enumerable.Repeat("\U0001F600", 1001)), 973);
+        Assert.Equal(HttpStatusCode.BadRequest, supplementaryOverBoundary.Status);
     }
 
     [Fact]
@@ -1214,6 +1294,7 @@ public sealed class Wp07IncidentRuntimeApiTests
             await AssertNoDatabaseAsync(path + "?unknown=1", "Viewer", HttpStatusCode.BadRequest, "invalid-incident-query");
             await AssertNoDatabaseAsync($"/api/v1/incidents/INVALID/{suffix}", "Viewer", HttpStatusCode.BadRequest, "invalid-incident-id");
             await AssertNoDatabaseAsync(path + "?cursor=!", "Viewer", HttpStatusCode.BadRequest, "invalid-cursor");
+            await AssertNoDatabaseAsync(path + "?cursor=", "Viewer", HttpStatusCode.BadRequest, "invalid-incident-query");
 
             foreach (var role in new[] { "Viewer", "Operator", "Engineer", "Administrator", "Auditor" })
             {
@@ -1269,6 +1350,8 @@ public sealed class Wp07IncidentRuntimeApiTests
             await AssertReadProblem(mismatch, "cursor-filter-mismatch", HttpStatusCode.BadRequest, ct);
             using var invalid = await client.GetAsync(path + "?cursor=!", ct);
             await AssertReadProblem(invalid, "invalid-cursor", HttpStatusCode.BadRequest, ct);
+            using var emptyCursor = await client.GetAsync(path + "?cursor=", ct);
+            await AssertReadProblem(emptyCursor, "invalid-incident-query", HttpStatusCode.BadRequest, ct);
         }
         using var detail = await client.GetAsync($"/api/v1/incidents/{seed.IncidentId:D}", ct);
         Assert.Equal(HttpStatusCode.OK, detail.StatusCode);

@@ -50,6 +50,2209 @@
         }
       }
     },
+    "/api/v1/dashboard/summary": {
+      "get": {
+        "tags": [
+          "Dashboard"
+        ],
+        "summary": "Get the dashboard status summary",
+        "description": "Returns the canonical dashboard summary for the optional normalized filters. The response has a strong ETag and supports conditional GET. Requires the dashboard.read policy (Viewer, Operator, Engineer, Administrator, or Auditor).",
+        "operationId": "GetDashboardSummary",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "query",
+            "description": "Optional UUID-D Site filter; uppercase and lowercase hexadecimal are accepted and normalized.",
+            "schema": {
+              "minLength": 1,
+              "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "area",
+            "in": "query",
+            "description": "Trimmed and NFC-normalized before validation; the normalized value must be non-empty and at most 128 UTF-16 code units. No raw-input maxLength is published.",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "deviceType",
+            "in": "query",
+            "description": "Trimmed and NFC-normalized before validation; the normalized value must be non-empty and at most 128 UTF-16 code units. No raw-input maxLength is published.",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "criticality",
+            "in": "query",
+            "description": "Trimmed and NFC-normalized before validation; the normalized value must be non-empty and at most 128 UTF-16 code units. No raw-input maxLength is published.",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Trimmed and NFC-normalized before validation; the normalized value must be non-empty and at most 128 UTF-16 code units. No raw-input maxLength is published.",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Optional exact visible status.",
+            "schema": {
+              "minLength": 1,
+              "enum": [
+                "Unknown",
+                "Up",
+                "Degraded",
+                "Down",
+                "Recovering",
+                "Maintenance",
+                "Disabled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "Conditional GET entity-tag list; a matching current strong ETag returns 304.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Unsupported for this read; any supplied value returns 400 if-match-unsupported.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Current strong opaque entity tag.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "private, max-age=0, must-revalidate",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardSummaryResponse"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Current strong opaque entity tag.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "private, max-age=0, must-revalidate",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-dashboard-filter, if-match-unsupported, or invalid-if-none-match) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (dashboard-summary-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/devices/{id}/status": {
+      "get": {
+        "tags": [
+          "Dashboard"
+        ],
+        "summary": "Get a status-enriched device snapshot",
+        "description": "Returns the canonical status snapshot for one Device. The response has a strong ETag and supports conditional GET. Requires the dashboard.read policy (Viewer, Operator, Engineer, Administrator, or Auditor). This route accepts no query parameters.",
+        "operationId": "GetDeviceStatus",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Canonical lowercase UUID-D Device identifier.",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "Conditional GET entity-tag list; a matching current strong ETag returns 304.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Unsupported for this read; any supplied value returns 400 if-match-unsupported.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Current strong opaque entity tag.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "private, max-age=0, must-revalidate",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusEnrichedDeviceResponse"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Current strong opaque entity tag.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "private, max-age=0, must-revalidate",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-device-status-id, invalid-device-status-query, if-match-unsupported, or invalid-if-none-match) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (device-status-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/incidents": {
+      "get": {
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "List incidents",
+        "description": "Returns a protected cursor page of incidents. Collection responses have no aggregate ETag and never return 304. Requires incidents.read (Viewer, Operator, Engineer, Administrator, or Auditor). If-None-Match is intentionally ignored for this collection and it never returns 304.",
+        "operationId": "ListIncidents",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "query",
+            "description": "Optional canonical lowercase UUID-D Site filter.",
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "deviceId",
+            "in": "query",
+            "description": "Optional canonical lowercase UUID-D Device filter.",
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "probeId",
+            "in": "query",
+            "description": "Optional canonical lowercase UUID-D Probe filter.",
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Optional exact incident status.",
+            "schema": {
+              "enum": [
+                "Open",
+                "Acknowledged",
+                "Resolved"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "openedFrom",
+            "in": "query",
+            "description": "Optional inclusive UTC instant in yyyy-MM-ddTHH:mm:ss[.FFFFFFF]Z form.",
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "openedTo",
+            "in": "query",
+            "description": "Optional inclusive UTC instant in yyyy-MM-ddTHH:mm:ss[.FFFFFFF]Z form; it must not precede openedFrom.",
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "OpenedAtDesc (default) or OpenedAtAsc.",
+            "schema": {
+              "enum": [
+                "OpenedAtDesc",
+                "OpenedAtAsc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Optional opaque protected cursor token, maximum 2,048 characters. Omission starts the query; an explicitly empty value is invalid. It is bound to this route, resource, filters, and sort.",
+            "schema": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Optional page size. Default is 50; accepted range is 1 through 200.",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer",
+              "format": "int32",
+              "default": 50
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Unsupported for this read; any supplied value returns 400 if-match-unsupported.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CursorPageOfIncidentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-incident-query, if-match-unsupported, invalid-cursor, or cursor-filter-mismatch) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (incident-read-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/incidents/{id}": {
+      "get": {
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "Get an incident",
+        "description": "Returns one incident with a strong opaque ETag. This is the only incident read that supports If-None-Match and may return 304. Requires incidents.read (Viewer, Operator, Engineer, Administrator, or Auditor). This route accepts no query parameters.",
+        "operationId": "GetIncident",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Canonical lowercase UUID-D incident identifier.",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Unsupported for this read; any supplied value returns 400 if-match-unsupported.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "Bounded entity-tag list using weak comparison; wildcard behavior is supported. Malformed input and every empty list member return 400 invalid-if-none-match; a match returns a bodyless 304.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Current strong opaque entity tag.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "private, max-age=0, must-revalidate",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentResponse"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Current strong opaque entity tag.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "private, max-age=0, must-revalidate",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-incident-query, invalid-incident-id, if-match-unsupported, or invalid-if-none-match) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem Details with stable code (incident-not-found) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (incident-read-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/devices/{id}/incidents": {
+      "get": {
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "List a Device's incident history",
+        "description": "Returns a protected cursor page of incidents for one Device. Collection responses have no aggregate ETag and never return 304. Requires incidents.read (Viewer, Operator, Engineer, Administrator, or Auditor). If-None-Match is intentionally ignored for this collection and it never returns 304.",
+        "operationId": "ListDeviceIncidents",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Canonical lowercase UUID-D Device identifier.",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Optional exact incident status.",
+            "schema": {
+              "enum": [
+                "Open",
+                "Acknowledged",
+                "Resolved"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "openedFrom",
+            "in": "query",
+            "description": "Optional inclusive UTC instant in yyyy-MM-ddTHH:mm:ss[.FFFFFFF]Z form.",
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "openedTo",
+            "in": "query",
+            "description": "Optional inclusive UTC instant in yyyy-MM-ddTHH:mm:ss[.FFFFFFF]Z form; it must not precede openedFrom.",
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "OpenedAtDesc (default) or OpenedAtAsc.",
+            "schema": {
+              "enum": [
+                "OpenedAtDesc",
+                "OpenedAtAsc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Optional opaque protected cursor token, maximum 2,048 characters. Omission starts the query; an explicitly empty value is invalid. It is bound to this route, resource, filters, and sort.",
+            "schema": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Optional page size. Default is 50; accepted range is 1 through 200.",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer",
+              "format": "int32",
+              "default": 50
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Unsupported for this read; any supplied value returns 400 if-match-unsupported.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CursorPageOfIncidentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-incident-query, invalid-device-id, if-match-unsupported, invalid-cursor, or cursor-filter-mismatch) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem Details with stable code (device-not-found) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (incident-read-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/incidents/{id}/lifecycle-events": {
+      "get": {
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "List immutable incident lifecycle events",
+        "description": "Returns the protected, cursor-paged lifecycle union. It has no aggregate ETag and never returns 304. Requires incidents.read (Viewer, Operator, Engineer, Administrator, or Auditor). It has no aggregate ETag and never returns 304.",
+        "operationId": "ListIncidentLifecycleEvents",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Canonical lowercase UUID-D incident identifier.",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "OccurredAtDesc (default) or OccurredAtAsc.",
+            "schema": {
+              "enum": [
+                "OccurredAtDesc",
+                "OccurredAtAsc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Optional opaque protected cursor token, maximum 2,048 characters. Omission starts the query; an explicitly empty value is invalid. It is bound to this route, resource, filters, and sort.",
+            "schema": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Optional page size. Default is 50; accepted range is 1 through 200.",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer",
+              "format": "int32",
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CursorPageOfIncidentLifecycleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-incident-query, invalid-incident-id, invalid-cursor, or cursor-filter-mismatch) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem Details with stable code (incident-not-found) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (incident-read-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/incidents/{id}/comments": {
+      "get": {
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "List immutable incident comments",
+        "description": "Returns protected, cursor-paged incident comments. It has no aggregate ETag and never returns 304. Requires incidents.read (Viewer, Operator, Engineer, Administrator, or Auditor). It has no aggregate ETag and never returns 304.",
+        "operationId": "ListIncidentComments",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Canonical lowercase UUID-D incident identifier.",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "CreatedAtDesc (default) or CreatedAtAsc.",
+            "schema": {
+              "enum": [
+                "CreatedAtDesc",
+                "CreatedAtAsc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Optional opaque protected cursor token, maximum 2,048 characters. Omission starts the query; an explicitly empty value is invalid. It is bound to this route, resource, filters, and sort.",
+            "schema": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Optional page size. Default is 50; accepted range is 1 through 200.",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer",
+              "format": "int32",
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CursorPageOfIncidentCommentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-incident-query, invalid-incident-id, invalid-cursor, or cursor-filter-mismatch) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem Details with stable code (incident-not-found) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (incident-read-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "Add an immutable incident comment",
+        "description": "Adds an immutable comment. Idempotency-Key and a current strong If-Match ETag are required. Requires incidents.operate (Operator or Administrator). Query parameters are forbidden. The request body accepts application/json case-insensitively with valid media-type parameters and has no additional JSON properties; unsupported media types return 400 invalid-content-type.",
+        "operationId": "AddIncidentComment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Canonical lowercase UUID-D incident identifier.",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required single canonical lowercase UUID-D key other than all-zero. It makes retries replay the original response.",
+            "required": true,
+            "schema": {
+              "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Required single current strong opaque incident ETag. Missing is 428; empty or OWS-only fields, malformed, weak, wildcard, comma-list, or repeated values are 400. The quoted empty strong opaque tag \"\" is syntactically valid and is evaluated as current or stale.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Strict JSON request body; only the documented property is accepted.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddIncidentCommentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Fresh result: the resulting current incident ETag. Exact idempotency replay: the stored original response ETag, returned without recomputation.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentCommentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-incident-query, invalid-incident-id, invalid-idempotency-key, invalid-if-match, invalid-content-type, invalid-json, or invalid-incident-text) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization middleware role denial returns the framework Problem Details body without a stable code or correlationId extension; after authorization succeeds, an invalid incident actor identity returns invalid-incident-actor-identity with the endpoint's correlationId extension",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem Details with stable code (incident-not-found) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem Details with stable code (idempotency-key-reuse-conflict) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Problem Details with stable code (concurrency-conflict with currentEtag extension) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Current strong opaque entity tag.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Problem Details with stable code (precondition-required) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (incident-command-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/incidents/{id}/acknowledge": {
+      "post": {
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "Acknowledge an open incident",
+        "description": "Acknowledges an Open incident. Idempotency-Key and a current strong If-Match ETag are required. Requires incidents.operate (Operator or Administrator). Query parameters are forbidden. The request body accepts application/json case-insensitively with valid media-type parameters and has no additional JSON properties; unsupported media types return 400 invalid-content-type.",
+        "operationId": "AcknowledgeIncident",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Canonical lowercase UUID-D incident identifier.",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required single canonical lowercase UUID-D key other than all-zero. It makes retries replay the original response.",
+            "required": true,
+            "schema": {
+              "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Required single current strong opaque incident ETag. Missing is 428; empty or OWS-only fields, malformed, weak, wildcard, comma-list, or repeated values are 400. The quoted empty strong opaque tag \"\" is syntactically valid and is evaluated as current or stale.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Strict JSON request body; only the documented property is accepted.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcknowledgeIncidentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Fresh result: the resulting current incident ETag. Exact idempotency replay: the stored original response ETag, returned without recomputation.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/IncidentActionResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "enum": [
+                            "Acknowledged"
+                          ],
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-incident-query, invalid-incident-id, invalid-idempotency-key, invalid-if-match, invalid-content-type, invalid-json, or invalid-incident-text) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization middleware role denial returns the framework Problem Details body without a stable code or correlationId extension; after authorization succeeds, an invalid incident actor identity returns invalid-incident-actor-identity with the endpoint's correlationId extension",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem Details with stable code (incident-not-found) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem Details with stable code (idempotency-key-reuse-conflict or incident-action-state-conflict (with currentEtag extension)) and correlationId extension. State-conflict responses include the current ETag; idempotency-key-reuse-conflict does not.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Optional current strong incident tag. Present only for incident state-conflict outcomes (incident-action-state-conflict or incident-manual-resolution-state-conflict); absent for idempotency-key-reuse-conflict.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Problem Details with stable code (concurrency-conflict with currentEtag extension) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Current strong opaque entity tag.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Problem Details with stable code (precondition-required) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (incident-command-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/incidents/{id}/resolve": {
+      "post": {
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "Manually resolve an active incident",
+        "description": "Manually resolves an active incident only when its underlying Probe status is neither Down nor Recovering. Idempotency-Key and a current strong If-Match ETag are required. Requires incidents.operate (Operator or Administrator). Query parameters are forbidden. The request body accepts application/json case-insensitively with valid media-type parameters and has no additional JSON properties; unsupported media types return 400 invalid-content-type.",
+        "operationId": "ResolveIncident",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Canonical lowercase UUID-D incident identifier.",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required single canonical lowercase UUID-D key other than all-zero. It makes retries replay the original response.",
+            "required": true,
+            "schema": {
+              "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Required single current strong opaque incident ETag. Missing is 428; empty or OWS-only fields, malformed, weak, wildcard, comma-list, or repeated values are 400. The quoted empty strong opaque tag \"\" is syntactically valid and is evaluated as current or stale.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Strict JSON request body; only the documented property is accepted.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveIncidentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Fresh result: the resulting current incident ETag. Exact idempotency replay: the stored original response ETag, returned without recomputation.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/IncidentActionResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "enum": [
+                            "Resolved"
+                          ],
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem Details with stable code (invalid-incident-query, invalid-incident-id, invalid-idempotency-key, invalid-if-match, invalid-content-type, invalid-json, or invalid-incident-text) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authorization middleware role denial returns the framework Problem Details body without a stable code or correlationId extension; after authorization succeeds, an invalid incident actor identity returns invalid-incident-actor-identity with the endpoint's correlationId extension",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem Details with stable code (incident-not-found) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem Details with stable code (idempotency-key-reuse-conflict, incident-action-state-conflict, or incident-manual-resolution-state-conflict (the latter has currentEtag, incidentId, probeId, underlyingStatus, visibleStatus, and stateVersion extensions)) and correlationId extension. State-conflict responses include the current ETag; idempotency-key-reuse-conflict does not.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Optional current strong incident tag. Present only for incident state-conflict outcomes (incident-action-state-conflict or incident-manual-resolution-state-conflict); absent for idempotency-key-reuse-conflict.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Problem Details with stable code (concurrency-conflict with currentEtag extension) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Current strong opaque entity tag.",
+                "schema": {
+                  "pattern": "^\\\"[\\x21\\x23-\\x7E]+\\\"$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Problem Details with stable code (precondition-required) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem Details with stable code (incident-command-unavailable) and correlationId extension.",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "Server-generated lowercase UUID-N correlation identifier.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{32}$",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
     "/api/v1/sites": {
       "get": {
         "tags": [
@@ -3358,6 +5561,34 @@
   },
   "components": {
     "schemas": {
+      "AcknowledgeIncidentRequest": {
+        "required": [
+          "comment"
+        ],
+        "type": "object",
+        "properties": {
+          "comment": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Raw text must be 1 through 2,000 UTF-16 code units (OpenAPI maxLength is omitted because it counts Unicode scalar values); the persisted value is trimmed and rejects controls and Unicode line separators."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AddIncidentCommentRequest": {
+        "required": [
+          "comment"
+        ],
+        "type": "object",
+        "properties": {
+          "comment": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Raw text must be 1 through 2,000 UTF-16 code units (OpenAPI maxLength is omitted because it counts Unicode scalar values); the persisted value is trimmed and rejects controls and Unicode line separators."
+          }
+        },
+        "additionalProperties": false
+      },
       "AgentConfigurationAcknowledgementRequest": {
         "required": [
           "schemaVersion",
@@ -4657,6 +6888,421 @@
           }
         }
       },
+      "CursorPageOfIncidentCommentResponse": {
+        "required": [
+          "items",
+          "nextCursor",
+          "pageSize"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentCommentResponse"
+            }
+          },
+          "nextCursor": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "pageSize": {
+            "maximum": 200,
+            "minimum": 1,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "CursorPageOfIncidentLifecycleResponse": {
+        "required": [
+          "items",
+          "nextCursor",
+          "pageSize"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentLifecycleResponse"
+            }
+          },
+          "nextCursor": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "pageSize": {
+            "maximum": 200,
+            "minimum": 1,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "CursorPageOfIncidentResponse": {
+        "required": [
+          "items",
+          "nextCursor",
+          "pageSize"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentResponse"
+            }
+          },
+          "nextCursor": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "pageSize": {
+            "maximum": 200,
+            "minimum": 1,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "DashboardFilter": {
+        "required": [
+          "siteId",
+          "area",
+          "deviceType",
+          "criticality",
+          "tag",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "siteId": {
+            "minLength": 1,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "area": {
+            "minLength": 1,
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When present, trimmed and NFC-normalized; non-empty and at most 128 UTF-16 code units. No raw-input maxLength is published."
+          },
+          "deviceType": {
+            "minLength": 1,
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When present, trimmed and NFC-normalized; non-empty and at most 128 UTF-16 code units. No raw-input maxLength is published."
+          },
+          "criticality": {
+            "minLength": 1,
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When present, trimmed and NFC-normalized; non-empty and at most 128 UTF-16 code units. No raw-input maxLength is published."
+          },
+          "tag": {
+            "minLength": 1,
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When present, trimmed and NFC-normalized; non-empty and at most 128 UTF-16 code units. No raw-input maxLength is published."
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DashboardProbeStatus"
+              }
+            ]
+          }
+        }
+      },
+      "DashboardOfflineAgentItem": {
+        "required": [
+          "agentId",
+          "agentName",
+          "agentGroupId",
+          "status",
+          "selfHealth",
+          "lastHeartbeatAt",
+          "lastReportedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "agentName": {
+            "type": "string"
+          },
+          "agentGroupId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "Offline"
+            ],
+            "type": "string"
+          },
+          "selfHealth": {
+            "type": "string"
+          },
+          "lastHeartbeatAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "lastReportedAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "DashboardOpenIncidentItem": {
+        "required": [
+          "incidentId",
+          "deviceId",
+          "deviceName",
+          "probeId",
+          "siteId",
+          "siteName",
+          "status",
+          "openedAt",
+          "occurrenceCount",
+          "criticality"
+        ],
+        "type": "object",
+        "properties": {
+          "incidentId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "probeId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "siteId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "Open",
+              "Acknowledged"
+            ],
+            "type": "string"
+          },
+          "openedAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurrenceCount": {
+            "minimum": 0,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": "integer",
+            "format": "int32"
+          },
+          "criticality": {
+            "type": "string"
+          }
+        }
+      },
+      "DashboardProbeStatus": {
+        "enum": [
+          "Unknown",
+          "Up",
+          "Degraded",
+          "Down",
+          "Recovering",
+          "Maintenance",
+          "Disabled"
+        ],
+        "type": "string"
+      },
+      "DashboardRecentDownItem": {
+        "required": [
+          "deviceId",
+          "deviceName",
+          "probeId",
+          "siteId",
+          "siteName",
+          "area",
+          "criticality",
+          "sinceAt",
+          "openIncidentId"
+        ],
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "probeId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "siteId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "area": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "criticality": {
+            "type": "string"
+          },
+          "sinceAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": "string",
+            "format": "date-time"
+          },
+          "openIncidentId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "DashboardStatusCount": {
+        "required": [
+          "status",
+          "count"
+        ],
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/DashboardProbeStatus"
+          },
+          "count": {
+            "minimum": 0,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "DashboardSummaryResponse": {
+        "required": [
+          "schemaVersion",
+          "appliedFilter",
+          "statusCounts",
+          "recentlyDown",
+          "offlineAgents",
+          "openIncidents"
+        ],
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "maximum": 1,
+            "minimum": 1,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": "integer",
+            "format": "int32"
+          },
+          "appliedFilter": {
+            "$ref": "#/components/schemas/DashboardFilter"
+          },
+          "statusCounts": {
+            "maxItems": 7,
+            "minItems": 7,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardStatusCount"
+            },
+            "description": "Exactly seven counts in fixed order: Unknown, Up, Degraded, Down, Recovering, Maintenance, Disabled."
+          },
+          "recentlyDown": {
+            "maxItems": 20,
+            "minItems": 0,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardRecentDownItem"
+            }
+          },
+          "offlineAgents": {
+            "maxItems": 20,
+            "minItems": 0,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardOfflineAgentItem"
+            }
+          },
+          "openIncidents": {
+            "maxItems": 20,
+            "minItems": 0,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardOpenIncidentItem"
+            }
+          }
+        }
+      },
       "DeviceImportRow": {
         "required": [
           "siteCode",
@@ -4794,6 +7440,77 @@
           }
         }
       },
+      "DeviceStatusResponse": {
+        "required": [
+          "probeId",
+          "visibleStatus",
+          "underlyingStatus",
+          "stateVersion",
+          "lastFreshEventAt",
+          "lastReceivedAt",
+          "agentId",
+          "agentName",
+          "openIncidentId"
+        ],
+        "type": "object",
+        "properties": {
+          "probeId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "visibleStatus": {
+            "$ref": "#/components/schemas/DashboardProbeStatus"
+          },
+          "underlyingStatus": {
+            "$ref": "#/components/schemas/DashboardProbeStatus"
+          },
+          "stateVersion": {
+            "minimum": 0,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": "integer",
+            "format": "int64"
+          },
+          "lastFreshEventAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "lastReceivedAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "agentId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "agentName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "openIncidentId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
       "HealthResponse": {
         "required": [
           "schemaVersion",
@@ -4826,6 +7543,417 @@
             "type": "string"
           }
         }
+      },
+      "IncidentActionResponse": {
+        "required": [
+          "incidentId",
+          "status",
+          "completedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "incidentId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IncidentStatus"
+          },
+          "completedAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "IncidentCommentResponse": {
+        "required": [
+          "id",
+          "incidentId",
+          "authorId",
+          "comment",
+          "createdAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "incidentId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "authorId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "comment": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Limited to 1 through 2000 UTF-16 code units; JSON Schema maxLength is omitted because it counts Unicode scalar values."
+          },
+          "createdAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "IncidentLifecycleResponse": {
+        "required": [
+          "eventId",
+          "incidentId",
+          "type",
+          "reasonCode",
+          "occurredAt",
+          "actorId",
+          "comment"
+        ],
+        "type": "object",
+        "oneOf": [
+          {
+            "required": [
+              "type",
+              "reasonCode",
+              "actorId",
+              "comment"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "opened"
+                ],
+                "type": "string"
+              },
+              "reasonCode": {
+                "enum": [
+                  "failure-threshold-met"
+                ],
+                "type": "string"
+              },
+              "actorId": {
+                "type": "null"
+              },
+              "comment": {
+                "type": "null"
+              }
+            }
+          },
+          {
+            "required": [
+              "type",
+              "reasonCode",
+              "actorId",
+              "comment"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "resolved"
+                ],
+                "type": "string"
+              },
+              "reasonCode": {
+                "enum": [
+                  "recovery-threshold-met"
+                ],
+                "type": "string"
+              },
+              "actorId": {
+                "type": "null"
+              },
+              "comment": {
+                "type": "null"
+              }
+            }
+          },
+          {
+            "required": [
+              "type",
+              "reasonCode",
+              "actorId",
+              "comment"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "occurrence"
+                ],
+                "type": "string"
+              },
+              "reasonCode": {
+                "enum": [
+                  "recovery-failed"
+                ],
+                "type": "string"
+              },
+              "actorId": {
+                "type": "null"
+              },
+              "comment": {
+                "type": "null"
+              }
+            }
+          },
+          {
+            "required": [
+              "type",
+              "reasonCode",
+              "actorId",
+              "comment"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "acknowledged"
+                ],
+                "type": "string"
+              },
+              "reasonCode": {
+                "enum": [
+                  "operator-acknowledgement"
+                ],
+                "type": "string"
+              },
+              "actorId": {
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                "type": "string",
+                "format": "uuid"
+              },
+              "comment": {
+                "minLength": 1,
+                "type": "string",
+                "description": "Non-empty trimmed command text, limited to 2,000 UTF-16 code units."
+              }
+            }
+          },
+          {
+            "required": [
+              "type",
+              "reasonCode",
+              "actorId",
+              "comment"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "manually-resolved"
+                ],
+                "type": "string"
+              },
+              "reasonCode": {
+                "enum": [
+                  "manual-resolution"
+                ],
+                "type": "string"
+              },
+              "actorId": {
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                "type": "string",
+                "format": "uuid"
+              },
+              "comment": {
+                "minLength": 1,
+                "type": "string",
+                "description": "Non-empty trimmed command text, limited to 2,000 UTF-16 code units."
+              }
+            }
+          }
+        ],
+        "properties": {
+          "eventId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "incidentId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "enum": [
+              "opened",
+              "resolved",
+              "occurrence",
+              "acknowledged",
+              "manually-resolved"
+            ],
+            "type": "string"
+          },
+          "reasonCode": {
+            "enum": [
+              "failure-threshold-met",
+              "recovery-threshold-met",
+              "recovery-failed",
+              "operator-acknowledgement",
+              "manual-resolution"
+            ],
+            "type": "string"
+          },
+          "occurredAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": "string",
+            "format": "date-time"
+          },
+          "actorId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "comment": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Limited to 0 through 2000 UTF-16 code units; JSON Schema maxLength is omitted because it counts Unicode scalar values."
+          }
+        },
+        "description": "Runtime mappings: opened/failure-threshold-met, resolved/recovery-threshold-met, and occurrence/recovery-failed have null actorId and comment; acknowledged/operator-acknowledgement and manually-resolved/manual-resolution require a non-null actorId and non-empty comment."
+      },
+      "IncidentResponse": {
+        "required": [
+          "id",
+          "probeId",
+          "deviceId",
+          "deviceName",
+          "siteId",
+          "siteName",
+          "ruleKey",
+          "status",
+          "openedAt",
+          "acknowledgedAt",
+          "acknowledgedBy",
+          "acknowledgementComment",
+          "resolvedAt",
+          "resolvedBy",
+          "resolutionNote",
+          "occurrenceCount",
+          "totalDowntimeSeconds"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "probeId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "siteId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "ruleKey": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IncidentStatus"
+          },
+          "openedAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": "string",
+            "format": "date-time"
+          },
+          "acknowledgedAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "acknowledgedBy": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "acknowledgementComment": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Limited to 0 through 2000 UTF-16 code units; JSON Schema maxLength is omitted because it counts Unicode scalar values."
+          },
+          "resolvedAt": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?Z$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "resolvedBy": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "resolutionNote": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Limited to 0 through 2000 UTF-16 code units; JSON Schema maxLength is omitted because it counts Unicode scalar values."
+          },
+          "occurrenceCount": {
+            "minimum": 1,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": "integer",
+            "format": "int32"
+          },
+          "totalDowntimeSeconds": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "IncidentStatus": {
+        "enum": [
+          "Open",
+          "Acknowledged",
+          "Resolved"
+        ],
+        "type": "string"
       },
       "MaintenanceWindowResponse": {
         "required": [
@@ -5473,6 +8601,20 @@
           }
         }
       },
+      "ResolveIncidentRequest": {
+        "required": [
+          "note"
+        ],
+        "type": "object",
+        "properties": {
+          "note": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Raw text must be 1 through 2,000 UTF-16 code units (OpenAPI maxLength is omitted because it counts Unicode scalar values); the persisted value is trimmed and rejects controls and Unicode line separators."
+          }
+        },
+        "additionalProperties": false
+      },
       "RevokeAgentRequest": {
         "required": [
           "schemaVersion",
@@ -5643,6 +8785,87 @@
               "string"
             ],
             "format": "int64"
+          }
+        }
+      },
+      "StatusEnrichedDeviceResponse": {
+        "required": [
+          "id",
+          "siteId",
+          "name",
+          "address",
+          "hostname",
+          "deviceType",
+          "area",
+          "owner",
+          "criticality",
+          "tags",
+          "enabled",
+          "rowVersion",
+          "probes"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "siteId": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "deviceType": {
+            "type": "string"
+          },
+          "area": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "owner": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "criticality": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "rowVersion": {
+            "minimum": 0,
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": "integer",
+            "format": "int64"
+          },
+          "probes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeviceStatusResponse"
+            }
           }
         }
       },
@@ -6056,6 +9279,12 @@
   "tags": [
     {
       "name": "Platform"
+    },
+    {
+      "name": "Dashboard"
+    },
+    {
+      "name": "Incidents"
     },
     {
       "name": "Inventory - Sites"

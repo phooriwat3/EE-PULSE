@@ -392,7 +392,7 @@ public sealed class DeviceStatusApiTests
     }
 
     [Fact]
-    public async Task ConditionalGetAndOpenApiExclusionAreStable()
+    public async Task ConditionalGetAndOpenApiInclusionAreStable()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var postgres = await PostgresTestDatabase.StartAsync(ct);
@@ -470,7 +470,12 @@ public sealed class DeviceStatusApiTests
         }
 
         using var openApi = await client.GetAsync("/openapi/v1.json", ct);
-        Assert.DoesNotContain("/api/v1/devices/{id}/status", await openApi.Content.ReadAsStringAsync(ct), StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(await openApi.Content.ReadAsStringAsync(ct));
+        var operation = document.RootElement.GetProperty("paths").GetProperty("/api/v1/devices/{id}/status").GetProperty("get");
+        Assert.Equal("GetDeviceStatus", operation.GetProperty("operationId").GetString());
+        Assert.True(operation.GetProperty("responses").TryGetProperty("304", out _));
+        Assert.Contains(operation.GetProperty("parameters").EnumerateArray(), parameter =>
+            parameter.GetProperty("in").GetString() == "header" && parameter.GetProperty("name").GetString() == "If-None-Match");
     }
 
     [Fact]

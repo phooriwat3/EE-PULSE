@@ -27,9 +27,10 @@ public static class DeviceStatusEndpoints
         endpoints.MapGet(Wp07DashboardContract.DeviceStatusPathTemplate, Get)
             .WithName("GetDeviceStatus")
             .WithTags("Dashboard")
-            .ExcludeFromDescription()
+            .WithSummary("Get a status-enriched device snapshot")
+            .WithDescription("Returns the canonical status snapshot for one Device. The response has a strong ETag and supports conditional GET.")
             .RequireAuthorization(EePulse.Api.Authorization.DashboardAuthorization.DashboardReadPolicy)
-            .Produces<StatusEnrichedDeviceResponse>()
+            .Produces<StatusEnrichedDeviceResponse>(StatusCodes.Status200OK, "application/json")
             .Produces(304).ProducesProblem(400).ProducesProblem(401).ProducesProblem(403).ProducesProblem(404)
             .ProducesProblem(Wp07DashboardContract.DeviceStatusUnavailableStatusCode);
         return endpoints;

@@ -40,6 +40,7 @@ try
         options.AddDocumentTransformer<InventorySecurityDocumentTransformer>();
         options.AddDocumentTransformer<AgentCredentialSecurityDocumentTransformer>();
         options.AddDocumentTransformer<TimezoneOpenApiDocumentTransformer>();
+        options.AddDocumentTransformer<Wp07DashboardOpenApiDocumentTransformer>();
     });
     builder.Services.AddHealthChecks();
     builder.Services.AddEePulseInfrastructure();

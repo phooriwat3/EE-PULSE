@@ -49,6 +49,7 @@ $expectedProjects = @{
     )
     'tests/EePulse.UnitTests/EePulse.UnitTests.csproj' = @(
         'src/backend/EePulse.Application/EePulse.Application.csproj'
+        'src/backend/EePulse.Api/EePulse.Api.csproj'
         'src/backend/EePulse.Contracts/EePulse.Contracts.csproj'
         'src/backend/EePulse.Infrastructure/EePulse.Infrastructure.csproj'
     )
