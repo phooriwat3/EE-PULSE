@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using EePulse.Domain.Agents;
 using EePulse.Domain.Inventory;
@@ -25,16 +26,23 @@ public sealed class OperationsBrowserAcceptanceTests
 {
     private static readonly DateTimeOffset SeedTime = new(2026, 9, 27, 8, 0, 0, TimeSpan.Zero);
     private static readonly string[] DeviceNames = ["North press", "South press", "North controller"];
+    private static readonly string[] CommandReplayArtifacts = ["replay-comments", "replay-acknowledge", "replay-resolve", "lost-response-replay"];
 
     [Fact(Explicit = true)]
-    public async Task RealBackendReadOnlyOperationsAcceptance()
+    public Task RealBackendReadOnlyOperationsAcceptance() => RunAcceptanceAsync(commands: false);
+
+    [Fact(Explicit = true)]
+    public Task RealBackendIncidentCommandsAcceptance() => RunAcceptanceAsync(commands: true);
+
+    private static async Task RunAcceptanceAsync(bool commands)
     {
         var ct = TestContext.Current.CancellationToken;
         var evidence = Environment.GetEnvironmentVariable("UI_EVIDENCE")
             ?? throw new InvalidOperationException("Set UI_EVIDENCE to a dedicated artifact directory.");
         Directory.CreateDirectory(evidence);
         var repo = FindRepository();
-        var apiDll = Path.Combine(repo, "src", "backend", "EePulse.Api", "bin", "Release", "net10.0", "EePulse.Api.dll");
+        var apiDll = Environment.GetEnvironmentVariable("UI_REAL_API_DLL")
+            ?? Path.Combine(repo, "src", "backend", "EePulse.Api", "bin", "Release", "net10.0", "EePulse.Api.dll");
         Assert.True(File.Exists(apiDll), "Build the Release API/integration project first.");
         Assert.True(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("EE_PULSE_TEST_POSTGRES")),
             "This acceptance fixture requires its own disposable container, not external/shared PostgreSQL.");
@@ -53,7 +61,10 @@ public sealed class OperationsBrowserAcceptanceTests
             {
                 Database = databaseName, Pooling = false, Timeout = 2, CommandTimeout = 3
             }.ConnectionString;
-            await SeedAsync(connectionString, ct);
+            await SeedAsync(connectionString, commands, ct);
+            var initialSnapshot = cleanup.Own("initial projection snapshot disposal", CreateDb(connectionString));
+            var initialSouthProjectionVersion = await initialSnapshot.ProbeStatusProjections.AsNoTracking()
+                .Where(row => row.ProbeId == Id(21)).Select(row => row.StateVersion).SingleAsync(ct);
 
             var apiUrl = $"http://127.0.0.1:{FreePort()}";
             var webPort = FreePort();
@@ -84,6 +95,13 @@ public sealed class OperationsBrowserAcceptanceTests
                         break;
                     case "database-on":
                         await AdminAsync(adminString, $"ALTER DATABASE {databaseName} ALLOW_CONNECTIONS true", token);
+                        break;
+                    case "resolution-blocked" when commands:
+                    case "resolution-permitted" when commands:
+                        // Only this owned fixture; simulate the underlying status changing after a UI read.
+                        var status = operation == "resolution-blocked" ? "Down" : "Up";
+                        await AdminAsync(connectionString,
+                            $"UPDATE probe_status_projections SET underlying_status = '{status}', visible_status = '{status}', state_version = state_version + 1 WHERE probe_id = '{Id(21)}'", token);
                         break;
                     case "rename":
                     case "reset":
@@ -129,14 +147,60 @@ public sealed class OperationsBrowserAcceptanceTests
                 {
                     ["UI_EVIDENCE"] = evidence, ["UI_REAL_API_URL"] = apiUrl,
                     ["UI_REAL_WEB_PORT"] = webPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    ["UI_REAL_CONTROL_URL"] = controlUrl, ["UI_REAL_CONTROL_TOKEN"] = controlToken
+                    ["UI_REAL_CONTROL_URL"] = controlUrl, ["UI_REAL_CONTROL_TOKEN"] = controlToken,
+                    ["UI_REAL_COMMANDS"] = commands ? "true" : "false"
                 }, ct);
             using var browserDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
             browserDeadline.CancelAfter(TimeSpan.FromMinutes(5));
             Assert.Equal(0, await browser.WaitAsync(browserDeadline.Token));
-            // The browser is read-only: test-controlled device renaming is the only intended mutation.
             var snapshot = cleanup.Own("persistence snapshot disposal", CreateDb(connectionString));
             Assert.Equal(2, await snapshot.AvailabilityIncidents.CountAsync(ct));
+            if (commands)
+            {
+                var north = await snapshot.AvailabilityIncidents.SingleAsync(row => row.Id == Id(30), ct);
+                var south = await snapshot.AvailabilityIncidents.SingleAsync(row => row.Id == Id(31), ct);
+                Assert.Equal(7, north.RowVersion);
+                Assert.Equal(2, south.RowVersion);
+                Assert.Equal(AvailabilityIncidentStatus.Acknowledged, north.Status);
+                Assert.Equal("Seen on floor", north.AcknowledgementComment);
+                Assert.Equal(AvailabilityIncidentStatus.Resolved, south.Status);
+                Assert.Equal("Verified safe recovery", south.ResolutionNote);
+                Assert.Equal(5, await snapshot.IncidentComments.CountAsync(ct));
+                Assert.Equal(2, await snapshot.IncidentLifecycleActions.CountAsync(ct));
+                Assert.Equal(7, await snapshot.IdempotencyReceipts.CountAsync(ct));
+                Assert.Equal(7, await snapshot.AuditEvents.CountAsync(row => row.Action.StartsWith("incident."), ct));
+                Assert.Equal(1, await snapshot.HumanPrincipals.CountAsync(ct));
+                var projection = await snapshot.ProbeStatusProjections.SingleAsync(row => row.ProbeId == Id(21), ct);
+                Assert.Null(projection.OpenIncidentId);
+                // Two explicit fixture status changes plus exactly one fresh resolution, never a replay increment.
+                Assert.Equal(checked(initialSouthProjectionVersion + 3), projection.StateVersion);
+                Assert.Equal(ProbeStatus.Up, projection.UnderlyingStatus);
+                Assert.Contains("Lost response 😀", await snapshot.IncidentComments.Select(row => row.Comment).ToListAsync(ct));
+                var receipts = await snapshot.IdempotencyReceipts.ToListAsync(ct);
+                foreach (var receipt in receipts)
+                {
+                    Assert.Equal(1, receipt.RequestFingerprintVersion);
+                    Assert.Equal(32, receipt.RequestDigest.Length);
+                    Assert.NotEmpty(receipt.ResponseBody);
+                }
+                foreach (var name in CommandReplayArtifacts)
+                {
+                    using var document = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(evidence, name + ".json"), ct));
+                    var root = document.RootElement;
+                    var receipt = Assert.Single(receipts, row => row.IdempotencyKey == root.GetProperty("key").GetString());
+                    var response = root.GetProperty(name == "lost-response-replay" ? "committed" : "original");
+                    Assert.Equal(receipt.ResponseStatus, response.GetProperty("status").GetInt32());
+                    Assert.Equal(receipt.ResponseContentType, response.GetProperty("contentType").GetString());
+                    Assert.Equal(receipt.ResponseEtag, response.GetProperty("etag").GetString());
+                    Assert.Equal(receipt.ResponseBody, Encoding.UTF8.GetBytes(response.GetProperty("body").GetString()!));
+                }
+                await File.WriteAllTextAsync(Path.Combine(evidence, "command-persistence.json"),
+                    JsonSerializer.Serialize(new { comments = 5, actions = 2, receipts = 7, incidentVersions = new[] { north.RowVersion, south.RowVersion },
+                        statuses = new[] { north.Status.ToString(), south.Status.ToString() }, projection.OpenIncidentId,
+                        initialSouthProjectionVersion, finalSouthProjectionVersion = projection.StateVersion }), ct);
+                return;
+            }
+            // The original read-only acceptance retains its unchanged no-command assertions.
             Assert.All(await snapshot.AvailabilityIncidents.ToListAsync(ct), row => Assert.Equal(1, row.RowVersion));
             Assert.Equal(0, await snapshot.IncidentComments.CountAsync(ct));
             Assert.Equal(0, await snapshot.IncidentLifecycleActions.CountAsync(ct));
@@ -536,7 +600,7 @@ public sealed class OperationsBrowserAcceptanceTests
     private static Guid Id(int value) => Guid.Parse($"00000000-0000-4000-8000-{value:x12}");
     private static EePulseDbContext CreateDb(string connection) => new(new DbContextOptionsBuilder<EePulseDbContext>().UseNpgsql(connection).Options);
 
-    private static async Task SeedAsync(string connection, CancellationToken ct)
+    private static async Task SeedAsync(string connection, bool commands, CancellationToken ct)
     {
         await CleanupPlan.RunAsync(async cleanup =>
         {
@@ -561,8 +625,14 @@ public sealed class OperationsBrowserAcceptanceTests
             for (var index = 0; index < 2; index++)
             {
                 var incident = new AvailabilityIncident(Id(30 + index), Id(20 + index), SeedTime.AddMinutes(-index));
-                db.AddRange(incident, new ProbeStatusProjection(Id(20 + index), ProbeStatus.Down, 1, 0,
+                db.AddRange(incident, new ProbeStatusProjection(Id(20 + index), commands && index == 1 ? ProbeStatus.Up : ProbeStatus.Down, 1, 0,
                     SeedTime, SeedTime, agent.Id, Id(50 + index), incident.Id));
+                if (commands)
+                {
+                    // Device status requires the exact watermark identity and event timestamp in the ledger.
+                    db.Add(new ProbeResultLedgerEntry(agent.Id, Id(50 + index), Id(20 + index), 1,
+                        SeedTime.AddSeconds(-1), SeedTime, 1, 1, 0m, 1m, 1m, 1m, null, new byte[32], SeedTime));
+                }
             }
             db.Add(new ProbeStatusProjection(Id(22), ProbeStatus.Up, 0, 0, SeedTime, null, null, null));
             await db.SaveChangesAsync(ct);
@@ -589,6 +659,14 @@ public sealed class OperationsBrowserAcceptanceTests
 
     private static string FindRepository()
     {
+        var configured = Environment.GetEnvironmentVariable("UI_REAL_REPOSITORY");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            var root = Path.GetFullPath(configured);
+            if (!File.Exists(Path.Combine(root, "global.json")) || !File.Exists(Path.Combine(root, "src", "web", "package.json")))
+                throw new InvalidOperationException("UI_REAL_REPOSITORY must name the repository root.");
+            return root;
+        }
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
             if (File.Exists(Path.Combine(directory.FullName, "global.json"))) return directory.FullName;
         throw new InvalidOperationException("Run from the repository's built IntegrationTests executable.");

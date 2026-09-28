@@ -10,3 +10,4 @@
 .operations-list li>div{min-width:0;overflow-wrap:anywhere}
 @media(max-width:1100px){.operations-lower{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:600px){.incident-facts{grid-template-columns:1fr;gap:6px}.incident-facts dd{margin-bottom:10px}.operations-list li{align-items:flex-start}.panel-heading{flex-wrap:wrap}.panel-note{max-width:none}.operations-tools{flex-wrap:wrap}.operations-table td,.operations-table th{padding:14px 16px}}
+.incident-commands{border-top:1px solid #e2e5e9;margin-top:24px;padding-top:12px;display:grid;gap:14px}.incident-commands h3{margin:0;font-size:18px}.command-buttons{display:flex;flex-wrap:wrap;gap:10px}.command-note{white-space:pre-wrap;overflow-wrap:anywhere;border-left:3px solid #a84b1c;padding:12px;background:#f5f6f8}

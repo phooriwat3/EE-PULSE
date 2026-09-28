@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, CircularProgress, Dialog, DialogContent, DialogTitle, FormControl, InputLabel, MenuItem, Select } from '@mui/material';
-import { getDashboard, getIncident } from '../api/dashboard';
-import { ApiError, apiRequest } from '../api/client';
+import { getDashboard } from '../api/dashboard';
+import { getIncidentDeviceStatus, getIncidentSnapshot } from '../api/incidentCommands';
+import { ApiError, apiRequest, type DevelopmentRole } from '../api/client';
+import { IncidentCommands } from './IncidentCommands';
 import type { PagedResponseOfSiteResponse } from '../api/generated';
 import './operations.css';
 
@@ -27,7 +29,9 @@ function errorMessage(error: unknown, resource: string) {
   return `The ${resource} request could not be completed. Check your connection and try again.`;
 }
 
-export function OperationsDashboard({ sessionKey }: { sessionKey: string }) {
+export function OperationsDashboard({ sessionKey, role }: { sessionKey: string; role?: DevelopmentRole }) {
+  const queryClient = useQueryClient();
+  const [protectedCommand, setProtectedCommand] = useState(false);
   const [siteId, setSiteId] = useState('');
   const [incidentId, setIncidentId] = useState<string | null>(null);
   const queryOptions = { retry: false, refetchOnWindowFocus: false } as const;
@@ -35,9 +39,23 @@ export function OperationsDashboard({ sessionKey }: { sessionKey: string }) {
   const summary = useQuery({ ...queryOptions, queryKey: ['operations-summary', sessionKey, siteId], queryFn: ({ signal }) => getDashboard(siteId, signal) });
   // Changing the key on close removes the old observer. Consumed AbortSignals
   // cancel pending requests, and a different incident never shows old detail.
-  const detail = useQuery({ ...queryOptions, queryKey: ['operations-incident', sessionKey, incidentId], queryFn: ({ signal }) => getIncident(incidentId!, signal), enabled: incidentId !== null });
+  const detail = useQuery({ ...queryOptions, queryKey: ['operations-incident', sessionKey, incidentId], queryFn: ({ signal }) => getIncidentSnapshot(incidentId!, signal), enabled: incidentId !== null });
+  const deviceStatus = useQuery({ ...queryOptions, queryKey: ['operations-device-status', sessionKey, detail.data?.incident.deviceId], queryFn: ({ signal }) => getIncidentDeviceStatus(detail.data!.incident.deviceId, signal), enabled: incidentId !== null && !!detail.data && (role === 'Operator' || role === 'Administrator') });
   const data = isAccessError(summary.error) ? undefined : summary.data;
-  const incident = isAccessError(detail.error) ? undefined : detail.data;
+  const incident = isAccessError(detail.error) ? undefined : detail.data?.incident;
+  async function refreshIncident() {
+    const result = await detail.refetch();
+    await deviceStatus.refetch();
+    // Unavailable probe state disables resolution, not unrelated comment/acknowledgement actions.
+    if (result.isError) throw new Error('Refresh failed.');
+  }
+  async function commandSucceeded() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['operations-incident', sessionKey, incidentId] }),
+      queryClient.invalidateQueries({ queryKey: ['operations-device-status', sessionKey] }),
+      queryClient.invalidateQueries({ queryKey: ['operations-summary', sessionKey] }),
+    ]);
+  }
 
   return <main className="operations">
     <header className="operations-heading">
@@ -87,15 +105,15 @@ export function OperationsDashboard({ sessionKey }: { sessionKey: string }) {
         </section>
       </div>
     </>}
-    <Dialog open={incidentId !== null} onClose={() => setIncidentId(null)} aria-labelledby="incident-dialog-heading" fullWidth maxWidth="sm">
-      <DialogTitle id="incident-dialog-heading"><div className="incident-dialog-title">Incident details<Button onClick={() => setIncidentId(null)}>Close</Button></div></DialogTitle>
+    <Dialog open={incidentId !== null} onClose={() => { if (!protectedCommand) setIncidentId(null); }} aria-labelledby="incident-dialog-heading" fullWidth maxWidth="sm">
+      <DialogTitle id="incident-dialog-heading"><div className="incident-dialog-title">Incident details<Button disabled={protectedCommand} onClick={() => setIncidentId(null)}>Close</Button></div></DialogTitle>
       <DialogContent>
         {detail.isPending && incidentId && <p role="status">Loading incident...</p>}
         {detail.isError && <Alert severity="error" action={!isAccessError(detail.error) && <Button disabled={detail.isFetching} onClick={() => void detail.refetch()}>Retry detail</Button>}>{errorMessage(detail.error, 'incident detail')}{incident && ' Previously loaded detail may be stale.'}</Alert>}
         {detail.isFetching && incident && <p role="status">Showing the previous detail while updating.</p>}
         {incident && <><h2>{incident.deviceName}</h2><span className={`state-badge ${incident.status.toLowerCase()}`}>{incident.status}</span>
           <dl className="incident-facts"><dt>Site</dt><dd>{incident.siteName}</dd><dt>Opened</dt><dd>{date(incident.openedAt)}</dd><dt>Acknowledged</dt><dd>{date(incident.acknowledgedAt)}</dd><dt>Resolved</dt><dd>{date(incident.resolvedAt)}</dd><dt>Occurrences</dt><dd>{count(incident.occurrenceCount)}</dd><dt>Rule</dt><dd>{incident.ruleKey}</dd><dt>Acknowledgement</dt><dd>{incident.acknowledgementComment ?? 'Not recorded'}</dd><dt>Resolution note</dt><dd>{incident.resolutionNote ?? 'Not recorded'}</dd></dl>
-          <p className="panel-note">Read-only view. Incident actions are not available in this checkpoint.</p>
+          <IncidentCommands key={`${sessionKey}:${incident.id}`} snapshot={detail.data!} role={role} ready={!detail.isFetching && !detail.isError} probeStatus={!deviceStatus.isError && !deviceStatus.isFetching ? deviceStatus.data?.probes.find(probe => probe.probeId === incident.probeId)?.underlyingStatus : undefined} onRefresh={refreshIncident} onSuccess={commandSucceeded} onProtectedChange={setProtectedCommand} />
         </>}
       </DialogContent>
     </Dialog>

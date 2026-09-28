@@ -9,6 +9,7 @@ if (!evidence || !Number.isInteger(port) || port < 1024 || port > 65535 || !proc
 const url = `http://127.0.0.1:${port}`;
 export default defineConfig({
   testDir: '../../tests/e2e/real-backend',
+  testMatch: process.env.UI_REAL_COMMANDS === 'true' ? '**/commands.spec.ts' : '**/operations.spec.ts',
   workers: 1,
   fullyParallel: false,
   retries: 0,

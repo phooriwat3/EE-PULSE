@@ -67,7 +67,7 @@ function DevelopmentApp() {
   );
 
   const signIn = () => {
-    const privileged = selectedRole === 'Engineer' || selectedRole === 'Administrator';
+    const privileged = selectedRole === 'Engineer' || selectedRole === 'Administrator' || selectedRole === 'Operator';
     const nextSession = { role: selectedRole, actorId: privileged ? syntheticActorId : undefined };
     setApiSession(nextSession);
     setSession(nextSession);
@@ -128,7 +128,7 @@ function DevelopmentApp() {
             <Button aria-current={workspace === 'operations' ? 'page' : undefined} onClick={() => setWorkspace('operations')}>Operations overview</Button>
             <Button aria-current={workspace === 'inventory' ? 'page' : undefined} onClick={() => setWorkspace('inventory')}>Equipment inventory</Button>
           </Box>
-          {workspace === 'operations' ? <OperationsDashboard sessionKey={`${session.role}:${session.actorId ?? ''}`} /> : <InventoryWorkspace session={session} {...capabilities} />}
+          {workspace === 'operations' ? <OperationsDashboard key={`${session.role}:${session.actorId ?? ''}`} sessionKey={`${session.role}:${session.actorId ?? ''}`} role={session.role} /> : <InventoryWorkspace session={session} {...capabilities} />}
         </>
       )}
     </>
