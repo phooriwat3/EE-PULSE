@@ -2,11 +2,11 @@
 
 ## 1. Problem statement
 
-The EE department operates many network-connected devices, including PCs, PLCs, HMIs, servers, printers, switches, gateways, and IoT equipment. It currently lacks a central view showing which devices are reachable, suffering abnormal latency, or unavailable. Manual Ping checks detect problems late, retain no reliable history, and cannot measure availability consistently.
+IT needs one company-wide view of network-connected devices, including PCs, PLCs, HMIs, servers, printers, switches, gateways, access points, and IoT equipment. The existing IT IP-monitoring dashboard is a migration source and feature reference, not a second long-term source of operational truth. EE uses EE Pulse to compare network reachability with its separate PLC checks; disagreement between the two is diagnostic evidence, not proof that either system is wrong. Manual Ping checks detect problems late, retain no reliable history, and cannot measure availability consistently.
 
 ## 2. Product goal
 
-EE Pulse must provide continuous IP-device monitoring, detect abnormal conditions within a defined time, preserve diagnostic evidence, and retain enough history for reliable availability reporting.
+EE Pulse must be the IT-led, company-wide primary platform for continuous IP-device monitoring. It must detect abnormal conditions within a defined time, preserve diagnostic evidence, and retain enough history for reliable availability reporting. EE's PLC comparison remains an external workflow; this goal does not authorize a PLC integration, broad network discovery, or a change to the approved authentication and Viewer-safe display boundaries.
 
 ## 3. Personas
 
