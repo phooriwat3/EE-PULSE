@@ -106,8 +106,8 @@ Has read-only access to incidents, reports, configuration history, and audit log
 
 ### FR-09 Authentication and authorization
 
-- Production must support OIDC and group-to-role mapping.
-- A seeded local administrator may exist only in the Development environment.
+- Production v1 must use named individual local accounts for privileged users; OIDC and group-to-role mapping are future integration targets, not production-v1 prerequisites. See [ADR-014](../adr/ADR-014-production-local-auth-and-anonymous-display.md).
+- A seeded Development administrator and synthetic identity remain Development-only. Production local-account provisioning, sessions, and recovery require reviewed implementation before release.
 - Enforce authorization in both the UI and API.
 - Record important configuration changes in the audit log.
 

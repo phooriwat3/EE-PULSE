@@ -380,7 +380,7 @@ Do not use uncontrolled error messages, arbitrary hostnames, URLs, or all user-d
 
 ## 11. Security design
 
-- Use OIDC Authorization Code with PKCE for the Web application.
+- Production v1 uses named individual local authentication with provider-independent RBAC; OIDC Authorization Code with PKCE is the future integration target, not a production-v1 dependency. The approved anonymous `/display` boundary and its deployment gates are recorded in [ADR-014](../adr/ADR-014-production-local-auth-and-anonymous-display.md); existing protected routes remain protected until a reviewed contract change.
 - Apply API role and policy authorization.
 - Store enrollment tokens hashed; make them one-time and short-lived.
 - Support Agent credential rotation and revocation.

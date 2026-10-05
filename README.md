@@ -42,6 +42,6 @@ When running the API directly, its OpenAPI document is available at `/openapi/v1
 - Never commit secrets or use real SMTP/webhook endpoints in automated tests.
 - Never scan networks or probe an address outside an explicitly approved allowlist.
 - The Agent never accepts arbitrary command execution.
-- Production must use TLS and configured OIDC; development identity must fail closed outside Development.
+- Production v1 requires HTTPS and named local authentication for privileged users; OIDC is a future integration target under [ADR-014](docs/adr/ADR-014-production-local-auth-and-anonymous-display.md). Development identity must fail closed outside Development.
 
 See `docs/implementation-status.md` for the current checkpoint and `docs/user-actions.md` for external prerequisites.

@@ -35,10 +35,12 @@ The original Thai documents remain available beside these English versions.
 | Metadata          | PostgreSQL                                                                     |
 | Time-series data  | VictoriaMetrics                                                                |
 | Local Agent queue | SQLite                                                                         |
-| Authentication    | OIDC/Active Directory-ready; local login only for development                  |
+| Authentication    | Named local accounts for production v1; OIDC/Active Directory later             |
 | Logs              | Serilog structured JSON                                                        |
 | Packaging         | Docker Compose for central services; MSI or PowerShell installer for the Agent |
 | Tests             | xUnit, Testcontainers, Vitest, Playwright                                      |
+
+[ADR-014](../adr/ADR-014-production-local-auth-and-anonymous-display.md) records the production-v1 authentication decision and separate anonymous display design; implementation remains pending.
 
 ## MVP scope
 

@@ -1,6 +1,8 @@
 # EE Pulse risk register
 
-Last updated: 2026-08-20
+Production-v1 access decision (2026-09-28): [ADR-014](adr/ADR-014-production-local-auth-and-anonymous-display.md) replaces OIDC as a release prerequisite with named local authentication and approves only a future, backend-restricted anonymous `/display`. Neither capability is implemented. Historical checkpoint notes below retain their original OIDC-era context; no residual rating assumes the new controls have passed verification. Production subnet/VLAN, proxy, DNS, and TLS ownership are still TBD.
+
+Last updated: 2026-09-28
 Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings assume the treatment is implemented.
 
 | ID | Risk | L | I | Treatment / control | Owner / WP | Residual |
@@ -12,7 +14,7 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 | R-05 | Late/clock-skewed events corrupt current state. | H | H | UTC, skew flag, per-Probe watermark, historical-only late writes, NTP, deterministic tests. | Backend/Agent, WP-05/06 | L/H |
 | R-06 | Agent outage causes a DOWN/notification storm. | M | H | Heartbeat/freshness expiry forces UNKNOWN; state-matrix and E2E tests. | Backend, WP-03/06/11 | L/H |
 | R-07 | Unbounded labels cause VictoriaMetrics cardinality growth. | M | H | Fixed label allowlist; reject error/hostname/tag labels; cardinality/load and retention checks. | Backend/QA, WP-05/09/11 | L/M |
-| R-08 | OIDC mapping or development login grants excess production access. | M | H | API/UI policies, explicit groups, production fail-closed startup, full role matrix. | Backend/Web/IT, WP-02/03/07/11 | L/H |
+| R-08 | Local-account role mapping or Development synthetic login grants excess production access. | M | H | Provider-independent backend permissions, explicit local-account lifecycle, production fail-closed startup, no synthetic role headers, full role/permission matrix; future OIDC mapping requires separate review. Not implemented for production. | Backend/Web/IT, WP-02/03/07/11 | H/H until verified |
 | R-09 | Enrollment/Agent credentials leak. | M | H | Hashed one-time expiring tokens, redaction tests, approved secret store, rotation/revocation, secret scans. | Backend/Agent, WP-03/11 | L/H |
 | R-10 | Webhooks enable SSRF or secret disclosure. | M | H | HTTPS/host/network allowlist, DNS/IP revalidation, bounded redirects/body, redaction, fake receivers. | Backend/Security, WP-08/11 | L/H |
 | R-11 | PostgreSQL/VictoriaMetrics partial failure loses or diverges data. | M | H | Durable ingest record, retry semantics, dependency health/metrics, outage/restart tests. | Backend, WP-05/11 | M/H |
@@ -29,12 +31,14 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 | R-22 | A clean package audit is mistaken for a complete supply-chain/container scan. | M | H | Keep NuGet/npm audits in CI; add SBOM, image scan, and dedicated secret scan in WP-11; resolve critical/high findings. | QA/Security, WP-11 | L/H |
 | R-23 | Parallel agents drift from frozen shared contracts. | M | H | WP-02 OpenAPI is checked in and Lead-frozen; generate clients from it, require compatibility tests, and keep migrations Backend-owned. | Lead/All, continuous | L/M |
 | R-24 | Node-local CSV preview tokens disappear on restart or cannot be shared across API replicas. | M | M | Bounded 15-minute cache is explicit for MVP single-node; return clear invalid-token behavior and revisit durable/distributed storage before scale-out. | Backend, WP-10/11 | M/L |
-| R-25 | Synthetic Development authentication or its role headers leak into a production Web bundle. | M | H | Compile-time Development gating, API-client fail-closed checks, production authentication-required state, bundle-content verification, and later production OIDC integration. | Web/Security, WP-02/07/11 | L/H |
+| R-25 | Synthetic Development authentication or its role headers leak into a production Web bundle. | M | H | Compile-time Development gating, API-client fail-closed checks, production authentication-required state, bundle-content verification, and later reviewed production local-auth integration. | Web/Security, WP-02/07/11 | L/H |
 | R-26 | Hand-maintained frontend types drift from the frozen OpenAPI artifact. | M | M | Contract-shaped types, request-level component tests, runtime/checked-in OpenAPI compatibility gate, Lead review, and generated-client evaluation before broader API growth. | Lead/Web, continuous/WP-07 | L/M |
 | R-27 | Enrollment or rotation concurrency creates multiple identities, leaks a response secret, or locks an Agent out. | M | H | Row-locked transactional one-time token use, digest-only persistence, one pending credential, promote-on-first-use rotation, strict redaction, and concurrency/lost-response tests. | Backend/Agent/Security, WP-03/11 | L/H |
 | R-28 | Heartbeat clock skew or inconsistent configuration acknowledgement misstates Agent status/effective version. | M | H | Server receive time, deterministic 60-second default expiry, skew flag, immutable monotonic snapshots, idempotent acknowledgements, and fake-clock/restart tests. | Backend/Agent, WP-03/06 | L/M |
 | R-29 | A compromised Server widens Agent target scope or supplies executable configuration. | M | H | Local non-expandable network ceiling, IPv4-only Server and Agent CIDR checks, closed ICMP-only schema, full-snapshot rejection, execution-time containment, and no command/DNS fields. | Lead/Backend/Agent/Security, WP-03/04/11 | L/H |
 | R-30 | A disconnected Agent continues probing after central revocation because it cannot receive the 410 response. | M | M | Server rejects immediately; Agent halts on reconnect; short heartbeat/config polling; credential expiry; document that immediate offline revocation requires an external host/network control. | IT/Agent, WP-03/10/11 | M/M |
+| R-31 | Anonymous `/display` exposes sensitive fields or is reachable from an untrusted network. | M | H | Separate backend-enforced Viewer-safe projection; negative field/route tests; approved internal subnet/VLAN and reverse-proxy-only HTTPS ingress; block direct API access. Do not enable until all ADR-014 gates pass. | Product/Security/Backend/IT, WP-07/10/11 | H/H until verified |
+| R-32 | Local accounts remain active after staff departure or are shared. | M | H | Named individual accounts, assigned provisioning/deprovisioning and disable/reset owners, account/session revocation and audit tests; no shared privileged accounts. Owners and implementation remain pending. | Identity/IT/Backend, WP-07/11 | H/H until verified |
 
 ## Temporary assumptions
 
@@ -44,7 +48,7 @@ Scale: likelihood/impact are Low (L), Medium (M), or High (H). Residual ratings 
 | A-02 | PRD defaults apply until UA-01: 30 s interval, 2 s timeout, 3 attempts, failure threshold 3, recovery threshold 2. | WP-02 acceptance |
 | A-03 | Scale means 500 enabled ICMP probes, not 500 devices each with multiple active probes. | WP-04/load design |
 | A-04 | Store/process UTC; Site timezone affects presentation, maintenance interpretation, and reporting only. | WP-06/07 |
-| A-05 | Development uses placeholder identity and fake notifications; Production fails closed without OIDC/TLS/secrets. | WP-03/08/10 |
+| A-05 | Development uses placeholder identity and fake notifications; Production currently fails closed. Production v1 requires implemented named local authentication and TLS; OIDC is a future integration. Anonymous `/display` additionally requires the ADR-014 network and Viewer-safe contract gates. | WP-03/07/08/10 |
 | A-06 | Local Compose with named volumes is the development substitute; only application entrypoints become host-facing in production. | WP-10 |
 | A-07 | No target is probed before explicit allowlist approval; automated tests use fakes. | WP-03/04 |
 | A-08 | Normal Device workflow is soft-disable; permanent deletion is exceptional, Administrator-only, and audited. | WP-02 |
